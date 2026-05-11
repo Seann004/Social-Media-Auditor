@@ -1,28 +1,5 @@
 # Design
 
-> Auto-generated and maintained by frontend-god-mode.
-> Source of truth for typography, color, motion, layout, and component tokens.
-> Read this BEFORE touching the UI in any subsequent session.
-
-## Aesthetic direction
-
-Institutional-precision SaaS — compliance-grade authority with editorial clarity. Slate neutrals (cool blue undertone = trustworthy), desaturated electric blue accent, Geist typography, divide-y data rows instead of card grids. The product should feel like a regulatory audit tool built by people who care about design — serious without being sterile.
-
-## Dials
-
-- DESIGN_VARIANCE: 8 / 10
-- MOTION_INTENSITY: 6 / 10
-- VISUAL_DENSITY: 4 / 10
-
-## Type stack
-
-- Display + Body: Geist (weights 300–700, variable)
-- Mono: Geist Mono (weights 400–500)
-- Loaded via: Google Fonts `<link>` in index.html
-- Mono numbers: `font-mono tabular-nums` on all metrics and scores
-
-Banned in this project: Inter (regular), Roboto, Arial, system-ui, serif on dashboards.
-
 ## Color tokens
 
 ```css
@@ -47,7 +24,7 @@ info:    #3b82f6             /* blue-500 */
 
 Shadows: `0 1px 8px -2px oklch(0.3 0.01 250 / 0.06)` — tinted toward slate, never pure black.
 
-Banned: pure #000 / #FFF, purple-to-blue gradients, `bg-gray-*` (use `bg-slate-*` consistently).
+
 
 ## Motion
 
@@ -74,8 +51,6 @@ Library: framer-motion v11
 - Audit layout: fixed left category nav (208px) + scrollable right content area
 - Mobile: all `grid-cols-N` collapse to single column, sidebar hidden (desktop-first for this tool)
 
-Banned: centered hero, 3 equal feature cards, nested cards beyond depth 1, `h-screen`, flex percentage math.
-
 ## Component inventory
 
 Custom: Layout, Sidebar, StatusBadge, SeverityBadge, AuditorAvatar, ScoreRing, ScoreBar (inline)
@@ -89,23 +64,3 @@ State: Zustand store (`useStore`) — projects, guidelines, checklist items, aud
 - Score color thresholds: ≥80% emerald, ≥60% amber, <60% rose
 - Platform initials: 2-char uppercase abbreviation in colored rounded square
 - No round-number fake scores — all percentages are computed from real mock response data
-- No generic auditor names — use Priya Nambiar, Kofi Agyemang, Lin Park-Aboagye, Dmitri Volkov
-
-## Brand voice
-
-- Tone: precise, institutional, direct — not chirpy
-- Banned copy: elevate, seamless, unleash, next-gen, game-changing, revolutionary
-- Labels: specific and factual ("Non-Compliant", "Under Review", not "Issues Found", "In Flight")
-- Numbers: always tabular-nums, font-mono for metrics and scores
-
-## Accessibility floor
-
-- WCAG 2.2 AA contrast on all body copy (≥ 4.5:1)
-- Focus-visible rings on every interactive element (`focus-visible:outline-2 focus-visible:outline-blue-400`)
-- `prefers-reduced-motion` respected via CSS override in index.css
-- 44×44px minimum touch targets (buttons use py-2 px-3 minimum)
-- All form inputs have explicit `<label>` elements
-
-## Last updated
-
-2026-05-11 — Initial build: full app scaffold with Dashboard, Projects, Audit, Guidelines, Reports pages
