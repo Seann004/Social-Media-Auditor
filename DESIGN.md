@@ -23,6 +23,8 @@ info:    #3b82f6             /* blue-500 */
 ```
 
 Shadows: `0 1px 8px -2px oklch(0.3 0.01 250 / 0.06)` — tinted toward slate, never pure black.
+Login card: `0 24px 64px -12px oklch(0.08 0.01 250 / 0.55), 0 4px 16px -4px oklch(0.15 0.02 250 / 0.2)`
+Logo glow: `0 4px 12px oklch(0.45 0.2 250 / 0.35)` — directional, not omnidirectional neon.
 
 
 
@@ -56,6 +58,10 @@ Library: framer-motion v11
 Custom: Layout, Sidebar, StatusBadge, SeverityBadge, AuditorAvatar, ScoreRing, ScoreBar (inline)
 Pages: DashboardPage, ProjectsPage, AuditPage, GuidelinesPage, ReportsPage
 State: Zustand store (`useStore`) — projects, guidelines, checklist items, audit responses
+
+## Login page pattern
+
+Card-first: logo lives inside the card (not floating above), topped by a 3px blue accent strip. Background is slate-950 + subtle 52px grid at 3% opacity.
 
 ## Project-specific rules
 

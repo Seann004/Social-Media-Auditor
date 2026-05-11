@@ -56,8 +56,11 @@ function ScoreBar({ pct, color }: { pct: number; color: string }) {
 }
 
 export default function DashboardPage() {
-  const { projects, users, checklistItems, responses, getProjectScore, guidelines } = useStore()
-  const currentUser = users[0]
+  const { projects, users, currentUserId, checklistItems, responses, getProjectScore, guidelines } = useStore()
+  const currentUser = users.find((u) => u.id === currentUserId) ?? users[0]
+
+  const hour = new Date().getHours()
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
   const activeProjects = projects.filter((p) => p.status === 'in_progress')
   const completedProjects = projects.filter((p) => p.status === 'completed')
@@ -100,7 +103,7 @@ export default function DashboardPage() {
             })}
           </p>
           <h1 className="text-3xl font-semibold text-slate-900 tracking-tight">
-            Good morning, {currentUser.name.split(' ')[0]}.
+            {greeting}, {currentUser.name.split(' ')[0]}.
           </h1>
           <p className="text-slate-500 text-base mt-1.5 leading-relaxed">
             {activeProjects.length} audit{activeProjects.length !== 1 ? 's' : ''} in progress

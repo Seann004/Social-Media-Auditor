@@ -52,36 +52,37 @@ export default function LoginPage() {
     <div className="min-h-[100dvh] bg-slate-950 flex flex-col items-center justify-center px-4 py-12">
       {/* Background grid */}
       <div
-        className="fixed inset-0 pointer-events-none opacity-[0.035]"
+        className="fixed inset-0 pointer-events-none opacity-[0.03]"
         style={{
           backgroundImage: `linear-gradient(oklch(0.8 0 0) 1px, transparent 1px), linear-gradient(90deg, oklch(0.8 0 0) 1px, transparent 1px)`,
-          backgroundSize: '48px 48px',
+          backgroundSize: '52px 52px',
         }}
       />
 
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ type: 'spring', stiffness: 100, damping: 20 }}
+        transition={{ type: 'spring', stiffness: 100, damping: 22 }}
         className="relative w-full max-w-sm"
       >
-        {/* Logo above card */}
-        <div className="flex items-center gap-2.5 mb-7 justify-center">
-          <div className="w-9 h-9 rounded-[10px] bg-blue-600 flex items-center justify-center shrink-0 shadow-[0_0_20px_oklch(0.6_0.18_250_/_0.4)]">
-            <ShieldCheck size={18} weight="bold" className="text-white" />
-          </div>
-          <div>
-            <p className="text-white font-semibold text-base tracking-tight leading-none">SafetyAudit</p>
-            <p className="text-slate-500 text-[10px] font-mono tracking-[0.12em] uppercase mt-0.5">
-              Child Safety Platform
-            </p>
-          </div>
-        </div>
-
         {/* Card */}
-        <div className="bg-white rounded-[20px] shadow-[0_24px_64px_-12px_rgba(0,0,0,0.5)] overflow-hidden">
-          {/* Card header */}
-          <div className="px-7 pt-7 pb-5 border-b border-slate-100">
+        <div className="bg-white rounded-[18px] shadow-[0_24px_64px_-12px_oklch(0.08_0.01_250_/_0.55),_0_4px_16px_-4px_oklch(0.15_0.02_250_/_0.2)] overflow-hidden">
+          {/* Accent strip */}
+          <div className="h-[3px] bg-blue-600" />
+
+          {/* Card header — logo + title */}
+          <div className="px-7 pt-6 pb-5 border-b border-slate-100">
+            <div className="flex items-center gap-2.5 mb-5">
+              <div className="w-8 h-8 rounded-[8px] bg-blue-600 flex items-center justify-center shrink-0 shadow-[0_4px_12px_oklch(0.45_0.2_250_/_0.35)]">
+                <ShieldCheck size={16} weight="bold" className="text-white" />
+              </div>
+              <div>
+                <p className="text-slate-900 font-semibold text-sm tracking-tight leading-none">SafetyAudit</p>
+                <p className="text-slate-400 text-[10px] font-mono tracking-[0.12em] uppercase mt-0.5">
+                  Child Safety Platform
+                </p>
+              </div>
+            </div>
             <h1 className="text-xl font-semibold text-slate-900 tracking-tight">Sign in</h1>
             <p className="text-slate-500 text-sm mt-1">Access your audit projects and reports.</p>
           </div>

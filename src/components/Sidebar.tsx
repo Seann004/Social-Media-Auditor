@@ -46,7 +46,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="px-4 pt-5 pb-4">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-[8px] bg-blue-600 flex items-center justify-center shrink-0">
+          <div className="w-7 h-7 rounded-[8px] bg-blue-600 flex items-center justify-center shrink-0 ring-1 ring-blue-400/30 shadow-[0_2px_8px_oklch(0.45_0.2_250_/_0.4)]">
             <ShieldCheck size={15} weight="bold" className="text-white" />
           </div>
           <span className="text-white font-semibold tracking-tight text-sm">SafetyAudit</span>
@@ -70,10 +70,10 @@ export default function Sidebar() {
                 <NavLink
                   to={to}
                   className={[
-                    'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors duration-150',
+                    'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-150',
                     'focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:outline-offset-1',
                     active
-                      ? 'bg-slate-800 text-white'
+                      ? 'bg-slate-800 text-white ring-1 ring-white/[0.06] shadow-[0_1px_4px_oklch(0.08_0.01_250_/_0.4)]'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50',
                   ].join(' ')}
                 >
