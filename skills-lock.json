@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "frontend-god-mode": {
+      "source": "Shawnchee/frontend-god-mode",
+      "sourceType": "github",
+      "skillPath": "frontend-god-mode/SKILL.md",
+      "computedHash": "86ab50ff4e45ba0cd9d37bb55b543368e19d16d0716a668dfb4fc4bd2224bed0"
+    }
+  }
+}
