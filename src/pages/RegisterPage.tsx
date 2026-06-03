@@ -9,7 +9,6 @@ import {
   XIcon,
 } from '@phosphor-icons/react'
 import { useStore } from '../store/useStore'
-import { supabase } from '../lib/supabase'
 import type { UserRole } from '../types'
 
 const PASSWORD_RULES = [
@@ -23,12 +22,20 @@ function passwordValid(p: string) {
   return PASSWORD_RULES.every((r) => r.test(p))
 }
 
-export default function LoginPage() {
-  const navigate = useNavigate()
-  const { login } = useStore()
+const ROLE_OPTIONS: { value: UserRole; label: string; description: string }[] = [
+  { value: 'head_auditor', label: 'Head Auditor', description: 'Manage projects, assign auditors, review submissions' },
+  { value: 'auditor', label: 'Auditor', description: 'Conduct audits, record findings, submit for review' },
+]
 
+export default function RegisterPage() {
+  const navigate = useNavigate()
+  const { register, users } = useStore()
+
+  const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [role, setRole] = useState<UserRole>('auditor')
   const [passwordTouched, setPasswordTouched] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -36,43 +43,31 @@ export default function LoginPage() {
   const showRules = passwordTouched && password.length > 0
   const allRulesPassed = passwordValid(password)
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setPasswordTouched(true)
 
-    if (!email.trim()) {
-      setError('Please enter your email.')
+    if (!name.trim()) { setError('Please enter your full name.'); return }
+    if (!email.trim()) { setError('Please enter your email.'); return }
+    if (!passwordValid(password)) { setError('Password does not meet the requirements below.'); return }
+    if (password !== confirmPassword) { setError('Passwords do not match.'); return }
+
+    const emailLower = email.trim().toLowerCase()
+    if (users.some((u) => u.name.toLowerCase() === name.trim().toLowerCase())) {
+      setError('An account with this name already exists.')
       return
     }
-    if (!passwordValid(password)) {
-      setError('Password does not meet the requirements below.')
-      return
-    }
+    void emailLower
 
     setLoading(true)
-
-    const { data, error: dbError } = await supabase.rpc('verify_user_login', {
-      p_email: email.trim().toLowerCase(),
-      p_password: password,
-    })
-
-    if (dbError || !data || data.length === 0) {
-      setLoading(false)
-      setError('Incorrect email or password.')
-      return
-    }
-
-    const user = data[0]
-    login(user.userId, user.userName, user.role as UserRole)
-    // Pre-load DB data (non-blocking — pages handle their own loading)
-    const { initFromDb } = useStore.getState()
-    initFromDb().catch(() => {})
-    navigate('/dashboard', { replace: true })
+    setTimeout(() => {
+      register(email, name.trim(), role)
+      navigate('/dashboard', { replace: true })
+    }, 600)
   }
 
   return (
     <div className="min-h-[100dvh] bg-blue-600 flex flex-col items-center justify-center px-4 py-12">
-      {/* Background grid */}
       <div
         className="fixed inset-0 pointer-events-none opacity-[0.08]"
         style={{
@@ -87,12 +82,9 @@ export default function LoginPage() {
         transition={{ type: 'spring', stiffness: 100, damping: 22 }}
         className="relative w-full max-w-sm"
       >
-        {/* Card */}
         <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
-          {/* Accent strip */}
           <div className="h-[3px] bg-blue-600" />
 
-          {/* Card header */}
           <div className="px-7 pt-6 pb-5 border-b border-slate-100">
             <div className="flex items-center gap-2.5 mb-5">
               <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center shrink-0">
@@ -105,12 +97,27 @@ export default function LoginPage() {
                 </p>
               </div>
             </div>
-            <h1 className="text-xl font-semibold text-slate-900 tracking-tight">Sign in</h1>
-            <p className="text-slate-500 text-sm mt-1">Access your audit projects and reports.</p>
+            <h1 className="text-xl font-semibold text-slate-900 tracking-tight">Create account</h1>
+            <p className="text-slate-500 text-sm mt-1">Register to access SafetyAudit.</p>
           </div>
 
-          {/* Form */}
           <form onSubmit={handleSubmit} noValidate className="px-7 py-6 space-y-4">
+            {/* Full name */}
+            <div>
+              <label htmlFor="name" className="block text-sm font-medium text-slate-700 mb-1.5">
+                Full Name
+              </label>
+              <input
+                id="name"
+                type="text"
+                autoComplete="name"
+                value={name}
+                onChange={(e) => { setName(e.target.value); setError('') }}
+                className="w-full text-sm text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent placeholder:text-slate-300 transition-all"
+                placeholder="Jane Smith"
+              />
+            </div>
+
             {/* Email */}
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1.5">
@@ -127,6 +134,43 @@ export default function LoginPage() {
               />
             </div>
 
+            {/* Role */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">Role</label>
+              <div className="space-y-2">
+                {ROLE_OPTIONS.map((opt) => (
+                  <label
+                    key={opt.value}
+                    className={[
+                      'flex items-start gap-3 px-3 py-3 rounded-lg border cursor-pointer transition-colors',
+                      role === opt.value ? 'border-blue-300 bg-blue-50' : 'border-slate-200 hover:bg-slate-50',
+                    ].join(' ')}
+                  >
+                    <input
+                      type="radio"
+                      name="role"
+                      value={opt.value}
+                      checked={role === opt.value}
+                      onChange={() => setRole(opt.value)}
+                      className="sr-only"
+                    />
+                    <div className={[
+                      'w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5',
+                      role === opt.value ? 'border-blue-600 bg-blue-600' : 'border-slate-300',
+                    ].join(' ')}>
+                      {role === opt.value && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                    </div>
+                    <div>
+                      <p className={`text-sm font-medium ${role === opt.value ? 'text-blue-800' : 'text-slate-700'}`}>
+                        {opt.label}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-0.5">{opt.description}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
             {/* Password */}
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1.5">
@@ -135,7 +179,7 @@ export default function LoginPage() {
               <input
                 id="password"
                 type="password"
-                autoComplete="current-password"
+                autoComplete="new-password"
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); setError('') }}
                 onBlur={() => setPasswordTouched(true)}
@@ -149,8 +193,6 @@ export default function LoginPage() {
                 ].join(' ')}
                 placeholder="••••••••"
               />
-
-              {/* Password rules checklist */}
               <AnimatePresence>
                 {showRules && (
                   <motion.div
@@ -164,11 +206,9 @@ export default function LoginPage() {
                         const passed = rule.test(password)
                         return (
                           <li key={rule.label} className="flex items-center gap-2">
-                            {passed ? (
-                              <CheckIcon size={12} weight="bold" className="text-emerald-500 shrink-0" />
-                            ) : (
-                              <XIcon size={12} weight="bold" className="text-rose-400 shrink-0" />
-                            )}
+                            {passed
+                              ? <CheckIcon size={12} weight="bold" className="text-emerald-500 shrink-0" />
+                              : <XIcon size={12} weight="bold" className="text-rose-400 shrink-0" />}
                             <span className={`text-xs ${passed ? 'text-emerald-600' : 'text-slate-500'}`}>
                               {rule.label}
                             </span>
@@ -181,7 +221,22 @@ export default function LoginPage() {
               </AnimatePresence>
             </div>
 
-            {/* Error banner */}
+            {/* Confirm password */}
+            <div>
+              <label htmlFor="confirm-password" className="block text-sm font-medium text-slate-700 mb-1.5">
+                Confirm Password
+              </label>
+              <input
+                id="confirm-password"
+                type="password"
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => { setConfirmPassword(e.target.value); setError('') }}
+                className="w-full text-sm text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent placeholder:text-slate-300 transition-all"
+                placeholder="••••••••"
+              />
+            </div>
+
             <AnimatePresence>
               {error && (
                 <motion.div
@@ -196,15 +251,6 @@ export default function LoginPage() {
               )}
             </AnimatePresence>
 
-            {/* Register link */}
-            <p className="text-center text-sm text-slate-500">
-              Don't have an account?{' '}
-              <Link to="/register" className="text-blue-600 font-medium hover:text-blue-700 transition-colors">
-                Register
-              </Link>
-            </p>
-
-            {/* Submit */}
             <motion.button
               type="submit"
               disabled={loading}
@@ -218,15 +264,22 @@ export default function LoginPage() {
                     transition={{ repeat: Infinity, duration: 0.75, ease: 'linear' }}
                     className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full"
                   />
-                  Signing in…
+                  Creating account…
                 </>
               ) : (
                 <>
-                  Sign in
+                  Create account
                   <ArrowRight size={14} weight="bold" />
                 </>
               )}
             </motion.button>
+
+            <p className="text-center text-sm text-slate-500">
+              Already have an account?{' '}
+              <Link to="/" className="text-blue-600 font-medium hover:text-blue-700 transition-colors">
+                Sign in
+              </Link>
+            </p>
           </form>
         </div>
       </motion.div>

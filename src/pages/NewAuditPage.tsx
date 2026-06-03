@@ -6,6 +6,8 @@ import {
   ArrowRightIcon as ArrowRight,
   CheckIcon,
   WarningIcon as Warning,
+  LockIcon as Lock,
+  SpinnerIcon as Spinner,
 } from '@phosphor-icons/react'
 import { useStore } from '../store/useStore'
 import type { Platform } from '../types'
@@ -36,15 +38,33 @@ export default function NewAuditPage() {
   const { users, currentUserId, guidelines, createProject } = useStore()
   const currentUser = users.find((u) => u.id === currentUserId)!
 
+  const [projectName, setProjectName] = useState('')
   const [platform, setPlatform] = useState<Platform | null>(null)
   const [selectedGuidelines, setSelectedGuidelines] = useState<string[]>([])
   const [selectedAuditors, setSelectedAuditors] = useState<string[]>([])
   const [dueDate, setDueDate] = useState('')
   const [notes, setNotes] = useState('')
-  const [errors, setErrors] = useState<{ platform?: string; guidelines?: string }>({})
+  const [errors, setErrors] = useState<{ name?: string; platform?: string; guidelines?: string }>({})
   const [submitted, setSubmitted] = useState(false)
 
-  const otherAuditors = users.filter((u) => u.id !== currentUserId)
+  const otherAuditors = users.filter((u) => u.id !== currentUserId && u.role === 'auditor')
+
+  if (currentUser?.role !== 'head_auditor') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
+        <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+          <Lock size={20} className="text-slate-400" />
+        </div>
+        <h2 className="text-lg font-semibold text-slate-800 mb-1">Access Restricted</h2>
+        <p className="text-slate-500 text-sm max-w-xs">
+          Only Head Auditors can create new audit projects.
+        </p>
+        <Link to="/projects" className="mt-4 text-blue-600 text-sm font-medium hover:text-blue-700 transition-colors">
+          Back to Audits
+        </Link>
+      </div>
+    )
+  }
 
   function toggleGuideline(id: string) {
     setSelectedGuidelines((prev) =>
@@ -61,24 +81,33 @@ export default function NewAuditPage() {
 
   function validate() {
     const newErrors: typeof errors = {}
+    if (!projectName.trim()) newErrors.name = 'Enter a project name.'
     if (!platform) newErrors.platform = 'Select a platform to audit.'
     if (selectedGuidelines.length === 0) newErrors.guidelines = 'Select at least one guideline.'
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  const [creating, setCreating] = useState(false)
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setSubmitted(true)
     if (!validate() || !platform) return
-    const id = createProject({
-      platform,
-      guidelineIds: selectedGuidelines,
-      auditorIds: selectedAuditors,
-      dueDate: dueDate || undefined,
-      notes,
-    })
-    navigate(`/projects/${id}`)
+    setCreating(true)
+    try {
+      const id = await createProject({
+        name: projectName.trim(),
+        platform,
+        guidelineIds: selectedGuidelines,
+        auditorIds: selectedAuditors,
+        dueDate: dueDate || undefined,
+        notes,
+      })
+      navigate(`/projects/${id}`)
+    } finally {
+      setCreating(false)
+    }
   }
 
   const totalItems = selectedGuidelines.reduce((sum, gid) => {
@@ -100,7 +129,7 @@ export default function NewAuditPage() {
       <motion.div variants={container} initial="hidden" animate="show">
         {/* Page header */}
         <motion.div variants={item} className="mb-8">
-          <h1 className="text-3xl font-semibold text-slate-900 tracking-tight">
+          <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
             Create New Audit
           </h1>
           <p className="text-slate-500 text-base mt-1.5 leading-relaxed">
@@ -113,8 +142,30 @@ export default function NewAuditPage() {
             {/* Left — main fields */}
             <div className="lg:col-span-2 space-y-7">
 
+              {/* Project Name */}
+              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6">
+                <label htmlFor="project-name" className="block text-base font-semibold text-slate-800 mb-1.5">
+                  Project Name <span className="text-rose-400">*</span>
+                </label>
+                <p className="text-sm text-slate-500 mb-3">A descriptive name for this audit project.</p>
+                {errors.name && submitted && (
+                  <div className="flex items-center gap-2 text-rose-600 text-sm mb-3">
+                    <Warning size={14} />
+                    {errors.name}
+                  </div>
+                )}
+                <input
+                  id="project-name"
+                  type="text"
+                  value={projectName}
+                  onChange={(e) => { setProjectName(e.target.value); if (errors.name) setErrors((prev) => ({ ...prev, name: undefined })) }}
+                  placeholder="e.g. TikTok ICO & COPPA Audit 2026"
+                  className="w-full text-sm text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent placeholder:text-slate-300 transition-all"
+                />
+              </motion.div>
+
               {/* Platform selection */}
-              <motion.div variants={item} className="bg-white border border-slate-200 rounded-[16px] p-6 shadow-[0_1px_8px_-2px_oklch(0.3_0.01_250_/_0.06)]">
+              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6 ">
                 <div className="flex items-center justify-between mb-4">
                   <label className="text-base font-semibold text-slate-800">
                     Platform <span className="text-rose-400">*</span>
@@ -144,15 +195,15 @@ export default function NewAuditPage() {
                         }}
                         whileTap={{ scale: 0.97 }}
                         className={[
-                          'relative flex flex-col items-center gap-2.5 p-4 rounded-[12px] border-2 transition-all text-left',
+                          'relative flex flex-col items-center gap-2.5 p-4 rounded-xl border-2 transition-all text-left',
                           'focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:outline-offset-1',
                           selected
-                            ? 'border-blue-500 bg-blue-50 shadow-[0_0_0_3px_oklch(0.6_0.18_250_/_0.12)]'
+                            ? 'border-blue-500 bg-blue-50'
                             : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50',
                         ].join(' ')}
                       >
                         <div
-                          className={`w-10 h-10 rounded-[10px] ${color} flex items-center justify-center`}
+                          className={`w-10 h-10 rounded-lg ${color} flex items-center justify-center`}
                         >
                           <span className={`${textColor} text-xs font-bold`}>
                             {value.slice(0, 2).toUpperCase()}
@@ -173,7 +224,7 @@ export default function NewAuditPage() {
               </motion.div>
 
               {/* Guidelines */}
-              <motion.div variants={item} className="bg-white border border-slate-200 rounded-[16px] p-6 shadow-[0_1px_8px_-2px_oklch(0.3_0.01_250_/_0.06)]">
+              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6 ">
                 <div className="flex items-center justify-between mb-4">
                   <label className="text-base font-semibold text-slate-800">
                     Compliance Guidelines <span className="text-rose-400">*</span>
@@ -195,7 +246,7 @@ export default function NewAuditPage() {
                   </div>
                 )}
 
-                <div className="divide-y divide-slate-100 border border-slate-100 rounded-[10px] overflow-hidden">
+                <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg overflow-hidden">
                   {guidelines.map((g) => {
                     const checked = selectedGuidelines.includes(g.id)
                     return (
@@ -216,7 +267,7 @@ export default function NewAuditPage() {
                           />
                           <div
                             className={[
-                              'w-5 h-5 rounded-[5px] border-2 flex items-center justify-center transition-all',
+                              'w-5 h-5 rounded border-2 flex items-center justify-center transition-all',
                               checked
                                 ? 'bg-blue-600 border-blue-600'
                                 : 'border-slate-300 bg-white',
@@ -231,7 +282,7 @@ export default function NewAuditPage() {
                             <p className={`text-sm font-semibold ${checked ? 'text-blue-800' : 'text-slate-800'}`}>
                               {g.name}
                             </p>
-                            <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-[4px]">
+                            <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
                               v{g.version}
                             </span>
                           </div>
@@ -249,7 +300,7 @@ export default function NewAuditPage() {
               </motion.div>
 
               {/* Notes */}
-              <motion.div variants={item} className="bg-white border border-slate-200 rounded-[16px] p-6 shadow-[0_1px_8px_-2px_oklch(0.3_0.01_250_/_0.06)]">
+              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6 ">
                 <label className="block text-base font-semibold text-slate-800 mb-1.5">
                   Notes
                   <span className="text-sm font-normal text-slate-400 ml-2">optional</span>
@@ -262,7 +313,7 @@ export default function NewAuditPage() {
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder="e.g. Focus on features accessible to under-13 users. Cross-reference the platform's published safety documentation."
                   rows={4}
-                  className="w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-[10px] px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed transition-all"
+                  className="w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed transition-all"
                 />
               </motion.div>
             </div>
@@ -270,7 +321,7 @@ export default function NewAuditPage() {
             {/* Right — team + due date + summary */}
             <div className="space-y-5">
               {/* Team */}
-              <motion.div variants={item} className="bg-white border border-slate-200 rounded-[16px] p-6 shadow-[0_1px_8px_-2px_oklch(0.3_0.01_250_/_0.06)]">
+              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6 ">
                 <label className="block text-base font-semibold text-slate-800 mb-1">
                   Team Members
                 </label>
@@ -279,7 +330,7 @@ export default function NewAuditPage() {
                 </p>
 
                 {/* Current user — always included */}
-                <div className="flex items-center gap-3 px-3 py-3 bg-slate-50 rounded-[10px] mb-3">
+                <div className="flex items-center gap-3 px-3 py-3 bg-slate-50 rounded-lg mb-3">
                   <AuditorAvatar user={currentUser} size="md" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-slate-800 truncate">{currentUser.name}</p>
@@ -291,7 +342,7 @@ export default function NewAuditPage() {
                 </div>
 
                 {/* Other auditors */}
-                <div className="divide-y divide-slate-100 border border-slate-100 rounded-[10px] overflow-hidden">
+                <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg overflow-hidden">
                   {otherAuditors.map((u) => {
                     const checked = selectedAuditors.includes(u.id)
                     return (
@@ -315,7 +366,7 @@ export default function NewAuditPage() {
                         </div>
                         <div
                           className={[
-                            'w-5 h-5 rounded-[5px] border-2 flex items-center justify-center transition-all shrink-0',
+                            'w-5 h-5 rounded border-2 flex items-center justify-center transition-all shrink-0',
                             checked ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white',
                           ].join(' ')}
                         >
@@ -328,7 +379,7 @@ export default function NewAuditPage() {
               </motion.div>
 
               {/* Due date */}
-              <motion.div variants={item} className="bg-white border border-slate-200 rounded-[16px] p-6 shadow-[0_1px_8px_-2px_oklch(0.3_0.01_250_/_0.06)]">
+              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6 ">
                 <label htmlFor="due-date" className="block text-base font-semibold text-slate-800 mb-1">
                   Due Date
                   <span className="text-sm font-normal text-slate-400 ml-2">optional</span>
@@ -340,15 +391,21 @@ export default function NewAuditPage() {
                   value={dueDate}
                   onChange={(e) => setDueDate(e.target.value)}
                   min={new Date().toISOString().split('T')[0]}
-                  className="w-full text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-[10px] px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent transition-all"
+                  className="w-full text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent transition-all"
                 />
               </motion.div>
 
               {/* Summary card */}
-              <motion.div variants={item} className="bg-slate-950 border border-slate-800 rounded-[16px] p-6">
+              <motion.div variants={item} className="bg-slate-950 border border-slate-800 rounded-xl p-6">
                 <p className="text-xs text-slate-500 font-mono tracking-widest uppercase mb-4">Summary</p>
                 <div className="space-y-3 divide-y divide-slate-800">
                   <div className="flex items-center justify-between">
+                    <span className="text-sm text-slate-400">Name</span>
+                    <span className="text-sm font-medium text-white truncate max-w-[140px] text-right">
+                      {projectName.trim() || <span className="text-slate-600">Not set</span>}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between pt-3">
                     <span className="text-sm text-slate-400">Platform</span>
                     <span className="text-sm font-medium text-white">
                       {platform ?? <span className="text-slate-600">Not selected</span>}
@@ -389,15 +446,15 @@ export default function NewAuditPage() {
               <motion.div variants={item} className="flex flex-col gap-2.5">
                 <motion.button
                   type="submit"
+                  disabled={creating}
                   whileTap={{ scale: 0.98 }}
-                  className="w-full flex items-center justify-center gap-2 px-5 py-3.5 bg-blue-600 text-white text-base font-semibold rounded-[12px] hover:bg-blue-700 transition-colors focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:outline-offset-1 shadow-[0_2px_8px_oklch(0.54_0.18_250_/_0.35)]"
+                  className="w-full flex items-center justify-center gap-2 px-5 py-3.5 bg-blue-600 text-white text-base font-semibold rounded-xl hover:bg-blue-700 disabled:opacity-60 transition-colors focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:outline-offset-1"
                 >
-                  Create Audit Project
-                  <ArrowRight size={16} weight="bold" />
+                  {creating ? <><Spinner size={16} className="animate-spin" /> Creating…</> : <>Create Audit Project <ArrowRight size={16} weight="bold" /></>}
                 </motion.button>
                 <Link
                   to="/projects"
-                  className="w-full flex items-center justify-center px-5 py-3 text-slate-600 text-sm font-medium rounded-[12px] border border-slate-200 hover:bg-slate-50 transition-colors focus-visible:outline-2 focus-visible:outline-blue-400"
+                  className="w-full flex items-center justify-center px-5 py-3 text-slate-600 text-sm font-medium rounded-xl border border-slate-200 hover:bg-slate-50 transition-colors focus-visible:outline-2 focus-visible:outline-blue-400"
                 >
                   Cancel
                 </Link>

@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowRightIcon as ArrowRight,
   PlusIcon as Plus,
   FolderOpenIcon as FolderOpen,
+  LockIcon as Lock,
 } from '@phosphor-icons/react'
 import { useStore } from '../store/useStore'
 import type { AuditStatus } from '../types'
@@ -63,8 +64,24 @@ function ScoreBar({ pct }: { pct: number }) {
 }
 
 export default function ProjectsPage() {
-  const { projects, users, guidelines, getProjectScore } = useStore()
+  const { projects, users, guidelines, getProjectScore, currentUserId, initFromDb, loading } = useStore()
   const [filter, setFilter] = useState<Filter>('all')
+  const currentUser = users.find((u) => u.id === currentUserId)
+  const isHeadAuditor = currentUser?.role === 'head_auditor'
+
+  useEffect(() => { initFromDb() }, [currentUserId])
+
+  if (currentUser?.role === 'admin') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
+        <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+          <Lock size={20} className="text-slate-400" />
+        </div>
+        <h2 className="text-lg font-semibold text-slate-800 mb-1">Access Restricted</h2>
+        <p className="text-slate-500 text-sm max-w-xs">Admins manage guidelines only and do not have access to audit projects.</p>
+      </div>
+    )
+  }
 
   const filtered = projects.filter((p) => filter === 'all' || p.status === filter)
   const sorted = [...filtered].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -85,13 +102,15 @@ export default function ProjectsPage() {
             active
           </p>
         </div>
-        <Link
-          to="/projects/new"
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-[10px] hover:bg-blue-700 transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 focus-visible:outline-offset-1"
-        >
-          <Plus size={14} weight="bold" />
-          New Audit
-        </Link>
+        {isHeadAuditor && (
+          <Link
+            to="/projects/new"
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 focus-visible:outline-offset-1"
+          >
+            <Plus size={14} weight="bold" />
+            New Audit
+          </Link>
+        )}
       </motion.div>
 
       {/* Filter tabs */}
@@ -118,7 +137,7 @@ export default function ProjectsPage() {
             >
               {label}
               <span
-                className={`ml-1.5 text-[10px] px-1 py-0.5 rounded-[4px] font-mono ${
+                className={`ml-1.5 text-[10px] px-1 py-0.5 rounded font-mono ${
                   active ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-400'
                 }`}
               >
@@ -155,7 +174,7 @@ export default function ProjectsPage() {
             variants={container}
             initial="hidden"
             animate="show"
-            className="bg-white border border-slate-200 rounded-[14px] divide-y divide-slate-100 overflow-hidden shadow-[0_1px_12px_-3px_oklch(0.3_0.01_250_/_0.07)]"
+            className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden"
           >
             {sorted.map((project) => {
               const score = getProjectScore(project.id)
@@ -175,21 +194,24 @@ export default function ProjectsPage() {
                   >
                     {/* Platform icon */}
                     <div
-                      className={`w-9 h-9 rounded-[10px] ${PLATFORM_COLOR[project.platform] ?? 'bg-slate-700'} flex items-center justify-center shrink-0`}
+                      className={`w-9 h-9 rounded-lg ${PLATFORM_COLOR[project.platform] ?? 'bg-slate-700'} flex items-center justify-center shrink-0`}
                     >
                       <span className="text-white text-[10px] font-bold">
                         {project.platform.slice(0, 2).toUpperCase()}
                       </span>
                     </div>
 
-                    {/* Platform + guidelines */}
-                    <div className="w-44 shrink-0">
-                      <p className="text-base font-semibold text-slate-800">{project.platform}</p>
-                      <div className="flex flex-wrap gap-1 mt-0.5">
+                    {/* Project name + platform + guidelines */}
+                    <div className="w-52 shrink-0">
+                      <p className="text-base font-semibold text-slate-800 leading-tight">{project.name}</p>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium">
+                          {project.platform}
+                        </span>
                         {guidelineNames.map((name) => (
                           <span
                             key={name}
-                            className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-[4px] font-medium"
+                            className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium"
                           >
                             {name}
                           </span>

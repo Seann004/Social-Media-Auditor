@@ -17,7 +17,9 @@ export type ChecklistItemStatus =
   | 'not_applicable'
   | 'needs_review'
 
-export type UserRole = 'head_auditor' | 'auditor' | 'manager'
+export type UserRole = 'head_auditor' | 'auditor' | 'admin'
+
+export type SubmissionStatus = 'not_submitted' | 'pending_review' | 'approved' | 'rejected'
 
 export type Severity = 'critical' | 'major' | 'minor'
 
@@ -54,9 +56,12 @@ export interface ChecklistItem {
 
 export interface AuditProject {
   id: string
+  name: string
   platform: Platform
   guidelineIds: string[]
   status: AuditStatus
+  submissionStatus: SubmissionStatus
+  submissionRemarks?: string
   headAuditorId: string
   auditorIds: string[]
   createdAt: string

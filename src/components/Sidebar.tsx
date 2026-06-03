@@ -10,13 +10,6 @@ import {
 } from '@phosphor-icons/react'
 import { useStore } from '../store/useStore'
 
-const NAV = [
-  { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
-  { to: '/projects', label: 'Audits', icon: FolderOpen, exact: false },
-  { to: '/guidelines', label: 'Guidelines', icon: ListChecks, exact: false },
-  { to: '/reports', label: 'Reports', icon: ChartBar, exact: false },
-]
-
 const container = {
   hidden: { opacity: 0 },
   show: { opacity: 1, transition: { staggerChildren: 0.06, delayChildren: 0.1 } },
@@ -32,6 +25,22 @@ export default function Sidebar() {
   const location = useLocation()
   const navigate = useNavigate()
 
+  const isAdmin = user?.role === 'admin'
+
+  // Admin only sees Dashboard and Guidelines (UC-7/8)
+  // Head Auditor and Auditor see full nav
+  const NAV = isAdmin
+    ? [
+        { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
+        { to: '/guidelines', label: 'Guidelines', icon: ListChecks, exact: false },
+      ]
+    : [
+        { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
+        { to: '/projects', label: 'Audits', icon: FolderOpen, exact: false },
+        { to: '/guidelines', label: 'Guidelines', icon: ListChecks, exact: false },
+        { to: '/reports', label: 'Reports', icon: ChartBar, exact: false },
+      ]
+
   function handleLogout() {
     logout()
     navigate('/', { replace: true })
@@ -46,7 +55,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="px-4 pt-5 pb-4">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-[8px] bg-blue-600 flex items-center justify-center shrink-0 ring-1 ring-blue-400/30 shadow-[0_2px_8px_oklch(0.45_0.2_250_/_0.4)]">
+          <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center shrink-0">
             <ShieldCheck size={15} weight="bold" className="text-white" />
           </div>
           <span className="text-white font-semibold tracking-tight text-sm">SafetyAudit</span>
@@ -73,7 +82,7 @@ export default function Sidebar() {
                     'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-150',
                     'focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:outline-offset-1',
                     active
-                      ? 'bg-slate-800 text-white ring-1 ring-white/[0.06] shadow-[0_1px_4px_oklch(0.08_0.01_250_/_0.4)]'
+                      ? 'bg-slate-800 text-white'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50',
                   ].join(' ')}
                 >
@@ -89,7 +98,7 @@ export default function Sidebar() {
           })}
         </motion.ul>
 
-        {nextDue && (
+        {!isAdmin && nextDue && (
           <div className="mt-6">
             <p className="px-3 text-[10px] text-slate-600 font-mono tracking-widest uppercase mb-2">
               Next deadline
@@ -98,7 +107,7 @@ export default function Sidebar() {
               to={`/projects/${projects.find((p) => p.dueDate === nextDue.dueDate)?.id}`}
               className="block px-3 py-2.5 rounded-lg bg-slate-800/40 hover:bg-slate-800/70 transition-colors"
             >
-              <p className="text-slate-200 text-xs font-medium">{nextDue.platform} Audit</p>
+              <p className="text-slate-200 text-xs font-medium truncate">{nextDue.name}</p>
               <p className="text-slate-500 text-[11px] mt-0.5">
                 Due{' '}
                 {new Date(nextDue.dueDate!).toLocaleDateString('en-GB', {

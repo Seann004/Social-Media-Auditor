@@ -6,6 +6,12 @@
       "sourceType": "github",
       "skillPath": "frontend-god-mode/SKILL.md",
       "computedHash": "86ab50ff4e45ba0cd9d37bb55b543368e19d16d0716a668dfb4fc4bd2224bed0"
+    },
+    "ui-ux-pro-max": {
+      "source": "nextlevelbuilder/ui-ux-pro-max-skill",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/ui-ux-pro-max/SKILL.md",
+      "computedHash": "6337038fe1fe6bbe1b9f252ab678ee575859190bab6f0f246f4061824eb40875"
     }
   }
 }

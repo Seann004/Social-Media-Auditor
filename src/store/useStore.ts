@@ -1,45 +1,25 @@
 import { create } from 'zustand'
-import type { AuditProject, AuditResponse, ChecklistItemStatus, Platform, ProjectScore } from '../types'
-import {
-  USERS,
-  CURRENT_USER_ID,
-  GUIDELINES,
-  CHECKLIST_ITEMS,
-  AUDIT_PROJECTS,
-  INITIAL_RESPONSES,
-} from '../data/mockData'
+import type {
+  AuditProject,
+  AuditResponse,
+  AuditStatus,
+  ChecklistItem,
+  ChecklistItemStatus,
+  Guideline,
+  Platform,
+  ProjectScore,
+  SubmissionStatus,
+  User,
+  UserRole,
+} from '../types'
+import * as db from '../lib/db'
 
 type ResponseMap = Record<string, AuditResponse>
 
-interface NewProjectInput {
-  platform: Platform
-  guidelineIds: string[]
-  auditorIds: string[]
-  dueDate?: string
-  notes?: string
-}
-
-interface StoreState {
-  isAuthenticated: boolean
-  users: typeof USERS
-  currentUserId: string
-  guidelines: typeof GUIDELINES
-  checklistItems: typeof CHECKLIST_ITEMS
-  projects: AuditProject[]
-  responses: ResponseMap
-  login: (userId: string) => void
-  logout: () => void
-  createProject: (input: NewProjectInput) => string
-  setResponse: (projectId: string, itemId: string, status: ChecklistItemStatus, notes?: string) => void
-  getProjectScore: (projectId: string) => ProjectScore
-  getCategoryScore: (projectId: string, category: string) => ProjectScore
-}
-
-export const MOCK_CREDENTIALS: Record<string, { password: string; userId: string }> = {
-  'jackie@safetyaudit.org': { password: 'audit2026', userId: 'u1' },
-  'john@safetyaudit.org': { password: 'audit2026', userId: 'u2' },
-  'ahmad@safetyaudit.org': { password: 'audit2026', userId: 'u3' },
-  'sanji@safetyaudit.org': { password: 'audit2026', userId: 'u4' },
+const ROLE_COLORS: Record<string, string> = {
+  admin: 'bg-blue-600',
+  head_auditor: 'bg-violet-500',
+  auditor: 'bg-emerald-500',
 }
 
 function rkey(projectId: string, itemId: string) {
@@ -50,64 +30,332 @@ function emptyScore(): ProjectScore {
   return { total: 0, compliant: 0, nonCompliant: 0, notApplicable: 0, answered: 0, applicable: 0, percentage: 0, progress: 0 }
 }
 
-function calcScore(items: typeof CHECKLIST_ITEMS, responses: ResponseMap, projectId: string): ProjectScore {
+function calcScore(items: ChecklistItem[], responses: ResponseMap, projectId: string): ProjectScore {
   const total = items.length
-  let compliant = 0
-  let nonCompliant = 0
-  let notApplicable = 0
-  let answered = 0
-
+  let compliant = 0, nonCompliant = 0, notApplicable = 0, answered = 0
   for (const item of items) {
     const resp = responses[rkey(projectId, item.id)]
-    if (!resp || resp.status === 'not_started') continue
+    if (!resp || resp.status === 'not_started' || resp.status === 'needs_review') continue
     answered++
     if (resp.status === 'compliant') compliant++
     else if (resp.status === 'non_compliant') nonCompliant++
     else if (resp.status === 'not_applicable') notApplicable++
   }
-
   const applicable = answered - notApplicable
   const percentage = applicable > 0 ? Math.round((compliant / applicable) * 1000) / 10 : 0
   const progress = total > 0 ? Math.round((answered / total) * 100) : 0
   return { total, compliant, nonCompliant, notApplicable, answered, applicable, percentage, progress }
 }
 
+// Map DB row → frontend AuditProject
+function mapDbProject(p: db.DbProject): AuditProject {
+  return {
+    id: p.projectId,
+    name: p.projectTitle,
+    platform: p.smPlatform,
+    status: p.projectStatus,
+    submissionStatus: p.submissionStatus,
+    submissionRemarks: p.submissionRemarks ?? undefined,
+    headAuditorId: p.headAuditorId,
+    auditorIds: p.memberIds ?? [],
+    guidelineIds: p.guidelineIds ?? [],
+    notes: p.projectNotes ?? '',
+    dueDate: p.dueDate ?? undefined,
+    createdAt: p.timeCreated?.split('T')[0] ?? '',
+    updatedAt: p.updatedAt?.split('T')[0] ?? '',
+    scope: [],
+  }
+}
+
+// Map DB row → frontend Guideline
+function mapDbGuideline(g: db.DbGuideline): Guideline {
+  return {
+    id: g.guidelineId,
+    name: g.guidelineName,
+    shortName: g.shortName ?? g.guidelineName,
+    version: g.version ?? '1.0',
+    description: g.description ?? '',
+    source: g.source ?? '',
+    categories: [],
+    itemCount: 0,
+    lastUpdated: g.lastUpdated ?? '',
+  }
+}
+
+// Map DB row → frontend ChecklistItem
+function mapDbItem(i: db.DbChecklistItem): ChecklistItem {
+  return {
+    id: i.itemId,
+    guidelineId: i.guidelineId,
+    category: i.category ?? 'General',
+    text: i.itemDescription,
+    severity: i.severity,
+    reference: i.reference ?? undefined,
+    feature: i.feature ?? undefined,
+  }
+}
+
+interface StoreState {
+  isAuthenticated: boolean
+  users: User[]
+  currentUserId: string
+  guidelines: Guideline[]
+  checklistItems: ChecklistItem[]
+  projects: AuditProject[]
+  responses: ResponseMap
+  loading: boolean
+  dbError: string | null
+
+  login: (userId: string, name: string, role: UserRole) => void
+  logout: () => void
+  register: (email: string, name: string, role: UserRole) => void
+  initFromDb: () => Promise<void>
+
+  // Audit Management (UC-3)
+  createProject: (input: {
+    name: string; platform: Platform; guidelineIds: string[]
+    auditorIds: string[]; dueDate?: string; notes?: string
+  }) => Promise<string>
+  updateProject: (projectId: string, updates: Partial<Pick<AuditProject, 'name' | 'platform' | 'status' | 'notes' | 'dueDate' | 'scope'>>) => Promise<void>
+  deleteProject: (projectId: string) => Promise<void>
+
+  // UC-5 Manage Guideline Used
+  syncProjectGuidelines: (projectId: string, guidelineIds: string[]) => Promise<void>
+
+  // UC-6 Manage Audit Feature (scope)
+  syncProjectScope: (projectId: string, features: string[]) => Promise<void>
+
+  // UC-6.1 Manage Auditors
+  addAuditorToProject: (projectId: string, userId: string) => Promise<void>
+  removeAuditorFromProject: (projectId: string, userId: string) => Promise<void>
+
+  // UC-10/11 Checklist Item management
+  updateChecklistItem: (itemId: string, updates: Partial<Pick<ChecklistItem, 'text' | 'severity' | 'category'>>) => Promise<void>
+  deleteChecklistItem: (itemId: string) => Promise<void>
+
+  // UC-13/12 Submission workflow
+  submitForReview: (projectId: string) => Promise<void>
+  reviewSubmission: (projectId: string, approved: boolean, remarks: string) => Promise<void>
+
+  // UC-7/8 Guideline management (admin)
+  deleteGuideline: (guidelineId: string) => Promise<void>
+
+  // UC-14.1/14.2/14.3 Audit responses
+  setResponse: (projectId: string, itemId: string, guidelineId: string, status: ChecklistItemStatus, notes?: string) => Promise<void>
+
+  // Score helpers (UC-15)
+  getProjectScore: (projectId: string) => ProjectScore
+  getCategoryScore: (projectId: string, category: string) => ProjectScore
+}
+
 export const useStore = create<StoreState>((set, get) => ({
   isAuthenticated: false,
-  users: USERS,
-  currentUserId: CURRENT_USER_ID,
-  guidelines: GUIDELINES,
-  checklistItems: CHECKLIST_ITEMS,
-  projects: AUDIT_PROJECTS,
-  responses: INITIAL_RESPONSES.reduce<ResponseMap>((acc, r) => {
-    acc[rkey(r.projectId, r.checklistItemId)] = r
-    return acc
-  }, {}),
+  users: [],
+  currentUserId: '',
+  guidelines: [],
+  checklistItems: [],
+  projects: [],
+  responses: {},
+  loading: false,
+  dbError: null,
 
-  login: (userId) => set({ isAuthenticated: true, currentUserId: userId }),
-  logout: () => set({ isAuthenticated: false, currentUserId: CURRENT_USER_ID }),
-
-  createProject: ({ platform, guidelineIds, auditorIds, dueDate, notes }) => {
-    const id = `p_${Date.now()}`
-    const today = new Date().toISOString().split('T')[0]
-    const newProject: AuditProject = {
-      id,
-      platform,
-      guidelineIds,
-      status: 'draft',
-      headAuditorId: get().currentUserId,
-      auditorIds: Array.from(new Set([get().currentUserId, ...auditorIds])),
-      createdAt: today,
-      updatedAt: today,
-      dueDate: dueDate || undefined,
-      scope: [],
-      notes: notes ?? '',
-    }
-    set((state) => ({ projects: [...state.projects, newProject] }))
-    return id
+  login: (userId, name, role) => {
+    const initials = name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
+    const color = ROLE_COLORS[role] ?? 'bg-slate-500'
+    const loggedInUser: User = { id: userId, name, role, initials, color }
+    set((state) => ({
+      isAuthenticated: true,
+      currentUserId: userId,
+      users: state.users.some((u) => u.id === userId)
+        ? state.users.map((u) => (u.id === userId ? loggedInUser : u))
+        : [...state.users, loggedInUser],
+    }))
   },
 
-  setResponse: (projectId, itemId, status, notes = '') => {
+  logout: () => set({ isAuthenticated: false, currentUserId: '', projects: [], responses: {}, checklistItems: [] }),
+
+  register: (email, name, role) => {
+    const id = `u_${Date.now()}`
+    const initials = name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
+    const color = ROLE_COLORS[role] ?? 'bg-slate-500'
+    set((state) => ({
+      isAuthenticated: true,
+      currentUserId: id,
+      users: [...state.users, { id, name, role, initials, color }],
+    }))
+    void email
+  },
+
+  initFromDb: async () => {
+    const { currentUserId } = get()
+    if (!currentUserId) return
+    set({ loading: true, dbError: null })
+    try {
+      // Load users, guidelines, projects in parallel
+      const [dbUsers, dbGuidelines, dbProjects] = await Promise.all([
+        db.fetchAllUsers(),
+        db.fetchGuidelines(),
+        db.fetchUserProjects(currentUserId),
+      ])
+
+      const users: User[] = dbUsers.map((u) => ({
+        id: u.userId,
+        name: u.userName,
+        role: u.role,
+        initials: u.userName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase(),
+        color: ROLE_COLORS[u.role] ?? 'bg-slate-500',
+      }))
+
+      const guidelines = dbGuidelines.map(mapDbGuideline)
+      const projects = (dbProjects ?? []).map(mapDbProject)
+
+      // Ensure current user is in users list
+      const currentUser = get().users.find((u) => u.id === currentUserId)
+      if (currentUser && !users.some((u) => u.id === currentUserId)) {
+        users.push(currentUser)
+      }
+
+      set({ users, guidelines, projects, loading: false })
+    } catch (err) {
+      set({ loading: false, dbError: String(err) })
+    }
+  },
+
+  createProject: async ({ name, platform, guidelineIds, auditorIds, dueDate, notes }) => {
+    const { currentUserId } = get()
+    const projectId = await db.createProject({
+      title: name,
+      platform,
+      headAuditorId: currentUserId,
+      notes,
+      dueDate,
+      status: 'draft',
+    })
+    // Add head auditor as member + selected auditors
+    const allMembers = Array.from(new Set([currentUserId, ...auditorIds]))
+    await Promise.all([
+      db.syncProjectMembers(projectId, allMembers),
+      db.syncProjectGuidelines(projectId, guidelineIds),
+    ])
+    // Refresh projects
+    const dbProjects = await db.fetchUserProjects(currentUserId)
+    set({ projects: (dbProjects ?? []).map(mapDbProject) })
+    return projectId
+  },
+
+  updateProject: async (projectId, updates) => {
+    const dbUpdates: Parameters<typeof db.updateProject>[1] = {}
+    if (updates.name) dbUpdates.projectTitle = updates.name
+    if (updates.platform) dbUpdates.smPlatform = updates.platform
+    if (updates.status) dbUpdates.projectStatus = updates.status
+    if (updates.notes !== undefined) dbUpdates.projectNotes = updates.notes
+    if (updates.dueDate !== undefined) dbUpdates.dueDate = updates.dueDate ?? null
+    await db.updateProject(projectId, dbUpdates)
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId ? { ...p, ...updates, updatedAt: new Date().toISOString().split('T')[0] } : p
+      ),
+    }))
+  },
+
+  deleteProject: async (projectId) => {
+    await db.deleteProject(projectId)
+    set((state) => ({ projects: state.projects.filter((p) => p.id !== projectId) }))
+  },
+
+  syncProjectGuidelines: async (projectId, guidelineIds) => {
+    await db.syncProjectGuidelines(projectId, guidelineIds)
+    set((state) => ({
+      projects: state.projects.map((p) => p.id === projectId ? { ...p, guidelineIds } : p),
+    }))
+  },
+
+  syncProjectScope: async (projectId, features) => {
+    await db.syncProjectScope(projectId, features)
+    set((state) => ({
+      projects: state.projects.map((p) => p.id === projectId ? { ...p, scope: features } : p),
+    }))
+  },
+
+  addAuditorToProject: async (projectId, userId) => {
+    await db.addProjectMember(projectId, userId)
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId && !p.auditorIds.includes(userId)
+          ? { ...p, auditorIds: [...p.auditorIds, userId] } : p
+      ),
+    }))
+  },
+
+  removeAuditorFromProject: async (projectId, userId) => {
+    await db.removeProjectMember(projectId, userId)
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? { ...p, auditorIds: p.auditorIds.filter((id) => id !== userId && id !== p.headAuditorId) }
+          : p
+      ),
+    }))
+  },
+
+  updateChecklistItem: async (itemId, updates) => {
+    await db.updateChecklistItem(itemId, {
+      itemDescription: updates.text,
+      severity: updates.severity,
+      category: updates.category,
+    })
+    set((state) => ({
+      checklistItems: state.checklistItems.map((ci) =>
+        ci.id === itemId ? { ...ci, ...updates } : ci
+      ),
+    }))
+  },
+
+  deleteChecklistItem: async (itemId) => {
+    await db.deleteChecklistItem(itemId)
+    set((state) => ({
+      checklistItems: state.checklistItems.filter((ci) => ci.id !== itemId),
+    }))
+  },
+
+  submitForReview: async (projectId) => {
+    await db.submitForReview(projectId)
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? { ...p, submissionStatus: 'pending_review' as SubmissionStatus, status: 'under_review' as AuditStatus }
+          : p
+      ),
+    }))
+  },
+
+  reviewSubmission: async (projectId, approved, remarks) => {
+    await db.reviewSubmission(projectId, approved, remarks)
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? {
+              ...p,
+              submissionStatus: (approved ? 'approved' : 'rejected') as SubmissionStatus,
+              status: (approved ? 'completed' : 'in_progress') as AuditStatus,
+              submissionRemarks: remarks,
+            }
+          : p
+      ),
+    }))
+  },
+
+  deleteGuideline: async (guidelineId) => {
+    await db.deleteGuideline(guidelineId)
+    set((state) => ({
+      guidelines: state.guidelines.filter((g) => g.id !== guidelineId),
+      checklistItems: state.checklistItems.filter((ci) => ci.guidelineId !== guidelineId),
+    }))
+  },
+
+  setResponse: async (projectId, itemId, guidelineId, status, notes = '') => {
+    const { currentUserId } = get()
+    // Optimistic update
     set((state) => {
       const key = rkey(projectId, itemId)
       const existing = state.responses[key]
@@ -116,16 +364,20 @@ export const useStore = create<StoreState>((set, get) => ({
           ...state.responses,
           [key]: {
             id: existing?.id ?? `r_${Date.now()}`,
-            projectId,
-            checklistItemId: itemId,
-            status,
-            notes,
-            auditorId: state.currentUserId,
+            projectId, checklistItemId: itemId,
+            status, notes,
+            auditorId: currentUserId,
             updatedAt: new Date().toISOString().split('T')[0],
           },
         },
       }
     })
+    // Persist to DB
+    try {
+      await db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes)
+    } catch {
+      // Response already set optimistically — fail silently in UI
+    }
   },
 
   getProjectScore: (projectId) => {

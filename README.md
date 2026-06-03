@@ -1,8 +1,12 @@
 # SafetyAudit — Child Safety Compliance Platform
 
-A web application for structured compliance audits of social media platforms against child safety frameworks (ICO Children's Code, COPPA, CSAM Detection Standards, OECD Guidelines).
+A web application for structured compliance audits of social media platforms against child safety frameworks.
 
 ---
+### Credentials
+Admin: admin@gmail.com (Admin2026_)
+Head Auditor: head@gmail.com (Head2026_)
+Auditor: auditor@gmail.com (Auditor2026_)
 
 ## Getting Started
 

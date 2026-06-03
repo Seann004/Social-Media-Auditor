@@ -5,6 +5,7 @@ export const USERS: User[] = [
   { id: 'u2', name: 'John Lee', role: 'auditor', initials: 'JL', color: 'bg-emerald-500' },
   { id: 'u3', name: 'Ahmad bin Ali', role: 'auditor', initials: 'AA', color: 'bg-amber-500' },
   { id: 'u4', name: 'Sanji Nambiar', role: 'auditor', initials: 'SN', color: 'bg-rose-500' },
+  { id: 'u5', name: 'Sam Admin', role: 'admin', initials: 'SA', color: 'bg-blue-600' },
 ]
 
 export const CURRENT_USER_ID = 'u1'
@@ -645,9 +646,11 @@ export const CHECKLIST_ITEMS: ChecklistItem[] = [
 export const AUDIT_PROJECTS: AuditProject[] = [
   {
     id: 'p1',
+    name: 'TikTok ICO & COPPA Audit',
     platform: 'TikTok',
     guidelineIds: ['g1', 'g2'],
     status: 'in_progress',
+    submissionStatus: 'not_submitted',
     headAuditorId: 'u1',
     auditorIds: ['u1', 'u2'],
     createdAt: '2026-04-22',
@@ -666,9 +669,12 @@ export const AUDIT_PROJECTS: AuditProject[] = [
   },
   {
     id: 'p2',
+    name: 'Instagram COPPA Compliance Review',
     platform: 'Instagram',
     guidelineIds: ['g2'],
     status: 'completed',
+    submissionStatus: 'approved',
+    submissionRemarks: 'All findings well-documented. Minor gaps noted in Parental Consent section — follow-up scheduled for Q3.',
     headAuditorId: 'u1',
     auditorIds: ['u1', 'u3'],
     createdAt: '2026-04-01',
@@ -686,9 +692,11 @@ export const AUDIT_PROJECTS: AuditProject[] = [
   },
   {
     id: 'p3',
+    name: 'Facebook ICO & OECD Audit',
     platform: 'Facebook',
     guidelineIds: ['g1', 'g4'],
     status: 'in_progress',
+    submissionStatus: 'not_submitted',
     headAuditorId: 'u1',
     auditorIds: ['u1', 'u4'],
     createdAt: '2026-04-28',
@@ -707,9 +715,11 @@ export const AUDIT_PROJECTS: AuditProject[] = [
   },
   {
     id: 'p4',
+    name: 'Discord CSAM Detection Baseline',
     platform: 'Discord',
     guidelineIds: ['g3'],
     status: 'draft',
+    submissionStatus: 'not_submitted',
     headAuditorId: 'u1',
     auditorIds: ['u1'],
     createdAt: '2026-05-09',
@@ -720,9 +730,11 @@ export const AUDIT_PROJECTS: AuditProject[] = [
   },
   {
     id: 'p5',
+    name: 'Snapchat ICO Code Audit',
     platform: 'Snapchat',
     guidelineIds: ['g1'],
     status: 'under_review',
+    submissionStatus: 'pending_review',
     headAuditorId: 'u3',
     auditorIds: ['u1', 'u3'],
     createdAt: '2026-04-10',
@@ -736,7 +748,7 @@ export const AUDIT_PROJECTS: AuditProject[] = [
       'Parental Controls',
       'Transparency',
     ],
-    notes: 'Under review by head auditor. Score pending final sign-off.',
+    notes: 'Submitted for review by head auditor. Score pending final sign-off.',
   },
 ]
 

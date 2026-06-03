@@ -22,7 +22,7 @@ type Props =
 export default function StatusBadge({ type, status }: Props) {
   const cfg = type === 'checklist' ? CHECKLIST[status as ChecklistItemStatus] : AUDIT[status as AuditStatus]
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-[6px] text-[11px] font-medium ${cfg.cls}`}>
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium ${cfg.cls}`}>
       {cfg.label}
     </span>
   )

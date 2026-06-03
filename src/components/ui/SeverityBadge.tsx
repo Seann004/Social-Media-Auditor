@@ -9,7 +9,7 @@ const CONFIG: Record<Severity, { label: string; cls: string }> = {
 export default function SeverityBadge({ severity }: { severity: Severity }) {
   const { label, cls } = CONFIG[severity]
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-[4px] text-[10px] font-semibold uppercase tracking-wide ${cls}`}>
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${cls}`}>
       {label}
     </span>
   )
