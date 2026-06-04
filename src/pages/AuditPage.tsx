@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -21,6 +21,8 @@ import {
   ListChecksIcon as ListChecks,
   SpinnerIcon as Spinner,
   LockIcon as Lock,
+  ImageIcon as Image,
+  XCircleIcon as XCircleFill,
 } from '@phosphor-icons/react'
 import { useStore } from '../store/useStore'
 import { useProjectData } from '../hooks/useProjectData'
@@ -62,7 +64,9 @@ export default function AuditPage() {
     updateProject,
   } = useStore()
 
-  const { checklistItems, responses, loading, reload } = useProjectData(id)
+  const { checklistItems, loading, reload } = useProjectData(id)
+  // Read responses directly from the store so optimistic updates re-render immediately
+  const responses = useStore((s) => s.responses)
 
   const project = projects.find((p) => p.id === id)
   const score = getProjectScore(id ?? '')
@@ -104,17 +108,62 @@ export default function AuditPage() {
   const [editSeverity, setEditSeverity] = useState<Severity>('minor')
   const [confirmDeleteItemId, setConfirmDeleteItemId] = useState<string | null>(null)
 
-  // UC-5: Manage Guidelines
+  // Manage Guidelines
   const [selectedGuidelineIds, setSelectedGuidelineIds] = useState<string[]>(project?.guidelineIds ?? [])
   const [savingGuidelines, setSavingGuidelines] = useState(false)
 
-  // UC-6: Manage Scope (features)
+  // Manage Scope (features)
   const [scopeInput, setScopeInput] = useState('')
   const [scopeFeatures, setScopeFeatures] = useState<string[]>(project?.scope ?? [])
   const [savingScope, setSavingScope] = useState(false)
 
-  // UC-3: Edit project status
+  // Edit project status — keep local state in sync with store
   const [projectStatus, setProjectStatus] = useState(project?.status ?? 'draft')
+  useEffect(() => {
+    if (project?.status && project.status !== projectStatus) {
+      setProjectStatus(project.status)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.status])
+
+  // Evidence images: itemId → array of { url, name }
+  const [evidence, setEvidence] = useState<Record<string, { url: string; name: string }[]>>({})
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [pendingEvidenceItemId, setPendingEvidenceItemId] = useState<string | null>(null)
+
+  function handleImageClick(itemId: string) {
+    setPendingEvidenceItemId(itemId)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+      fileInputRef.current.click()
+    }
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    if (!files.length || !pendingEvidenceItemId) return
+    const itemId = pendingEvidenceItemId
+    files.forEach((file) => {
+      if (!file.type.startsWith('image/')) return
+      const reader = new FileReader()
+      reader.onload = (ev) => {
+        const url = ev.target?.result as string
+        setEvidence((prev) => ({
+          ...prev,
+          [itemId]: [...(prev[itemId] ?? []), { url, name: file.name }],
+        }))
+      }
+      reader.readAsDataURL(file)
+    })
+    setPendingEvidenceItemId(null)
+  }
+
+  function removeEvidence(itemId: string, index: number) {
+    setEvidence((prev) => ({
+      ...prev,
+      [itemId]: (prev[itemId] ?? []).filter((_, i) => i !== index),
+    }))
+  }
 
   if (isAdmin) {
     return (
@@ -227,9 +276,9 @@ export default function AuditPage() {
   )
 
   return (
-    <div className="flex flex-col min-h-[100dvh]">
+    <div className="flex flex-col min-h-full">
       {/* Top header */}
-      <div className="border-b border-slate-200 bg-white px-6 md:px-8 pt-4 pb-4">
+      <div className="border-b border-slate-200 bg-white px-4 md:px-8 pt-4 pb-4">
         <Link to="/projects" className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 transition-colors mb-3 group">
           <ArrowLeft size={12} className="group-hover:-translate-x-0.5 transition-transform" />
           Back to Audits
@@ -266,7 +315,6 @@ export default function AuditPage() {
                   onChange={(e) => handleStatusChange(e.target.value as typeof projectStatus)}
                   className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-300"
                 >
-                  <option value="draft">Draft</option>
                   <option value="in_progress">In Progress</option>
                   <option value="under_review">Under Review</option>
                   <option value="completed">Completed</option>
@@ -346,7 +394,7 @@ export default function AuditPage() {
             className="overflow-hidden bg-amber-50 border-b border-amber-200 px-6 md:px-8 py-4">
             <div className="flex items-start gap-4 flex-wrap">
               <div className="flex-1">
-                <p className="text-sm font-semibold text-amber-800 mb-0.5">Audit Submitted for Review (UC-12)</p>
+                <p className="text-sm font-semibold text-amber-800 mb-0.5">Audit Submitted for Review</p>
                 <p className="text-xs text-amber-700">Review the findings and approve or reject this submission.</p>
               </div>
               <button type="button" onClick={() => setShowReviewPanel((v) => !v)}
@@ -401,7 +449,7 @@ export default function AuditPage() {
         {isHeadAuditor && showManageAuditors && (
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden bg-slate-50 border-b border-slate-200 px-6 md:px-8 py-5">
-            <p className="text-sm font-semibold text-slate-700 mb-4">Manage Auditors (UC-6.1)</p>
+            <p className="text-sm font-semibold text-slate-700 mb-4">Manage Auditors</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
                 <p className="text-xs text-slate-500 font-medium mb-2 uppercase tracking-wide">Assigned</p>
@@ -449,11 +497,11 @@ export default function AuditPage() {
 
       {/* Tab bar (head auditor: Checklist / Guidelines / Scope) */}
       {isHeadAuditor && (
-        <div className="flex items-center gap-0 border-b border-slate-200 bg-white px-6 md:px-8">
+        <div className="flex items-center gap-0 border-b border-slate-200 bg-white px-3 md:px-8 overflow-x-auto scrollbar-none">
           {[
             { key: 'checklist', label: 'Checklist', icon: ListChecks },
-            { key: 'guidelines', label: 'Guidelines (UC-5)', icon: BookOpen },
-            { key: 'scope', label: 'Scope / Features (UC-6)', icon: ListChecks },
+            { key: 'guidelines', label: 'Guidelines', icon: BookOpen },
+            { key: 'scope', label: 'Scope / Features', icon: ListChecks },
           ].map(({ key, label, icon: Icon }) => (
             <button key={key} type="button"
               onClick={() => setActiveTab(key as typeof activeTab)}
@@ -469,10 +517,10 @@ export default function AuditPage() {
         </div>
       )}
 
-      {/* UC-5: Manage Guidelines tab */}
+      {/* Manage Guidelines tab */}
       {isHeadAuditor && activeTab === 'guidelines' && (
         <div className="px-8 py-8 max-w-2xl">
-          <h2 className="text-base font-semibold text-slate-800 mb-1">Manage Guideline Used (UC-5)</h2>
+          <h2 className="text-base font-semibold text-slate-800 mb-1">Manage Guideline Used</h2>
           <p className="text-sm text-slate-500 mb-5">Select which regulatory guidelines apply to this audit project.</p>
           <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white mb-4">
             {guidelines.map((g) => {
@@ -501,10 +549,10 @@ export default function AuditPage() {
         </div>
       )}
 
-      {/* UC-6: Manage Scope tab */}
+      {/* Manage Scope tab */}
       {isHeadAuditor && activeTab === 'scope' && (
         <div className="px-8 py-8 max-w-2xl">
-          <h2 className="text-base font-semibold text-slate-800 mb-1">Manage Audit Features / Scope (UC-6)</h2>
+          <h2 className="text-base font-semibold text-slate-800 mb-1">Manage Audit Features / Scope</h2>
           <p className="text-sm text-slate-500 mb-5">Define which features or functions of the social media app are in scope for this audit.</p>
           <div className="flex gap-2 mb-4">
             <input value={scopeInput} onChange={(e) => setScopeInput(e.target.value)}
@@ -539,9 +587,28 @@ export default function AuditPage() {
 
       {/* Checklist view */}
       {(!isHeadAuditor || activeTab === 'checklist') && (
+        <div className="flex flex-col flex-1 min-h-0">
+          {/* Mobile: category select dropdown */}
+          <div className="md:hidden px-4 py-3 bg-white border-b border-slate-200 shrink-0">
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="w-full text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-300"
+            >
+              {categories.map((cat) => {
+                const cs = getCategoryScore(id!, cat)
+                return (
+                  <option key={cat} value={cat}>
+                    {cat}{cs.applicable > 0 ? ` — ${cs.percentage.toFixed(0)}%` : ''}
+                  </option>
+                )
+              })}
+            </select>
+          </div>
+
         <div className="flex flex-1 min-h-0">
-          {/* Left: categories */}
-          <nav className="w-64 shrink-0 border-r border-slate-200 bg-slate-50/50 overflow-y-auto py-5 px-3">
+          {/* Desktop: Left category nav */}
+          <nav className="hidden md:block w-64 shrink-0 border-r border-slate-200 bg-slate-50/50 overflow-y-auto py-5 px-3">
             <p className="text-xs text-slate-400 font-mono tracking-widest uppercase px-2 mb-3">Categories</p>
             {loading ? (
               <div className="flex items-center justify-center py-8">
@@ -590,9 +657,19 @@ export default function AuditPage() {
 
                 {isHeadAuditor && (
                   <p className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 mb-5">
-                    Viewing as Head Auditor — you can edit or delete checklist items. Responses are recorded by assigned auditors.
+                    You can edit or delete checklist items. Responses are recorded by assigned auditors.
                   </p>
                 )}
+
+                {/* Hidden file input for evidence images (shared across all items) */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="sr-only"
+                  onChange={handleFileChange}
+                />
 
                 {loading ? (
                   <div className="flex items-center justify-center py-20">
@@ -672,7 +749,7 @@ export default function AuditPage() {
                             </div>
                           )}
 
-                          {/* Auditor response controls (UC-14.1, 14.2, 14.3) */}
+                          {/* Auditor response controls (14.2, 14.3) */}
                           {isAuditor && !isEditing && (
                             <div className="flex items-center gap-2 mt-3 flex-wrap">
                               {AUDITOR_RESPONSE_OPTIONS.map(({ value, label, icon: Icon, active, inactive }) => {
@@ -685,7 +762,7 @@ export default function AuditPage() {
                                   </motion.button>
                                 )
                               })}
-                              {/* UC-14.1 Flag for Review */}
+                              {/* Flag for Review */}
                               <motion.button type="button" whileTap={{ scale: 0.97 }}
                                 onClick={() => handleResponseClick(ci.id, ci.guidelineId, 'needs_review')}
                                 className={['flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ring-1 transition-all',
@@ -695,14 +772,24 @@ export default function AuditPage() {
                                 ].join(' ')}>
                                 <Flag size={15} weight={currentStatus === 'needs_review' ? 'fill' : 'regular'} /> Flag
                               </motion.button>
-                              {/* UC-14.2 Notes */}
-                              <button type="button" onClick={() => toggleNotes(ci.id)}
-                                className={['flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium ring-1 transition-colors ml-auto',
-                                  notesOpen || currentNotes ? 'ring-blue-200 text-blue-600 bg-blue-50' : 'ring-slate-200 text-slate-400 hover:text-slate-600 bg-white',
-                                ].join(' ')}>
-                                <NotePencil size={12} weight={currentNotes ? 'fill' : 'regular'} />
-                                {currentNotes ? 'Notes' : 'Add note'}
-                              </button>
+                              {/* Notes + Evidence buttons */}
+                              <div className="flex items-center gap-2 ml-auto">
+                                <button type="button" onClick={() => toggleNotes(ci.id)}
+                                  className={['flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium ring-1 transition-colors',
+                                    notesOpen || currentNotes ? 'ring-blue-200 text-blue-600 bg-blue-50' : 'ring-slate-200 text-slate-400 hover:text-slate-600 bg-white',
+                                  ].join(' ')}>
+                                  <NotePencil size={13} weight={currentNotes ? 'fill' : 'regular'} />
+                                  {currentNotes ? 'Notes' : 'Add note'}
+                                </button>
+                                <button type="button" onClick={() => handleImageClick(ci.id)}
+                                  title="Attach image as evidence"
+                                  className={['flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium ring-1 transition-colors',
+                                    (evidence[ci.id]?.length ?? 0) > 0 ? 'ring-violet-200 text-violet-600 bg-violet-50' : 'ring-slate-200 text-slate-400 hover:text-violet-600 hover:ring-violet-300 bg-white',
+                                  ].join(' ')}>
+                                  <Image size={13} weight={(evidence[ci.id]?.length ?? 0) > 0 ? 'fill' : 'regular'} />
+                                  {(evidence[ci.id]?.length ?? 0) > 0 ? `${evidence[ci.id].length} photo${evidence[ci.id].length > 1 ? 's' : ''}` : 'Add photo'}
+                                </button>
+                              </div>
                             </div>
                           )}
 
@@ -724,7 +811,7 @@ export default function AuditPage() {
                             </div>
                           )}
 
-                          {/* UC-14.2 Notes input */}
+                          {/* Notes input */}
                           {isAuditor && (
                             <AnimatePresence>
                               {notesOpen && (
@@ -743,6 +830,33 @@ export default function AuditPage() {
                           {!notesOpen && currentNotes && (
                             <p className="mt-2 text-xs text-slate-500 bg-slate-50 rounded-md px-3 py-2 border border-slate-100 leading-relaxed max-w-[65ch]">{currentNotes}</p>
                           )}
+
+                          {/* Evidence image previews */}
+                          {isAuditor && (evidence[ci.id]?.length ?? 0) > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {evidence[ci.id].map((img, idx) => (
+                                <div key={idx} className="relative group w-20 h-20 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 shrink-0">
+                                  <img src={img.url} alt={img.name} className="w-full h-full object-cover" />
+                                  <button
+                                    type="button"
+                                    onClick={() => removeEvidence(ci.id, idx)}
+                                    className="absolute top-0.5 right-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-white rounded-full shadow"
+                                    title="Remove"
+                                  >
+                                    <XCircleFill size={16} className="text-rose-500" weight="fill" />
+                                  </button>
+                                  <p className="absolute bottom-0 left-0 right-0 text-[9px] text-white bg-black/50 px-1 py-0.5 truncate">{img.name}</p>
+                                </div>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() => handleImageClick(ci.id)}
+                                className="w-20 h-20 rounded-lg border-2 border-dashed border-slate-300 flex items-center justify-center text-slate-400 hover:border-violet-400 hover:text-violet-500 transition-colors shrink-0"
+                              >
+                                <Image size={18} />
+                              </button>
+                            </div>
+                          )}
                         </motion.div>
                       )
                     })}
@@ -751,6 +865,7 @@ export default function AuditPage() {
               </motion.div>
             </AnimatePresence>
           </div>
+        </div>
         </div>
       )}
     </div>

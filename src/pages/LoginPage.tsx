@@ -71,7 +71,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-[100dvh] bg-blue-600 flex flex-col items-center justify-center px-4 py-12">
+    <div className="min-h-[100dvh] bg-login-bg flex flex-col items-center justify-center px-4 py-12">
       {/* Background grid */}
       <div
         className="fixed inset-0 pointer-events-none opacity-[0.08]"
@@ -85,32 +85,32 @@ export default function LoginPage() {
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ type: 'spring', stiffness: 100, damping: 22 }}
-        className="relative w-full max-w-sm"
+        className="relative w-full max-w-lg"
       >
         {/* Card */}
         <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
           {/* Accent strip */}
-          <div className="h-[3px] bg-blue-600" />
+          <div className="h-1 bg-primary" />
 
           {/* Card header */}
-          <div className="px-7 pt-6 pb-5 border-b border-slate-100">
-            <div className="flex items-center gap-2.5 mb-5">
-              <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center shrink-0">
-                <ShieldCheck size={16} weight="bold" className="text-white" />
+          <div className="px-9 pt-8 pb-6 border-b border-border-light">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shrink-0">
+                <ShieldCheck size={20} weight="bold" className="text-on-dark" />
               </div>
               <div>
-                <p className="text-slate-900 font-semibold text-sm tracking-tight leading-none">SafetyAudit</p>
-                <p className="text-slate-400 text-[10px] font-mono tracking-[0.12em] uppercase mt-0.5">
+                <p className="text-heading font-bold text-base tracking-tight leading-none">SafetyAudit</p>
+                <p className="text-muted text-xs font-mono tracking-[0.12em] uppercase mt-0.5">
                   Child Safety Platform
                 </p>
               </div>
             </div>
-            <h1 className="text-xl font-semibold text-slate-900 tracking-tight">Sign in</h1>
-            <p className="text-slate-500 text-sm mt-1">Access your audit projects and reports.</p>
+            <h1 className="text-2xl font-bold text-heading tracking-tight">Sign in</h1>
+            <p className="text-secondary text-base mt-1.5">Access your audit projects and reports.</p>
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} noValidate className="px-7 py-6 space-y-4">
+          <form onSubmit={handleSubmit} noValidate className="px-9 py-7 space-y-5">
             {/* Email */}
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1.5">
@@ -197,9 +197,9 @@ export default function LoginPage() {
             </AnimatePresence>
 
             {/* Register link */}
-            <p className="text-center text-sm text-slate-500">
+            <p className="text-center text-base text-secondary">
               Don't have an account?{' '}
-              <Link to="/register" className="text-blue-600 font-medium hover:text-blue-700 transition-colors">
+              <Link to="/register" className="text-primary font-semibold hover:text-primary-hover transition-colors">
                 Register
               </Link>
             </p>
@@ -209,7 +209,7 @@ export default function LoginPage() {
               type="submit"
               disabled={loading}
               whileTap={{ scale: 0.98 }}
-              className="w-full flex items-center justify-center gap-2 px-5 py-3 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:outline-offset-1"
+              className="w-full flex items-center justify-center gap-2 px-5 py-3.5 bg-primary text-on-dark text-base font-bold rounded-xl hover:bg-primary-hover disabled:opacity-60 disabled:cursor-not-allowed transition-colors focus-visible:outline-2 focus-visible:outline-primary-border focus-visible:outline-offset-1"
             >
               {loading ? (
                 <>

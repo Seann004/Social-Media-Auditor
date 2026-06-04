@@ -7,6 +7,7 @@ import {
   ListChecksIcon as ListChecks,
   ChartBarIcon as ChartBar,
   SignOutIcon as SignOut,
+  XIcon,
 } from '@phosphor-icons/react'
 import { useStore } from '../store/useStore'
 
@@ -19,7 +20,7 @@ const navItem = {
   show: { opacity: 1, x: 0, transition: { type: 'spring', stiffness: 100, damping: 20 } },
 }
 
-export default function Sidebar() {
+export default function Sidebar({ onClose }: { onClose?: () => void }) {
   const { users, currentUserId, projects, logout } = useStore()
   const user = users.find((u) => u.id === currentUserId)
   const location = useLocation()
@@ -27,8 +28,10 @@ export default function Sidebar() {
 
   const isAdmin = user?.role === 'admin'
 
-  // Admin only sees Dashboard and Guidelines (UC-7/8)
-  // Head Auditor and Auditor see full nav
+  const nextDue = [...projects]
+    .filter((p) => p.status === 'in_progress' && p.dueDate)
+    .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0]
+
   const NAV = isAdmin
     ? [
         { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
@@ -46,52 +49,61 @@ export default function Sidebar() {
     navigate('/', { replace: true })
   }
 
-  const nextDue = [...projects]
-    .filter((p) => p.status === 'in_progress' && p.dueDate)
-    .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0]
-
   return (
-    <aside className="w-56 shrink-0 min-h-[100dvh] bg-slate-950 flex flex-col">
+    <aside className="w-72 shrink-0 h-screen bg-sidebar-bg flex flex-col overflow-y-auto">
       {/* Logo */}
-      <div className="px-4 pt-5 pb-4">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center shrink-0">
-            <ShieldCheck size={15} weight="bold" className="text-white" />
+      <div className="px-6 pt-7 pb-5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-[rgba(255,255,255,0.22)] flex items-center justify-center shrink-0">
+              <ShieldCheck size={18} weight="bold" className="text-on-dark" />
+            </div>
+            <span className="text-on-dark font-bold tracking-tight text-lg">SafetyAudit</span>
           </div>
-          <span className="text-white font-semibold tracking-tight text-sm">SafetyAudit</span>
+          {/* Close button — mobile only */}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="lg:hidden p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+            >
+              <XIcon size={18} weight="bold" />
+            </button>
+          )}
         </div>
-        <p className="text-slate-600 text-[10px] mt-1.5 font-mono tracking-[0.1em] uppercase">
+        <p className="text-sidebar-muted text-xs mt-2 font-mono tracking-[0.1em] uppercase">
           Child Safety Platform
         </p>
       </div>
 
-      <div className="mx-4 border-t border-slate-800/80" />
+      <div className="mx-5 border-t border-sidebar-border" />
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4">
-        <motion.ul variants={container} initial="hidden" animate="show" className="space-y-0.5 list-none m-0 p-0">
+      <nav className="flex-1 px-4 py-5">
+        <motion.ul variants={container} initial="hidden" animate="show" className="space-y-1 list-none m-0 p-0">
           {NAV.map(({ to, label, icon: Icon, exact }) => {
             const active = exact
-              ? location.pathname === to || (to === '/dashboard' && location.pathname === '/dashboard')
+              ? location.pathname === to
               : location.pathname.startsWith(to)
             return (
               <motion.li key={to} variants={navItem}>
                 <NavLink
                   to={to}
+                  onClick={onClose}
                   className={[
-                    'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-150',
-                    'focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:outline-offset-1',
+                    'flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all duration-150',
+                    'focus-visible:outline-2 focus-visible:outline-primary-muted focus-visible:outline-offset-1',
                     active
-                      ? 'bg-slate-800 text-white'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50',
+                      ? 'bg-sidebar-item-active text-on-dark'
+                      : 'text-sidebar-text hover:text-sidebar-text-hover hover:bg-[var(--color-sidebar-item-hover)]',
                   ].join(' ')}
                 >
                   <Icon
-                    size={16}
+                    size={20}
                     weight={active ? 'fill' : 'regular'}
-                    className={active ? 'text-blue-400' : ''}
+                    className={active ? 'text-on-dark' : ''}
                   />
-                  <span className="font-medium">{label}</span>
+                  <span>{label}</span>
                 </NavLink>
               </motion.li>
             )
@@ -99,21 +111,17 @@ export default function Sidebar() {
         </motion.ul>
 
         {!isAdmin && nextDue && (
-          <div className="mt-6">
-            <p className="px-3 text-[10px] text-slate-600 font-mono tracking-widest uppercase mb-2">
+          <div className="mt-7">
+            <p className="px-4 text-xs text-sidebar-muted font-mono tracking-widest uppercase mb-2">
               Next deadline
             </p>
             <NavLink
               to={`/projects/${projects.find((p) => p.dueDate === nextDue.dueDate)?.id}`}
-              className="block px-3 py-2.5 rounded-lg bg-slate-800/40 hover:bg-slate-800/70 transition-colors"
+              className="block px-4 py-3 rounded-xl bg-[var(--color-sidebar-item-hover)] hover:bg-sidebar-item-active transition-colors"
             >
-              <p className="text-slate-200 text-xs font-medium truncate">{nextDue.name}</p>
-              <p className="text-slate-500 text-[11px] mt-0.5">
-                Due{' '}
-                {new Date(nextDue.dueDate!).toLocaleDateString('en-GB', {
-                  day: 'numeric',
-                  month: 'short',
-                })}
+              <p className="text-sidebar-text-hover text-sm font-semibold truncate">{nextDue.name}</p>
+              <p className="text-sidebar-muted text-xs mt-0.5">
+                Due {new Date(nextDue.dueDate!).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
               </p>
             </NavLink>
           </div>
@@ -121,26 +129,26 @@ export default function Sidebar() {
       </nav>
 
       {/* User profile */}
-      <div className="px-3 pb-4 pt-3 border-t border-slate-800/60">
+      <div className="px-4 pb-5 pt-3 border-t border-sidebar-border">
         <button
           type="button"
           onClick={handleLogout}
-          className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-slate-800/50 transition-colors group focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:outline-offset-1"
+          className="w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-[var(--color-sidebar-item-hover)] transition-colors group focus-visible:outline-2 focus-visible:outline-[rgba(255,255,255,0.5)] focus-visible:outline-offset-1"
         >
           <div
-            className={`w-7 h-7 rounded-full ${user?.color ?? 'bg-slate-700'} flex items-center justify-center shrink-0`}
+            className={`w-9 h-9 rounded-full ${user?.color ?? 'bg-slate-700'} flex items-center justify-center shrink-0`}
           >
-            <span className="text-white text-[10px] font-bold">{user?.initials}</span>
+            <span className="text-on-dark text-xs font-bold">{user?.initials}</span>
           </div>
           <div className="flex-1 min-w-0 text-left">
-            <p className="text-slate-200 text-xs font-medium truncate">{user?.name}</p>
-            <p className="text-slate-500 text-[10px] capitalize">
+            <p className="text-sidebar-text-hover text-sm font-semibold truncate">{user?.name}</p>
+            <p className="text-sidebar-muted text-xs capitalize">
               {user?.role.replace('_', ' ')}
             </p>
           </div>
           <SignOut
-            size={13}
-            className="text-slate-600 group-hover:text-slate-400 transition-colors shrink-0"
+            size={16}
+            className="text-sidebar-muted group-hover:text-sidebar-text transition-colors shrink-0"
           />
         </button>
       </div>

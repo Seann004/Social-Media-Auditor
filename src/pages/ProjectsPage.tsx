@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowRightIcon as ArrowRight,
@@ -68,8 +68,10 @@ export default function ProjectsPage() {
   const [filter, setFilter] = useState<Filter>('all')
   const currentUser = users.find((u) => u.id === currentUserId)
   const isHeadAuditor = currentUser?.role === 'head_auditor'
+  const location = useLocation()
 
-  useEffect(() => { initFromDb() }, [currentUserId])
+  // Re-fetch from DB on every navigation to this page so the list stays current
+  useEffect(() => { initFromDb() }, [location.key])
 
   if (currentUser?.role === 'admin') {
     return (
@@ -83,11 +85,23 @@ export default function ProjectsPage() {
     )
   }
 
-  const filtered = projects.filter((p) => filter === 'all' || p.status === filter)
+  const isAuditor = currentUser?.role === 'auditor'
+
+  // Auditors only see projects that are ready for or past auditing (no draft)
+  const visibleProjects = isAuditor
+    ? projects.filter((p) => p.status !== 'draft')
+    : projects
+
+  const filtered = visibleProjects.filter((p) => filter === 'all' || p.status === filter)
   const sorted = [...filtered].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 
+  // Auditors don't see the Draft filter tab
+  const visibleFilters = isAuditor
+    ? FILTERS.filter((f) => f.value !== 'draft')
+    : FILTERS
+
   return (
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-8">
+    <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-8">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
@@ -98,7 +112,7 @@ export default function ProjectsPage() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Audit Projects</h1>
           <p className="text-slate-500 text-base mt-1">
-            {projects.length} total · {projects.filter((p) => p.status === 'in_progress').length}{' '}
+            {visibleProjects.length} total · {visibleProjects.filter((p) => p.status === 'in_progress').length}{' '}
             active
           </p>
         </div>
@@ -120,8 +134,8 @@ export default function ProjectsPage() {
         transition={{ delay: 0.1 }}
         className="flex items-center gap-1 mb-5 border-b border-slate-200 pb-0"
       >
-        {FILTERS.map(({ value, label }) => {
-          const count = value === 'all' ? projects.length : projects.filter((p) => p.status === value).length
+        {visibleFilters.map(({ value, label }) => {
+          const count = value === 'all' ? visibleProjects.length : visibleProjects.filter((p) => p.status === value).length
           const active = filter === value
           return (
             <button
@@ -250,10 +264,7 @@ export default function ProjectsPage() {
                         <>
                           <p className="text-[11px] text-slate-400">Due</p>
                           <p className="text-xs text-slate-600 font-medium">
-                            {new Date(project.dueDate).toLocaleDateString('en-GB', {
-                              day: 'numeric',
-                              month: 'short',
-                            })}
+                            {new Date(project.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                           </p>
                         </>
                       ) : (

@@ -27,6 +27,8 @@ export interface DbGuideline {
   description: string | null
   source: string | null
   lastUpdated: string | null
+  categories: string[] | null
+  itemCount: number
 }
 
 export interface DbChecklistItem {
@@ -146,12 +148,33 @@ export async function updateProject(projectId: string, updates: {
   if (error) throw error
 }
 
+// Returns average scorePercentage per projectId across all its guidelines
+export async function fetchProjectComplianceSummary(
+  projectIds: string[]
+): Promise<Record<string, number>> {
+  if (projectIds.length === 0) return {}
+  const { data, error } = await supabase
+    .from('Compliance_Score')
+    .select('projectId,scorePercentage')
+    .in('projectId', projectIds)
+  if (error) throw error
+  const totals: Record<string, { sum: number; count: number }> = {}
+  for (const row of (data ?? []) as { projectId: string; scorePercentage: number | null }[]) {
+    if (!totals[row.projectId]) totals[row.projectId] = { sum: 0, count: 0 }
+    totals[row.projectId].sum += row.scorePercentage ?? 0
+    totals[row.projectId].count += 1
+  }
+  return Object.fromEntries(
+    Object.entries(totals).map(([pid, { sum, count }]) => [pid, Math.round((sum / count) * 10) / 10])
+  )
+}
+
 export async function deleteProject(projectId: string): Promise<void> {
   const { error } = await supabase.from('Audit_Project').delete().eq('projectId', projectId)
   if (error) throw error
 }
 
-// ─── Project Members (UC-6.1) ─────────────────────────────────────────────────
+// ─── Project Members ─────────────────────────────────────────────────
 
 export async function addProjectMember(projectId: string, userId: string): Promise<void> {
   const { error } = await supabase.from('Project_Member').insert({ projectId, userId })
@@ -175,7 +198,7 @@ export async function syncProjectMembers(projectId: string, userIds: string[]): 
   if (error) throw error
 }
 
-// ─── Project Guidelines (UC-5) ────────────────────────────────────────────────
+// ─── Project Guidelines ────────────────────────────────────────────────
 
 export async function syncProjectGuidelines(projectId: string, guidelineIds: string[]): Promise<void> {
   await supabase.from('Project_Guideline').delete().eq('projectId', projectId)
@@ -185,7 +208,7 @@ export async function syncProjectGuidelines(projectId: string, guidelineIds: str
   if (error) throw error
 }
 
-// ─── Project Scope / Features (UC-6) ─────────────────────────────────────────
+// ─── Project Scope / Features ─────────────────────────────────────────
 
 export async function syncProjectScope(projectId: string, features: string[]): Promise<void> {
   await supabase.from('Project_Scope').delete().eq('projectId', projectId)
@@ -200,10 +223,28 @@ export async function syncProjectScope(projectId: string, features: string[]): P
 export async function fetchGuidelines(): Promise<DbGuideline[]> {
   const { data, error } = await supabase
     .from('Guideline')
-    .select('guidelineId,guidelineName,shortName,version,description,source,lastUpdated')
+    .select(`
+      guidelineId,guidelineName,shortName,version,description,source,lastUpdated,categories,
+      Checklist(checklistId,Checklist_Item(itemId))
+    `)
     .order('guidelineName')
   if (error) throw error
-  return (data as DbGuideline[]) ?? []
+  return ((data ?? []) as unknown[]).map((row: unknown) => {
+    const r = row as Record<string, unknown>
+    const checklists = (r['Checklist'] as { Checklist_Item?: unknown[] }[] | null) ?? []
+    const itemCount = checklists.reduce((sum, c) => sum + (c.Checklist_Item?.length ?? 0), 0)
+    return {
+      guidelineId: r['guidelineId'] as string,
+      guidelineName: r['guidelineName'] as string,
+      shortName: r['shortName'] as string | null,
+      version: r['version'] as string | null,
+      description: r['description'] as string | null,
+      source: r['source'] as string | null,
+      lastUpdated: r['lastUpdated'] as string | null,
+      categories: r['categories'] as string[] | null,
+      itemCount,
+    } satisfies DbGuideline
+  })
 }
 
 export async function deleteGuideline(guidelineId: string): Promise<void> {
@@ -233,7 +274,7 @@ export async function deleteChecklistItem(itemId: string): Promise<void> {
   if (error) throw error
 }
 
-// ─── Audit Results (UC-14.1, 14.2, 14.3) ────────────────────────────────────
+// ─── Audit Results (14.2, 14.3) ────────────────────────────────────
 
 export async function fetchAuditResults(projectId: string): Promise<DbAuditResult[]> {
   const { data, error } = await supabase
@@ -264,7 +305,7 @@ export async function upsertAuditResult(
   return data as { answered: number; compliant: number; nonCompliant: number; notApplicable: number; percentage: number; total: number }
 }
 
-// ─── Submission Workflow (UC-12, UC-13) ──────────────────────────────────────
+// ─── Submission Workflow ──────────────────────────────────────
 
 export async function submitForReview(projectId: string): Promise<void> {
   const { error } = await supabase
@@ -291,7 +332,7 @@ export async function reviewSubmission(projectId: string, approved: boolean, rem
   if (error) throw error
 }
 
-// ─── Compliance Scores (UC-14.4, UC-15) ──────────────────────────────────────
+// ─── Compliance Scores ──────────────────────────────────────
 
 export async function fetchComplianceScores(projectId: string): Promise<DbComplianceScore[]> {
   const { data, error } = await supabase.rpc('get_compliance_scores', { p_project_id: projectId })
@@ -299,7 +340,7 @@ export async function fetchComplianceScores(projectId: string): Promise<DbCompli
   return (data as DbComplianceScore[]) ?? []
 }
 
-// ─── Audit Reports (UC-16, UC-17) ────────────────────────────────────────────
+// ─── Audit Reports ────────────────────────────────────────────
 
 export async function fetchAuditReports(
   userId: string,

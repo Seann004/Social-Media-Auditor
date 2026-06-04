@@ -77,7 +77,7 @@ export default function ReportsPage() {
     )
   }
 
-  // UC-16: Audit Submission Reports
+  // Audit Submission Reports
   const [reports, setReports] = useState<DbAuditReport[]>([])
   const [loadingReports, setLoadingReports] = useState(true)
   const [search, setSearch] = useState('')
@@ -86,7 +86,7 @@ export default function ReportsPage() {
   const [dateTo, setDateTo] = useState('')
   const [showFilters, setShowFilters] = useState(false)
 
-  // UC-17: Selected report for detailed view
+  // Selected report for detailed view
   const [selectedReport, setSelectedReport] = useState<DbAuditReport | null>(null)
   const [complianceScores, setComplianceScores] = useState<DbComplianceScore[]>([])
   const [loadingScores, setLoadingScores] = useState(false)
@@ -135,7 +135,7 @@ export default function ReportsPage() {
     }
   }
 
-  // UC-17.1: Export Report as PDF
+  // Export Report as PDF
   function handleExportPDF() {
     window.print()
   }
@@ -151,19 +151,19 @@ export default function ReportsPage() {
   const totalAnswered = complianceScores.reduce((s, c) => s + c.answeredItems, 0)
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-8 print:px-0 print:py-0">
+    <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-8 print:px-0 print:py-0">
       {/* Print-only header */}
       <div className="hidden print:block mb-6 border-b pb-4">
         <h1 className="text-2xl font-bold">SafetyAudit — Audit Report</h1>
         {selectedReport && (
           <p className="text-sm text-gray-600 mt-1">
-            {selectedReport.projectTitle} · {selectedReport.smPlatform} · Generated {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+            {selectedReport.projectTitle} · {selectedReport.smPlatform}
           </p>
         )}
       </div>
 
       <div className="print:hidden">
-        {/* ── UC-16: Audit Submission Reports ── */}
+        {/* ── Audit Submission Reports ── */}
         <div className="flex items-start justify-between mb-6">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Reports</h1>
@@ -174,21 +174,21 @@ export default function ReportsPage() {
               <button type="button" onClick={handleGenerateReport} disabled={generatingReport}
                 className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-900 disabled:opacity-60 transition-colors">
                 {generatingReport ? <Spinner size={14} className="animate-spin" /> : <FileText size={14} />}
-                Generate Report (UC-17)
+                Generate Report
               </button>
               <button type="button" onClick={handleExportPDF}
                 className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors shadow-sm">
-                <Download size={14} /> Export PDF (UC-17.1)
+                <Download size={14} /> Export PDF
               </button>
             </div>
           )}
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
-          {/* Left: Reports list (UC-16) */}
+        <div className="grid grid-cols-1 xl:grid-cols-5 gap-4 xl:gap-6">
+          {/* Left: Reports list */}
           <div className="xl:col-span-2">
             <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-              {/* Search + filter (UC-16.1) */}
+              {/* Search + filter */}
               <div className="p-4 border-b border-slate-100">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="flex-1 relative">
@@ -266,7 +266,7 @@ export default function ReportsPage() {
             </div>
           </div>
 
-          {/* Right: Detailed report (UC-15 View Compliance Score + UC-17 Generate Report) */}
+          {/* Right: Detailed report (View Compliance Score + Generate Report) */}
           <div className="xl:col-span-3">
             {!selectedReport ? (
               <div className="bg-white border border-slate-200 rounded-xl flex items-center justify-center min-h-[400px]">
@@ -307,7 +307,7 @@ export default function ReportsPage() {
                     </div>
                   )}
 
-                  {/* UC-15: View Compliance Score — summary row */}
+                  {/* View Compliance Score — summary row */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 border border-slate-100 rounded-xl overflow-hidden">
                     {[
                       { label: 'Compliant', value: totalCompliant, icon: CheckCircle, color: 'text-emerald-600' },
@@ -324,20 +324,20 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                {/* Overall compliance score (UC-15) */}
+                {/* Overall compliance score */}
                 <div className="bg-white border border-slate-200 rounded-xl p-6 flex items-center gap-6">
                   <ScoreRing percentage={overallScore} size={96} strokeWidth={8} showLabel />
                   <div>
                     <p className="text-base font-semibold text-slate-800">Overall Compliance Score</p>
                     <p className="text-sm text-slate-500 mt-0.5">Based on {totalAnswered} of {totalItems} items answered</p>
                     <p className="text-xs text-slate-400 mt-2">
-                      Lead: {selectedReport.headAuditorName} ·{' '}
-                      {selectedReport.dueDate ? `Due ${new Date(selectedReport.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}` : 'No due date'}
+                      Lead: {selectedReport.headAuditorName}
+                      {selectedReport.dueDate && ` · Due ${new Date(selectedReport.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`}
                     </p>
                   </div>
                 </div>
 
-                {/* Per-guideline breakdown (UC-15 category breakdown) */}
+                {/* Per-guideline breakdown (category breakdown) */}
                 {loadingScores ? (
                   <div className="bg-white border border-slate-200 rounded-xl flex items-center justify-center py-12">
                     <Spinner size={24} className="animate-spin text-slate-300" />
@@ -375,7 +375,7 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {/* ── Print view (UC-17.1 Export) ── */}
+      {/* ── Print view (Export) ── */}
       {selectedReport && (
         <div className="hidden print:block">
           <div className="grid grid-cols-2 gap-8 mb-8">
@@ -427,7 +427,7 @@ export default function ReportsPage() {
             </div>
           )}
 
-          <p className="mt-8 text-xs text-gray-400">Generated by SafetyAudit · {new Date().toLocaleString()}</p>
+          <p className="mt-8 text-xs text-gray-400">Generated by SafetyAudit</p>
         </div>
       )}
     </div>

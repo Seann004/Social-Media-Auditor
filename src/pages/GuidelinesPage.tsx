@@ -72,7 +72,7 @@ export default function GuidelinesPage() {
   }
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-8">
+    <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-8">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
@@ -88,7 +88,7 @@ export default function GuidelinesPage() {
           </p>
         </div>
 
-        {/* Upload button — admin only (UC-7) */}
+        {/* Upload button — admin only */}
         {isAdmin && (
           <div className="flex items-center gap-2">
             {uploadSuccess && (
@@ -193,7 +193,7 @@ export default function GuidelinesPage() {
                   </motion.div>
                 </button>
 
-                {/* Admin delete button (UC-8) */}
+                {/* Admin delete button */}
                 {isAdmin && (
                   <div className="px-4 border-l border-slate-100 shrink-0">
                     <button
@@ -254,8 +254,7 @@ export default function GuidelinesPage() {
                       <p className="text-xs text-slate-400 mb-4 leading-relaxed">
                         {guideline.description} Source:{' '}
                         <span className="text-slate-600 font-medium">{guideline.source}</span>
-                        {' ·'} Last updated:{' '}
-                        <span className="font-mono text-slate-600">{guideline.lastUpdated}</span>
+                        {guideline.lastUpdated && <>{' ·'} Last updated: <span className="font-mono text-slate-600">{guideline.lastUpdated}</span></>}
                       </p>
 
                       <div className="space-y-2">

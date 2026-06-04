@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeftIcon as ArrowLeft,
   ArrowRightIcon as ArrowRight,
@@ -8,6 +8,10 @@ import {
   WarningIcon as Warning,
   LockIcon as Lock,
   SpinnerIcon as Spinner,
+  UserPlusIcon as UserPlus,
+  XIcon,
+  MagnifyingGlassIcon as MagnifyingGlass,
+  BookOpenIcon as BookOpen,
 } from '@phosphor-icons/react'
 import { useStore } from '../store/useStore'
 import type { Platform } from '../types'
@@ -48,6 +52,32 @@ export default function NewAuditPage() {
   const [submitted, setSubmitted] = useState(false)
 
   const otherAuditors = users.filter((u) => u.id !== currentUserId && u.role === 'auditor')
+
+  // Team member search state
+  const [showMemberSearch, setShowMemberSearch] = useState(false)
+  const [memberSearchQuery, setMemberSearchQuery] = useState('')
+  const searchRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setShowMemberSearch(false)
+        setMemberSearchQuery('')
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Auditors not yet added, filtered by search
+  const searchableAuditors = otherAuditors.filter(
+    (u) =>
+      !selectedAuditors.includes(u.id) &&
+      u.name.toLowerCase().includes(memberSearchQuery.toLowerCase()),
+  )
+
+  // Already selected auditor objects
+  const selectedAuditorUsers = otherAuditors.filter((u) => selectedAuditors.includes(u.id))
 
   if (currentUser?.role !== 'head_auditor') {
     return (
@@ -116,7 +146,7 @@ export default function NewAuditPage() {
   }, 0)
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 md:px-10 py-10">
+    <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-10">
       {/* Back link */}
       <Link
         to="/projects"
@@ -159,7 +189,7 @@ export default function NewAuditPage() {
                   type="text"
                   value={projectName}
                   onChange={(e) => { setProjectName(e.target.value); if (errors.name) setErrors((prev) => ({ ...prev, name: undefined })) }}
-                  placeholder="e.g. TikTok ICO & COPPA Audit 2026"
+                  placeholder="e.g. TikTok with EDPD"
                   className="w-full text-sm text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent placeholder:text-slate-300 transition-all"
                 />
               </motion.div>
@@ -224,8 +254,8 @@ export default function NewAuditPage() {
               </motion.div>
 
               {/* Guidelines */}
-              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6 ">
-                <div className="flex items-center justify-between mb-4">
+              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6">
+                <div className="flex items-center justify-between mb-1.5">
                   <label className="text-base font-semibold text-slate-800">
                     Compliance Guidelines <span className="text-rose-400">*</span>
                   </label>
@@ -235,65 +265,90 @@ export default function NewAuditPage() {
                     </span>
                   )}
                 </div>
-                <p className="text-sm text-slate-500 mb-4 leading-relaxed">
-                  Select the frameworks to evaluate against. Each adds its own checklist items.
+                <p className="text-sm text-slate-500 mb-5 leading-relaxed">
+                  Select the regulatory frameworks to evaluate against. Each one adds its own checklist items to the audit.
                 </p>
 
                 {errors.guidelines && submitted && (
-                  <div className="flex items-center gap-2 text-rose-600 text-sm mb-3">
+                  <div className="flex items-center gap-2 text-rose-600 text-sm mb-4">
                     <Warning size={14} />
                     {errors.guidelines}
                   </div>
                 )}
 
-                <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg overflow-hidden">
+                <div className="grid grid-cols-1 gap-3">
                   {guidelines.map((g) => {
                     const checked = selectedGuidelines.includes(g.id)
                     return (
-                      <label
+                      <button
                         key={g.id}
+                        type="button"
+                        onClick={() => toggleGuideline(g.id)}
                         className={[
-                          'flex items-start gap-4 px-4 py-4 cursor-pointer transition-colors',
-                          checked ? 'bg-blue-50/60' : 'hover:bg-slate-50',
+                          'w-full text-left rounded-xl border-2 p-4 transition-all focus-visible:outline-2 focus-visible:outline-blue-400',
+                          checked
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50',
                         ].join(' ')}
                       >
-                        {/* Custom checkbox */}
-                        <div className="mt-0.5 shrink-0">
-                          <input
-                            type="checkbox"
-                            className="sr-only"
-                            checked={checked}
-                            onChange={() => toggleGuideline(g.id)}
-                          />
-                          <div
-                            className={[
+                        <div className="flex items-start gap-4">
+                          {/* Icon */}
+                          <div className={[
+                            'w-10 h-10 rounded-lg flex items-center justify-center shrink-0 mt-0.5',
+                            checked ? 'bg-blue-600' : 'bg-slate-100',
+                          ].join(' ')}>
+                            <BookOpen size={18} className={checked ? 'text-white' : 'text-slate-500'} />
+                          </div>
+
+                          {/* Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                              <p className={`text-sm font-bold leading-tight ${checked ? 'text-blue-800' : 'text-slate-800'}`}>
+                                {g.name}
+                              </p>
+                              <span className={[
+                                'text-[10px] font-mono px-1.5 py-0.5 rounded font-semibold',
+                                checked ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500',
+                              ].join(' ')}>
+                                {g.shortName}
+                              </span>
+                              <span className="text-[10px] font-mono bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded">
+                                v{g.version}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 leading-relaxed mb-2">{g.description}</p>
+                            {/* Category chips */}
+                            {g.categories.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5">
+                                {g.categories.map((cat) => (
+                                  <span key={cat} className={[
+                                    'text-[10px] px-2 py-0.5 rounded-full font-medium',
+                                    checked ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500',
+                                  ].join(' ')}>
+                                    {cat}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Right: item count + checkbox */}
+                          <div className="shrink-0 flex flex-col items-end gap-2">
+                            <div className="text-right">
+                              <p className={`font-mono text-base font-bold tabular-nums ${checked ? 'text-blue-700' : 'text-slate-700'}`}>
+                                {g.itemCount}
+                              </p>
+                              <p className="text-[10px] text-slate-400">items</p>
+                            </div>
+                            <div className={[
                               'w-5 h-5 rounded border-2 flex items-center justify-center transition-all',
-                              checked
-                                ? 'bg-blue-600 border-blue-600'
-                                : 'border-slate-300 bg-white',
-                            ].join(' ')}
-                          >
-                            {checked && <CheckIcon size={11} weight="bold" className="text-white" />}
+                              checked ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white',
+                            ].join(' ')}>
+                              {checked && <CheckIcon size={11} weight="bold" className="text-white" />}
+                            </div>
                           </div>
                         </div>
-
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <p className={`text-sm font-semibold ${checked ? 'text-blue-800' : 'text-slate-800'}`}>
-                              {g.name}
-                            </p>
-                            <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
-                              v{g.version}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{g.description}</p>
-                        </div>
-
-                        <div className="shrink-0 text-right">
-                          <p className="font-mono text-sm font-semibold text-slate-700 tabular-nums">{g.itemCount}</p>
-                          <p className="text-[10px] text-slate-400">items</p>
-                        </div>
-                      </label>
+                      </button>
                     )
                   })}
                 </div>
@@ -321,65 +376,130 @@ export default function NewAuditPage() {
             {/* Right — team + due date + summary */}
             <div className="space-y-5">
               {/* Team */}
-              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6 ">
-                <label className="block text-base font-semibold text-slate-800 mb-1">
-                  Team Members
-                </label>
+              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-base font-semibold text-slate-800">Team Members</label>
+                  <span className="text-xs text-slate-400 font-mono">
+                    {1 + selectedAuditors.length} member{selectedAuditors.length !== 0 ? 's' : ''}
+                  </span>
+                </div>
                 <p className="text-sm text-slate-500 mb-4">
-                  You are the head auditor. Add other auditors to collaborate.
+                  You are the head auditor. Search and add auditors to collaborate on this project.
                 </p>
 
                 {/* Current user — always included */}
-                <div className="flex items-center gap-3 px-3 py-3 bg-slate-50 rounded-lg mb-3">
+                <div className="flex items-center gap-3 px-3 py-3 bg-blue-50 border border-blue-100 rounded-xl mb-3">
                   <AuditorAvatar user={currentUser} size="md" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-slate-800 truncate">{currentUser.name}</p>
-                    <p className="text-xs text-slate-500">Head Auditor — you</p>
+                    <p className="text-sm font-semibold text-slate-800 truncate">{currentUser.name}</p>
+                    <p className="text-xs text-blue-600 font-medium">Head Auditor — you</p>
                   </div>
-                  <div className="w-5 h-5 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
-                    <CheckIcon size={11} weight="bold" className="text-white" />
+                  <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
+                    <CheckIcon size={12} weight="bold" className="text-white" />
                   </div>
                 </div>
 
-                {/* Other auditors */}
-                <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg overflow-hidden">
-                  {otherAuditors.map((u) => {
-                    const checked = selectedAuditors.includes(u.id)
-                    return (
-                      <label
-                        key={u.id}
-                        className={[
-                          'flex items-center gap-3 px-3 py-3 cursor-pointer transition-colors',
-                          checked ? 'bg-blue-50/50' : 'hover:bg-slate-50',
-                        ].join(' ')}
-                      >
-                        <input
-                          type="checkbox"
-                          className="sr-only"
-                          checked={checked}
-                          onChange={() => toggleAuditor(u.id)}
-                        />
+                {/* Added auditors list */}
+                {selectedAuditorUsers.length > 0 && (
+                  <div className="space-y-2 mb-3">
+                    {selectedAuditorUsers.map((u) => (
+                      <div key={u.id} className="flex items-center gap-3 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl">
                         <AuditorAvatar user={u} size="sm" />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-slate-700 truncate">{u.name}</p>
                           <p className="text-xs text-slate-400 capitalize">{u.role.replace('_', ' ')}</p>
                         </div>
-                        <div
-                          className={[
-                            'w-5 h-5 rounded border-2 flex items-center justify-center transition-all shrink-0',
-                            checked ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white',
-                          ].join(' ')}
+                        <button
+                          type="button"
+                          onClick={() => toggleAuditor(u.id)}
+                          className="p-1 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors"
+                          title="Remove"
                         >
-                          {checked && <CheckIcon size={11} weight="bold" className="text-white" />}
+                          <XIcon size={14} weight="bold" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add Member button + search dropdown */}
+                <div ref={searchRef} className="relative">
+                  {!showMemberSearch ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowMemberSearch(true)}
+                      disabled={otherAuditors.filter((u) => !selectedAuditors.includes(u.id)).length === 0}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-dashed border-slate-300 text-slate-500 text-sm font-medium rounded-xl hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                    >
+                      <UserPlus size={16} />
+                      Add Member
+                    </button>
+                  ) : (
+                    <AnimatePresence>
+                      <motion.div
+                        initial={{ opacity: 0, y: -6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        className="border border-slate-200 rounded-xl overflow-hidden shadow-lg bg-white"
+                      >
+                        {/* Search input */}
+                        <div className="flex items-center gap-2 px-3 py-2.5 border-b border-slate-100">
+                          <MagnifyingGlass size={15} className="text-slate-400 shrink-0" />
+                          <input
+                            autoFocus
+                            type="text"
+                            value={memberSearchQuery}
+                            onChange={(e) => setMemberSearchQuery(e.target.value)}
+                            placeholder="Search auditor name…"
+                            className="flex-1 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none bg-transparent"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => { setShowMemberSearch(false); setMemberSearchQuery('') }}
+                            className="text-slate-400 hover:text-slate-600 transition-colors"
+                          >
+                            <XIcon size={14} weight="bold" />
+                          </button>
                         </div>
-                      </label>
-                    )
-                  })}
+
+                        {/* Results */}
+                        {searchableAuditors.length === 0 ? (
+                          <p className="px-4 py-4 text-sm text-slate-400 text-center">
+                            {memberSearchQuery ? 'No auditors match that name.' : 'All auditors have been added.'}
+                          </p>
+                        ) : (
+                          <ul className="max-h-52 overflow-y-auto divide-y divide-slate-50">
+                            {searchableAuditors.map((u) => (
+                              <li key={u.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    toggleAuditor(u.id)
+                                    setMemberSearchQuery('')
+                                    setShowMemberSearch(false)
+                                  }}
+                                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-blue-50 transition-colors text-left"
+                                >
+                                  <AuditorAvatar user={u} size="sm" />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-slate-700 truncate">{u.name}</p>
+                                    <p className="text-xs text-slate-400 capitalize">{u.role.replace('_', ' ')}</p>
+                                  </div>
+                                  <UserPlus size={14} className="text-blue-500 shrink-0" />
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </motion.div>
+                    </AnimatePresence>
+                  )}
                 </div>
               </motion.div>
 
+
               {/* Due date */}
-              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6 ">
+              <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6">
                 <label htmlFor="due-date" className="block text-base font-semibold text-slate-800 mb-1">
                   Due Date
                   <span className="text-sm font-normal text-slate-400 ml-2">optional</span>

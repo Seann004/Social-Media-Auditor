@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import type {
   AuditProject,
   AuditResponse,
@@ -76,8 +77,8 @@ function mapDbGuideline(g: db.DbGuideline): Guideline {
     version: g.version ?? '1.0',
     description: g.description ?? '',
     source: g.source ?? '',
-    categories: [],
-    itemCount: 0,
+    categories: g.categories ?? [],
+    itemCount: g.itemCount ?? 0,
     lastUpdated: g.lastUpdated ?? '',
   }
 }
@@ -103,6 +104,7 @@ interface StoreState {
   checklistItems: ChecklistItem[]
   projects: AuditProject[]
   responses: ResponseMap
+  complianceMap: Record<string, number>  // projectId → avg score % from DB
   loading: boolean
   dbError: string | null
 
@@ -111,7 +113,7 @@ interface StoreState {
   register: (email: string, name: string, role: UserRole) => void
   initFromDb: () => Promise<void>
 
-  // Audit Management (UC-3)
+  // Audit Management
   createProject: (input: {
     name: string; platform: Platform; guidelineIds: string[]
     auditorIds: string[]; dueDate?: string; notes?: string
@@ -119,36 +121,38 @@ interface StoreState {
   updateProject: (projectId: string, updates: Partial<Pick<AuditProject, 'name' | 'platform' | 'status' | 'notes' | 'dueDate' | 'scope'>>) => Promise<void>
   deleteProject: (projectId: string) => Promise<void>
 
-  // UC-5 Manage Guideline Used
+  // Manage Guideline Used
   syncProjectGuidelines: (projectId: string, guidelineIds: string[]) => Promise<void>
 
-  // UC-6 Manage Audit Feature (scope)
+  // Manage Audit Feature (scope)
   syncProjectScope: (projectId: string, features: string[]) => Promise<void>
 
-  // UC-6.1 Manage Auditors
+  // Manage Auditors
   addAuditorToProject: (projectId: string, userId: string) => Promise<void>
   removeAuditorFromProject: (projectId: string, userId: string) => Promise<void>
 
-  // UC-10/11 Checklist Item management
+  // Checklist Item management
   updateChecklistItem: (itemId: string, updates: Partial<Pick<ChecklistItem, 'text' | 'severity' | 'category'>>) => Promise<void>
   deleteChecklistItem: (itemId: string) => Promise<void>
 
-  // UC-13/12 Submission workflow
+  // Submission workflow
   submitForReview: (projectId: string) => Promise<void>
   reviewSubmission: (projectId: string, approved: boolean, remarks: string) => Promise<void>
 
-  // UC-7/8 Guideline management (admin)
+  // Guideline management (admin)
   deleteGuideline: (guidelineId: string) => Promise<void>
 
-  // UC-14.1/14.2/14.3 Audit responses
+  // Audit responses
   setResponse: (projectId: string, itemId: string, guidelineId: string, status: ChecklistItemStatus, notes?: string) => Promise<void>
 
-  // Score helpers (UC-15)
+  // Score helpers
   getProjectScore: (projectId: string) => ProjectScore
   getCategoryScore: (projectId: string, category: string) => ProjectScore
 }
 
-export const useStore = create<StoreState>((set, get) => ({
+export const useStore = create<StoreState>()(
+  persist(
+    (set, get) => ({
   isAuthenticated: false,
   users: [],
   currentUserId: '',
@@ -156,6 +160,7 @@ export const useStore = create<StoreState>((set, get) => ({
   checklistItems: [],
   projects: [],
   responses: {},
+  complianceMap: {},
   loading: false,
   dbError: null,
 
@@ -197,6 +202,9 @@ export const useStore = create<StoreState>((set, get) => ({
         db.fetchGuidelines(),
         db.fetchUserProjects(currentUserId),
       ])
+      // Fetch compliance scores for all projects from DB
+      const projectIds = (dbProjects ?? []).map((p) => p.projectId)
+      const complianceMap = await db.fetchProjectComplianceSummary(projectIds)
 
       const users: User[] = dbUsers.map((u) => ({
         id: u.userId,
@@ -215,7 +223,7 @@ export const useStore = create<StoreState>((set, get) => ({
         users.push(currentUser)
       }
 
-      set({ users, guidelines, projects, loading: false })
+      set({ users, guidelines, projects, complianceMap, loading: false })
     } catch (err) {
       set({ loading: false, dbError: String(err) })
     }
@@ -372,9 +380,28 @@ export const useStore = create<StoreState>((set, get) => ({
         },
       }
     })
-    // Persist to DB
+    // Persist to DB + auto-transition draft → in_progress + update complianceMap
     try {
-      await db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes)
+      const scoreData = await db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes)
+
+      // Update complianceMap so Dashboard avg reflects the latest score immediately
+      if (scoreData) {
+        set((state) => ({
+          complianceMap: { ...state.complianceMap, [projectId]: scoreData.percentage },
+        }))
+      }
+
+      // Auto-advance project from draft → in_progress the moment the first response is saved
+      const { projects } = get()
+      const proj = projects.find((p) => p.id === projectId)
+      if (proj?.status === 'draft') {
+        await db.updateProject(projectId, { projectStatus: 'in_progress' })
+        set((state) => ({
+          projects: state.projects.map((p) =>
+            p.id === projectId ? { ...p, status: 'in_progress' as AuditStatus } : p
+          ),
+        }))
+      }
     } catch {
       // Response already set optimistically — fail silently in UI
     }
@@ -397,4 +424,15 @@ export const useStore = create<StoreState>((set, get) => ({
     )
     return calcScore(items, responses, projectId)
   },
-}))
+    }),
+    {
+      name: 'safetyaudit-session',
+      // Only persist auth — all other data is re-fetched from DB on login
+      partialize: (state) => ({
+        isAuthenticated: state.isAuthenticated,
+        currentUserId: state.currentUserId,
+        users: state.users.filter((u) => u.id === state.currentUserId),
+      }),
+    }
+  )
+)
