@@ -2,11 +2,6 @@
 
 A web application for structured compliance audits of social media platforms against child safety frameworks.
 
----
-### Credentials
-Admin: admin@gmail.com (Admin2026_)
-Head Auditor: head@gmail.com (Head2026_)
-Auditor: auditor@gmail.com (Auditor2026_)
 
 ## Getting Started
 
@@ -40,16 +35,6 @@ The app will be available at **http://localhost:5173**
 
 ## Logging In
 
-The app uses mock authentication. Use any of the accounts below:
-
-| Name | Email | Password | Role |
-|---|---|---|---|
-| Jackie Chan | `jackie@safetyaudit.org` | `audit2026` | Head Auditor |
-| John Lee | `john@safetyaudit.org` | `audit2026` | Auditor |
-| Ahmad bin Ali | `ahmad@safetyaudit.org` | `audit2026` | Auditor |
-| Sanji Nambiar | `sanji@safetyaudit.org` | `audit2026` | Auditor |
-
-> You can also click the quick-access tiles on the login page to auto-fill credentials.
 
 ---
 
