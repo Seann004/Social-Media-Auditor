@@ -1,0 +1,1 @@
+import { supabase } from './src/config/supabase.js'; async function test() { const { data, error } = await supabase.from('Guideline').select('guidelineId, guidelineName, Checklist!inner(checklistId, projectId)').is('Checklist.projectId', null); if (error) console.error(error); else console.log(JSON.stringify(data, null, 2)); } test();
