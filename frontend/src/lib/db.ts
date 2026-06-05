@@ -373,6 +373,19 @@ export async function fetchAllUsers(): Promise<DbUser[]> {
   return request<DbUser[]>('/users')
 }
 
+export async function createUser(user: {
+  userId: string
+  userName: string
+  userEmail: string
+  role: UserRole
+  userPassword?: string
+}): Promise<void> {
+  await request('/users', {
+    method: 'POST',
+    body: JSON.stringify(user),
+  })
+}
+
 // ─── Groq Llama Integration ──────────────────────────────────────────
 
 export async function processTextChunk(textChunk: string, platform: string): Promise<any[]> {

@@ -61,10 +61,15 @@ export default function RegisterPage() {
     void emailLower
 
     setLoading(true)
-    setTimeout(() => {
-      register(email, name.trim(), role)
-      navigate('/dashboard', { replace: true })
-    }, 600)
+    register(email, name.trim(), role, password)
+      .then(() => {
+        setLoading(false)
+        navigate('/dashboard', { replace: true })
+      })
+      .catch((err) => {
+        setLoading(false)
+        setError(err instanceof Error ? err.message : (err as any)?.message || 'Registration failed. Check backend connection.')
+      })
   }
 
   return (

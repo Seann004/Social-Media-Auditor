@@ -28,6 +28,17 @@ app.get('/api/users', async (req, res) => {
   }
 })
 
+app.post('/api/users', async (req, res) => {
+  try {
+    const { userId, userName, userEmail, role, userPassword } = req.body
+    await db.createUser({ userId, userName, userEmail, role, userPassword })
+    res.status(201).json({ success: true })
+  } catch (error) {
+    console.error('Error creating user:', error)
+    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+  }
+})
+
 // ─── Projects ────────────────────────────────────────────────────────────────
 app.get('/api/projects', async (req, res) => {
   try {

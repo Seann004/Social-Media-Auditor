@@ -112,7 +112,7 @@ interface StoreState {
 
   login: (userId: string, name: string, role: UserRole) => void
   logout: () => void
-  register: (email: string, name: string, role: UserRole) => void
+  register: (email: string, name: string, role: UserRole, password?: string) => Promise<void>
   initFromDb: () => Promise<void>
 
   // Audit Management
@@ -195,16 +195,31 @@ export const useStore = create<StoreState>()(
 
   logout: () => set({ isAuthenticated: false, currentUserId: '', projects: [], responses: {}, checklistItems: [] }),
 
-  register: (email, name, role) => {
-    const id = `u_${Date.now()}`
+  register: async (email, name, role, password) => {
+    const id = window.crypto.randomUUID()
     const initials = name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
     const color = ROLE_COLORS[role] ?? 'bg-slate-500'
-    set((state) => ({
-      isAuthenticated: true,
-      currentUserId: id,
-      users: [...state.users, { id, name, role, initials, color }],
-    }))
-    void email
+    
+    set({ loading: true, dbError: null })
+    try {
+      await db.createUser({
+        userId: id,
+        userName: name,
+        userEmail: email,
+        role: role,
+        userPassword: password
+      })
+      set((state) => ({
+        isAuthenticated: true,
+        currentUserId: id,
+        users: [...state.users, { id, name, role, initials, color }],
+        loading: false
+      }))
+    } catch (err) {
+      console.error('Registration failed:', err)
+      set({ loading: false, dbError: err instanceof Error ? err.message : String(err) })
+      throw err
+    }
   },
 
   initFromDb: async () => {

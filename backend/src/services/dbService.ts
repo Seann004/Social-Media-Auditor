@@ -750,3 +750,21 @@ export async function createGuideline(input: {
     if (itemError) throw itemError;
   }
 }
+
+export async function createUser(input: {
+  userId: string
+  userName: string
+  userEmail: string
+  role: UserRole
+  userPassword?: string
+}): Promise<void> {
+  const { error } = await supabase.from('User').insert({
+    userId: input.userId,
+    userName: input.userName,
+    userEmail: input.userEmail,
+    role: input.role,
+    userPassword: input.userPassword
+  })
+  if (error) throw error
+}
+
