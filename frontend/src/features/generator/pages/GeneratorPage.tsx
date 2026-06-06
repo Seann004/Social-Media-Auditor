@@ -64,7 +64,7 @@ export default function GeneratorPage() {
 
   const [activeTab, setActiveTab] = useState<'excel' | 'pdf'>('excel')
 
-  const [platform, setPlatform] = useState<Platform>('TikTok')
+  const [platform] = useState<Platform>('TikTok')
 
   // Upload state
   const [excelFile, setExcelFile] = useState<File | null>(null)
@@ -600,8 +600,8 @@ export default function GeneratorPage() {
 
       const newGuideline: Guideline = {
         id: guidelineId,
-        name: mergeResult.name || cleanFileName,
-        shortName: mergeResult.shortName || cleanFileName.slice(0, 10).toUpperCase().replace(/\s/g, '-'),
+        name: cleanFileName,
+        shortName: cleanFileName.slice(0, 12).toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 12),
         version: '1.0 (Llama PDF)',
         description: `Compliance guidelines synthesized from PDF file ${fileName}.`,
         source: 'PDF Llama Parser',
@@ -712,8 +712,8 @@ export default function GeneratorPage() {
                   <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center border border-blue-100">
                     <Upload size={20} className="text-blue-600" />
                   </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800">
+                  <div className="w-full px-2">
+                    <p className="text-sm font-bold text-slate-800 break-all text-center">
                       {excelFile && activeTab === 'excel' ? excelFile.name : 'Select Excel File'}
                     </p>
                     <p className="text-xs text-slate-400 mt-1">Accepts .xlsx and .xls formats</p>
@@ -737,19 +737,7 @@ export default function GeneratorPage() {
                   </p>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Target Platform Focus</label>
-                  <select
-                    value={platform}
-                    onChange={e => setPlatform(e.target.value as Platform)}
-                    className="w-full text-sm text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent transition-all mb-4"
-                  >
-                    <option value="TikTok">TikTok</option>
-                    <option value="Instagram">Instagram</option>
-                    <option value="YouTube">YouTube</option>
-                    <option value="Discord">Discord</option>
-                  </select>
-                </div>
+                
 
                 <div
                   onClick={() => pdfInputRef.current?.click()}
@@ -765,8 +753,8 @@ export default function GeneratorPage() {
                   <div className="w-12 h-12 rounded-xl bg-red-50 flex items-center justify-center border border-red-100">
                     <FilePdf size={20} className="text-red-500" />
                   </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800">
+                  <div className="w-full px-2">
+                    <p className="text-sm font-bold text-slate-800 break-all text-center">
                       {excelFile && activeTab === 'pdf' ? excelFile.name : 'Select PDF Guidelines'}
                     </p>
                     <p className="text-xs text-slate-400 mt-1">Accepts standard PDF documents</p>
@@ -906,17 +894,17 @@ export default function GeneratorPage() {
                 >
                   <div className="space-y-5">
                     <div className="flex items-start justify-between border-b border-slate-100 pb-4">
-                      <div>
+                      <div className="min-w-0 flex-1 overflow-hidden">
                         <div className="flex items-center gap-2">
                           <span className="px-2.5 py-0.5 rounded bg-blue-50 text-blue-700 text-xs font-mono font-bold uppercase tracking-wide">
                             {generatedGuideline.shortName}
                           </span>
                           <span className="text-slate-400 text-xs">v{generatedGuideline.version}</span>
                         </div>
-                        <h3 className="text-xl font-bold text-slate-800 mt-1">{generatedGuideline.name}</h3>
-                        <p className="text-slate-500 text-sm mt-1">{generatedGuideline.description}</p>
+                        <h3 className="text-xl font-bold text-slate-800 mt-1 break-all">{generatedGuideline.name}</h3>
+                        <p className="text-slate-500 text-sm mt-1 break-all">{generatedGuideline.description}</p>
                       </div>
-                      <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-100 text-center shrink-0">
+                      <div className="px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-100 text-center shrink-0 ml-3">
                         <p className="text-xs text-slate-400 font-medium">Framework Items</p>
                         <p className="text-lg font-bold text-slate-800">{generatedGuideline.itemCount}</p>
                       </div>

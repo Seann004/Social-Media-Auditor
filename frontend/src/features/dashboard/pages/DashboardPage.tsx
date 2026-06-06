@@ -331,9 +331,9 @@ export default function DashboardPage() {
             ) : (
               recentProjects.map((project) => {
                 const scorePct = complianceMap[project.id] ?? 0
-                const guidelineNames = project.guidelineIds
-                  .map((gid) => guidelines.find((g) => g.id === gid)?.shortName)
-                  .filter(Boolean)
+                const projGuidelines = project.guidelineIds
+                  .map((gid) => guidelines.find((g) => g.id === gid))
+                  .filter(Boolean) as typeof guidelines
                 const auditors = project.auditorIds
                   .map((uid) => users.find((u) => u.id === uid))
                   .filter(Boolean) as typeof users
@@ -365,12 +365,12 @@ export default function DashboardPage() {
                         <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium">
                           {project.platform}
                         </span>
-                        {guidelineNames.map((name) => (
+                        {projGuidelines.map((g) => (
                           <span
-                            key={name}
+                            key={g.id}
                             className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium"
                           >
-                            {name}
+                            {g.shortName}
                           </span>
                         ))}
                       </div>

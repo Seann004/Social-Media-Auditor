@@ -180,7 +180,8 @@ export default function AuditPage() {
   const [newItemText, setNewItemText] = useState('')
   const [newItemSeverity, setNewItemSeverity] = useState<Severity>('minor')
   const [newItemReference, setNewItemReference] = useState('')
-  const [newItemFeature, setNewItemFeature] = useState('')
+  const [newItemHelp, setNewItemHelp] = useState('')
+  const [newItemTrace, setNewItemTrace] = useState('')
   const [addingItem, setAddingItem] = useState(false)
   const [addItemError, setAddItemError] = useState<string | null>(null)
 
@@ -205,12 +206,48 @@ export default function AuditPage() {
   const [confirmDeleteItemId, setConfirmDeleteItemId] = useState<string | null>(null)
 
   // Manage Guidelines
-  const [selectedGuidelineIds, setSelectedGuidelineIds] = useState<string[]>(project?.guidelineIds ?? [])
+  const [selectedGuidelineIds, setSelectedGuidelineIds] = useState<string[]>(() => {
+    return (project?.guidelineIds ?? []).map(id => {
+      const g = guidelines.find(x => x.id === id)
+      return g?.originalGuidelineId || id
+    })
+  })
+
+  // Sync selectedGuidelineIds when project loads/updates
+  useEffect(() => {
+    if (project?.guidelineIds) {
+      setSelectedGuidelineIds(
+        project.guidelineIds.map(id => {
+          const g = guidelines.find(x => x.id === id)
+          return g?.originalGuidelineId || id
+        })
+      )
+    }
+  }, [project?.guidelineIds, guidelines])
+
+  const projectManageGuidelines = useMemo(() => {
+    const usedGlobalGuidelineIds = (project?.guidelineIds ?? []).map(id => {
+      const g = guidelines.find(x => x.id === id)
+      return g?.originalGuidelineId || id
+    })
+    
+    return guidelines.filter(g => {
+      if (g.projectId) return false
+      return !g.isDeleted || usedGlobalGuidelineIds.includes(g.id)
+    })
+  }, [guidelines, project?.guidelineIds])
+
   const [savingGuidelines, setSavingGuidelines] = useState(false)
 
   // Manage Scope (features)
   const [scopeInput, setScopeInput] = useState('')
   const [scopeFeatures, setScopeFeatures] = useState<string[]>(project?.scope ?? [])
+
+  useEffect(() => {
+    if (project?.scope) {
+      setScopeFeatures(project.scope)
+    }
+  }, [project?.scope])
   const [savingScope, setSavingScope] = useState(false)
 
   // Edit project status — keep local state in sync with store
@@ -328,19 +365,21 @@ export default function AuditPage() {
         throw new Error('No guideline associated with this category or project.')
       }
       
+      const feature = [newItemHelp.trim(), newItemTrace.trim()].filter(Boolean).join('\n[TRACEABILITY]\n')
       await addChecklistItem(id!, {
         category: selectedCategory,
         text: newItemText,
         severity: newItemSeverity,
         reference: newItemReference || undefined,
-        feature: newItemFeature || undefined,
+        feature: feature || undefined,
         guidelineId
       })
       
       setNewItemText('')
       setNewItemSeverity('minor')
       setNewItemReference('')
-      setNewItemFeature('')
+      setNewItemHelp('')
+      setNewItemTrace('')
       setShowAddItemModal(false)
       reload()
     } catch (err) {
@@ -652,7 +691,7 @@ export default function AuditPage() {
           <h2 className="text-base font-semibold text-slate-800 mb-1">Manage Guideline Used</h2>
           <p className="text-sm text-slate-500 mb-5">Select which regulatory guidelines apply to this audit project.</p>
           <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white mb-4">
-            {guidelines.filter(g => !g.isDeleted).map((g) => {
+            {projectManageGuidelines.map((g) => {
               const checked = selectedGuidelineIds.includes(g.id)
               return (
                 <label key={g.id} className={['flex items-start gap-4 px-5 py-4 cursor-pointer transition-colors', checked ? 'bg-blue-50/60' : 'hover:bg-slate-50'].join(' ')}>
@@ -1094,15 +1133,15 @@ export default function AuditPage() {
         </div>
       )}
 
-      {/* Add Checklist Item Modal */}
+      {/* Help & Traceability Details Modal */}
       <AnimatePresence>
-        {showAddItemModal && (
+        {selectedItemForModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setShowAddItemModal(false)}
+              onClick={() => setSelectedItemForModal(null)}
               className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
             />
             <motion.div
@@ -1110,7 +1149,7 @@ export default function AuditPage() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
               transition={{ type: 'spring', duration: 0.3 }}
-              className="relative w-full max-w-lg bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 overflow-hidden max-h-[90vh] flex flex-col"
+              className="relative w-full max-w-lg bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 overflow-hidden max-h-[90vh] flex flex-col z-10"
             >
               <div className="flex flex-col border-b border-slate-100 mb-4 bg-slate-50">
                 <div className="flex items-center justify-between p-4">
@@ -1135,17 +1174,17 @@ export default function AuditPage() {
                     <div>
                       <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">CHECKLIST QUESTION</h4>
                       <p className="text-sm font-semibold text-slate-800 leading-relaxed bg-slate-50 border border-slate-100 rounded-xl p-3.5">
-                        {selectedItemForModal!.text}
+                        {selectedItemForModal.text}
                       </p>
                     </div>
 
                     <div>
                       <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">SEVERITY</h4>
-                      <SeverityBadge severity={selectedItemForModal!.severity} />
+                      <SeverityBadge severity={selectedItemForModal.severity} />
                     </div>
 
                     {(() => {
-                      const featureText = selectedItemForModal!.feature || '';
+                      const featureText = selectedItemForModal.feature || '';
                       const splitIdx = featureText.indexOf('[TRACEABILITY]');
                       let helpText = splitIdx !== -1 ? featureText.substring(0, splitIdx).trim() : featureText;
                       return (
@@ -1163,12 +1202,12 @@ export default function AuditPage() {
                     <div>
                       <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">CLAUSE REFERENCE</h4>
                       <span className="inline-block font-mono text-xs font-bold text-slate-700 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded">
-                        {selectedItemForModal!.reference || 'N/A'}
+                        {selectedItemForModal.reference || 'N/A'}
                       </span>
                     </div>
 
                     {(() => {
-                      const featureText = selectedItemForModal!.feature || '';
+                      const featureText = selectedItemForModal.feature || '';
                       const splitIdx = featureText.indexOf('[TRACEABILITY]');
                       let traceText = splitIdx !== -1 ? featureText.substring(splitIdx + '[TRACEABILITY]'.length).trim() : '';
                       return traceText ? (
@@ -1193,6 +1232,141 @@ export default function AuditPage() {
                   className="px-4 py-2 bg-slate-800 text-white text-xs font-bold rounded-lg hover:bg-slate-700 transition-colors"
                 >
                   Dismiss
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add Checklist Item Modal */}
+      <AnimatePresence>
+        {showAddItemModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowAddItemModal(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              transition={{ type: 'spring', duration: 0.3 }}
+              className="relative w-full max-w-lg bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 overflow-hidden max-h-[90vh] flex flex-col z-10"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Add Checklist Item</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Custom item for {selectedCategory}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAddItemModal(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  <XIcon size={16} weight="bold" />
+                </button>
+              </div>
+
+              <div className="space-y-4 overflow-y-auto pr-1 flex-1 pb-4">
+                {addItemError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg">
+                    {addItemError}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
+                    Question / Text *
+                  </label>
+                  <textarea
+                    value={newItemText}
+                    onChange={(e) => setNewItemText(e.target.value)}
+                    placeholder="e.g. Does the app provide clear options to delete user accounts?"
+                    rows={3}
+                    className="w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
+                      Severity
+                    </label>
+                    <select
+                      value={newItemSeverity}
+                      onChange={(e) => setNewItemSeverity(e.target.value as Severity)}
+                      className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    >
+                      {SEVERITY_OPTIONS.map((s) => (
+                        <option key={s} value={s}>
+                          {s.charAt(0).toUpperCase() + s.slice(1)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
+                      Clause Reference
+                    </label>
+                    <input
+                      type="text"
+                      value={newItemReference}
+                      onChange={(e) => setNewItemReference(e.target.value)}
+                      placeholder="e.g. Clause 4.2"
+                      className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
+                    Help & Audit Guidance
+                  </label>
+                  <textarea
+                    value={newItemHelp}
+                    onChange={(e) => setNewItemHelp(e.target.value)}
+                    placeholder="Instructions or guidelines to help auditors verify compliance..."
+                    rows={3}
+                    className="w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
+                    Traceability Mapping
+                  </label>
+                  <textarea
+                    value={newItemTrace}
+                    onChange={(e) => setNewItemTrace(e.target.value)}
+                    placeholder="Code files, configuration settings, or process requirements mapping..."
+                    rows={3}
+                    className="w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed"
+                  />
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-4 mt-4 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowAddItemModal(false)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddItem}
+                  disabled={addingItem || !newItemText.trim()}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                >
+                  {addingItem ? <Spinner size={12} className="animate-spin" /> : <Plus size={12} weight="bold" />}
+                  Add Item
                 </button>
               </div>
             </motion.div>

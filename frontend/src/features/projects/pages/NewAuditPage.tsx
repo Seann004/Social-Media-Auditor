@@ -277,7 +277,7 @@ export default function NewAuditPage() {
                 )}
 
                 <div className="grid grid-cols-1 gap-3">
-                  {guidelines.filter(g => !g.isDeleted).map((g) => {
+                  {guidelines.filter(g => !g.isDeleted && !g.projectId).map((g) => {
                     const checked = selectedGuidelines.includes(g.id)
                     return (
                       <button
@@ -320,12 +320,12 @@ export default function NewAuditPage() {
                             {/* Category chips */}
                             {g.categories.length > 0 && (
                               <div className="flex flex-wrap gap-1.5">
-                                {g.categories.map((cat) => (
-                                  <span key={cat} className={[
+                                {Array.from(new Set(g.categories.map((cat) => cat.split(' > ')[0]))).map((section) => (
+                                  <span key={section} className={[
                                     'text-[10px] px-2 py-0.5 rounded-full font-medium',
                                     checked ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500',
                                   ].join(' ')}>
-                                    {cat}
+                                    {section}
                                   </span>
                                 ))}
                               </div>

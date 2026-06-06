@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   CaretDownIcon as CaretDown,
@@ -22,16 +23,16 @@ const cardVar = {
 }
 
 export default function GuidelinesPage() {
+  const navigate = useNavigate()
   const { guidelines, checklistItems, users, currentUserId, deleteGuideline } = useStore()
-  const activeGuidelines = guidelines.filter((g) => !g.isDeleted)
+  const activeGuidelines = guidelines.filter((g) => !g.isDeleted && !g.projectId)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [expandedCat, setExpandedCat] = useState<Set<string>>(new Set())
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [selectedItemForModal, setSelectedItemForModal] = useState<ChecklistItem | null>(null)
   const [itemModalTab, setItemModalTab] = useState<'help' | 'traceability'>('help')
 
-  const [uploadSuccess, setUploadSuccess] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  
 
   const currentUser = users.find((u) => u.id === currentUserId)
   const isAdmin = currentUser?.role === 'admin'
@@ -63,22 +64,7 @@ export default function GuidelinesPage() {
     setExpanded((prev) => { const next = new Set(prev); next.delete(id); return next })
   }
 
-  function handleUploadClick() {
-    fileInputRef.current?.click()
-  }
-
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls')
-    if (!isExcel) {
-      alert('Only .xlsx or .xls files are supported.')
-      return
-    }
-    setUploadSuccess(true)
-    setTimeout(() => setUploadSuccess(false), 3000)
-    if (fileInputRef.current) fileInputRef.current.value = ''
-  }
+  
 
   return (
     <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-8">
@@ -110,28 +96,14 @@ export default function GuidelinesPage() {
 
         {/* Upload button — admin only */}
         {isAdmin && (
-          <div className="flex items-center gap-2">
-            {uploadSuccess && (
-              <span className="text-xs text-emerald-600 font-medium bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
-                Guideline uploaded successfully
-              </span>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx,.xls"
-              className="sr-only"
-              onChange={handleFileChange}
-            />
-            <button
-              type="button"
-              onClick={handleUploadClick}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 focus-visible:outline-offset-1"
-            >
-              <UploadSimple size={14} weight="bold" />
-              Upload Guideline
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/generator')}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 focus-visible:outline-offset-1"
+          >
+            <UploadSimple size={14} weight="bold" />
+            Upload Guideline
+          </button>
         )}
       </motion.div>
 
