@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -38,7 +38,12 @@ export default function GuidelinesPage() {
   const isAdmin = currentUser?.role === 'admin'
 
   if (currentUser?.role === 'auditor') return <Navigate to="/projects" replace />
-  const hour = new Date().getHours()
+  const [hour, setHour] = useState(() => new Date().getHours())
+  useEffect(() => {
+    const tick = () => setHour(new Date().getHours())
+    const id = setInterval(tick, 60_000)
+    return () => clearInterval(id)
+  }, [])
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
 

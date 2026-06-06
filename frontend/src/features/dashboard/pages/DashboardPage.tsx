@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowRightIcon as ArrowRight } from '@phosphor-icons/react'
@@ -94,7 +94,12 @@ export default function DashboardPage() {
   // Re-fetch from DB every time the user navigates to this page so counts stay current
   useEffect(() => { initFromDb() }, [location.key])
 
-  const hour = new Date().getHours()
+  const [hour, setHour] = useState(() => new Date().getHours())
+  useEffect(() => {
+    const tick = () => setHour(new Date().getHours())
+    const id = setInterval(tick, 60_000)
+    return () => clearInterval(id)
+  }, [])
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
   const isHeadAuditor = currentUser?.role === 'head_auditor'
