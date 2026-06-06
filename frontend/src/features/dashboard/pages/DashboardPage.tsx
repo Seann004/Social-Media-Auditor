@@ -6,7 +6,6 @@ import GuidelinesPage from '../../guidelines/pages/GuidelinesPage'
 import { useStore } from '../../../store/useStore'
 import StatusBadge from '../../audits/components/StatusBadge'
 import AuditorAvatar from '../../../components/ui/AuditorAvatar'
-import ScoreRing from '../../audits/components/ScoreRing'
 
 // ── Mini SVG donut chart ────────────────────────────────────────────────────
 function DonutChart({ segments, size = 72, stroke = 9, center }: {
@@ -41,35 +40,6 @@ function DonutChart({ segments, size = 72, stroke = 9, center }: {
   )
 }
 
-// ── Vertical severity bars ──────────────────────────────────────────────────
-function SeverityBars({ critical, major, minor }: { critical: number; major: number; minor: number }) {
-  const max = Math.max(critical, major, minor, 1)
-  const bars = [
-    { label: 'Crit', count: critical, color: '#dc2626' },
-    { label: 'Major', count: major, color: '#d97706' },
-    { label: 'Minor', count: minor, color: '#94a3b8' },
-  ]
-  return (
-    <div className="flex items-end gap-2.5 h-14">
-      {bars.map(({ label, count, color }) => (
-        <div key={label} className="flex flex-col items-center gap-1">
-          <span className="text-xs font-semibold" style={{ color: count > 0 ? color : '#cbd5e1' }}>
-            {count}
-          </span>
-          <div className="w-6 bg-slate-100 rounded-t-sm overflow-hidden" style={{ height: 32 }}>
-            <motion.div
-              initial={{ scaleY: 0 }}
-              animate={{ scaleY: count > 0 ? count / max : 0 }}
-              transition={{ type: 'spring', stiffness: 100, damping: 20, delay: 0.2 }}
-              style={{ backgroundColor: color, transformOrigin: 'bottom', height: '100%' }}
-            />
-          </div>
-          <span className="text-[9px] text-slate-400 font-medium">{label}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
 
 const container = {
   hidden: { opacity: 0 },
@@ -117,7 +87,7 @@ function ScoreBar({ pct, color }: { pct: number; color: string }) {
 }
 
 export default function DashboardPage() {
-  const { projects, users, currentUserId, checklistItems, responses, guidelines, complianceMap, initFromDb } = useStore()
+  const { projects, users, currentUserId, guidelines, complianceMap, initFromDb } = useStore()
   const currentUser = users.find((u) => u.id === currentUserId) ?? users[0]
   const location = useLocation()
 
@@ -137,18 +107,6 @@ export default function DashboardPage() {
 
   const activeProjects = visibleProjects.filter((p) => p.status === 'in_progress')
   const completedProjects = visibleProjects.filter((p) => p.status === 'completed')
-
-  // Use DB-backed compliance scores so the average is always accurate
-  const scoredProjects = visibleProjects.filter((p) => (complianceMap[p.id] ?? 0) > 0)
-  const avgCompliance =
-    scoredProjects.length > 0
-      ? scoredProjects.reduce((sum, p) => sum + (complianceMap[p.id] ?? 0), 0) / scoredProjects.length
-      : 0
-
-  const nonCompliantResponses = Object.values(responses).filter((r) => r.status === 'non_compliant')
-  const criticalIssues = nonCompliantResponses.filter((r) => checklistItems.find((c) => c.id === r.checklistItemId)?.severity === 'critical').length
-  const majorIssues = nonCompliantResponses.filter((r) => checklistItems.find((c) => c.id === r.checklistItemId)?.severity === 'major').length
-  const minorIssues = nonCompliantResponses.filter((r) => checklistItems.find((c) => c.id === r.checklistItemId)?.severity === 'minor').length
 
   const statusCounts = {
     draft: visibleProjects.filter((p) => p.status === 'draft').length,
@@ -200,7 +158,7 @@ export default function DashboardPage() {
       </motion.div>
 
       {/* Stats strip — chart cards */}
-      <motion.div variants={item} className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
+      <motion.div variants={item} className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
 
         {/* Card 1: Total Audits — status donut */}
         <div className="bg-white border border-slate-200 rounded-xl px-5 py-5 flex items-center gap-4">
@@ -272,36 +230,6 @@ export default function DashboardPage() {
             <p className="text-xs text-slate-300 mt-1">
               {visibleProjects.length - activeProjects.length} other status
             </p>
-          </div>
-        </div>
-
-        {/* Card 3: Avg Compliance — score ring */}
-        <div className="bg-white border border-slate-200 rounded-xl px-5 py-5 flex items-center gap-4">
-          <ScoreRing percentage={avgCompliance} size={72} strokeWidth={9} showLabel={false} />
-          <div>
-            <p className="text-sm font-semibold text-slate-600 mb-1">Avg Compliance</p>
-            <p className="font-mono text-2xl font-bold text-slate-800 tabular-nums leading-none">
-              {avgCompliance.toFixed(1)}%
-            </p>
-            <p className="text-xs text-slate-400 mt-1">
-              {scoredProjects.length > 0
-                ? `Across ${scoredProjects.length} audited`
-                : 'No results yet'}
-            </p>
-          </div>
-        </div>
-
-        {/* Card 4: Non-Compliant Issues — severity bars */}
-        <div className="bg-white border border-slate-200 rounded-xl px-5 py-5">
-          <p className="text-sm font-semibold text-slate-600 mb-3">Non-Compliant Issues</p>
-          <div className="flex items-end gap-5">
-            <SeverityBars critical={criticalIssues} major={majorIssues} minor={minorIssues} />
-            <div className="pb-5">
-              <p className={`font-mono text-2xl font-bold tabular-nums leading-none ${criticalIssues > 0 ? 'text-rose-600' : 'text-slate-300'}`}>
-                {criticalIssues + majorIssues + minorIssues}
-              </p>
-              <p className="text-xs text-slate-400 mt-1">total</p>
-            </div>
           </div>
         </div>
 

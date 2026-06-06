@@ -5,8 +5,8 @@ export type Platform =
   | 'Snapchat'
   | 'YouTube'
   | 'Discord'
-  | 'BeReal'
   | 'X (Twitter)'
+  | (string & {})
 
 export type AuditStatus = 'draft' | 'in_progress' | 'completed' | 'under_review'
 

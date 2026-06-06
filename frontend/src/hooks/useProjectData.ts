@@ -35,7 +35,12 @@ export function useProjectData(projectId: string | undefined): ProjectData {
         text: i.itemDescription,
         severity: i.severity,
         reference: i.reference ?? undefined,
-        feature: i.feature ?? undefined,
+        itemName: i.itemName ?? undefined,
+        itemCode: i.itemCode ?? undefined,
+        rowType: i.rowType ?? undefined,
+        helpText: i.helpText ?? undefined,
+        verbatimClauseText: i.verbatimClauseText ?? undefined,
+        answerOptions: i.answerOptions ?? undefined,
       }))
 
       const respMap: Record<string, AuditResponse> = {}
@@ -46,6 +51,7 @@ export function useProjectData(projectId: string | undefined): ProjectData {
           checklistItemId: r.itemId,
           status: r.result,
           notes: r.notes ?? '',
+          findings: r.findings ?? undefined,
           auditorId: r.userId,
           updatedAt: r.timeSubmitted?.split('T')[0] ?? '',
         }

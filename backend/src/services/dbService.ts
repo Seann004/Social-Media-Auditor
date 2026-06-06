@@ -163,24 +163,32 @@ export async function updateProject(projectId: string, updates: {
   if (error) throw error
 }
 
-// Returns average scorePercentage per projectId across all its guidelines
+// Compute live compliance percentage per project directly from Audit_Result rows
+// (compliant / applicable) where applicable = compliant + non_compliant + partially
 export async function fetchProjectComplianceSummary(
   projectIds: string[]
 ): Promise<Record<string, number>> {
   if (projectIds.length === 0) return {}
   const { data, error } = await supabase
-    .from('Compliance_Score')
-    .select('projectId,scorePercentage')
+    .from('Audit_Result')
+    .select('projectId,result')
     .in('projectId', projectIds)
   if (error) throw error
-  const totals: Record<string, { sum: number; count: number }> = {}
-  for (const row of (data ?? []) as { projectId: string; scorePercentage: number | null }[]) {
-    if (!totals[row.projectId]) totals[row.projectId] = { sum: 0, count: 0 }
-    totals[row.projectId].sum += row.scorePercentage ?? 0
-    totals[row.projectId].count += 1
+
+  const buckets: Record<string, { weightedCompliant: number; applicable: number }> = {}
+  for (const row of (data ?? []) as { projectId: string; result: string }[]) {
+    if (!buckets[row.projectId]) buckets[row.projectId] = { weightedCompliant: 0, applicable: 0 }
+    if (['compliant', 'non_compliant', 'partially'].includes(row.result)) {
+      buckets[row.projectId].applicable++
+      if (row.result === 'compliant') buckets[row.projectId].weightedCompliant += 1
+      else if (row.result === 'partially') buckets[row.projectId].weightedCompliant += 0.5
+    }
   }
   return Object.fromEntries(
-    Object.entries(totals).map(([pid, { sum, count }]) => [pid, Math.round((sum / count) * 10) / 10])
+    Object.entries(buckets).map(([pid, { weightedCompliant, applicable }]) => [
+      pid,
+      applicable > 0 ? Math.round((weightedCompliant / applicable) * 1000) / 10 : 0,
+    ])
   )
 }
 
@@ -258,15 +266,15 @@ export async function fetchGuidelines(): Promise<DbGuideline[]> {
     .from('Guideline')
     .select(`
       guidelineId,guidelineName,shortName,version,description,source,lastUpdated,categories,
-      Checklist(checklistId, projectId)
+      Checklist(checklistId, projectId, Checklist_Item(itemId))
     `)
-    
     .order('guidelineName')
   if (error) throw error
   return ((data ?? []) as unknown[]).map((row: unknown) => {
     const r = row as Record<string, unknown>
-    const checklists = (r['Checklist'] as { Checklist_Item?: unknown[] }[] | null) ?? []
-    const itemCount = checklists.reduce((sum, c) => sum + (c.Checklist_Item?.length ?? 0), 0)
+    const checklists = (r['Checklist'] as { checklistId: string; projectId: string | null; Checklist_Item?: { itemId: string }[] }[] | null) ?? []
+    const globalChecklist = checklists.find((c) => c.projectId === null)
+    const itemCount = globalChecklist?.Checklist_Item?.length ?? 0
     return {
       guidelineId: r['guidelineId'] as string,
       guidelineName: r['guidelineName'] as string,
@@ -277,7 +285,7 @@ export async function fetchGuidelines(): Promise<DbGuideline[]> {
       lastUpdated: r['lastUpdated'] as string | null,
       categories: r['categories'] as string[] | null,
       itemCount,
-      isDeleted: !checklists.some((c: any) => c.projectId === null),
+      isDeleted: !checklists.some((c) => c.projectId === null),
     } satisfies DbGuideline
   })
 }

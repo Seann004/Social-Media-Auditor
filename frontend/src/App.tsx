@@ -5,7 +5,7 @@ import LoginPage from './features/auth/pages/LoginPage'
 import RegisterPage from './features/auth/pages/RegisterPage'
 import DashboardPage from './features/dashboard/pages/DashboardPage'
 import ProjectsPage from './features/projects/pages/ProjectsPage'
-import NewAuditPage from './features/projects/pages/NewAuditPage'
+import CreateProjectPage from './features/projects/pages/CreateProjectPage'
 import AuditPage from './features/audits/pages/AuditPage'
 import GuidelinesPage from './features/guidelines/pages/GuidelinesPage'
 import ReportsPage from './features/reports/pages/ReportsPage'
@@ -21,7 +21,7 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/projects" element={<ProjectsPage />} />
-            <Route path="/projects/new" element={<NewAuditPage />} />
+            <Route path="/projects/new" element={<CreateProjectPage />} />
             <Route path="/projects/:id" element={<AuditPage />} />
             <Route path="/guidelines" element={<GuidelinesPage />} />
             <Route path="/reports" element={<ReportsPage />} />

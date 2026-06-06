@@ -304,6 +304,12 @@ export default function GeneratorPage() {
             categories.push(finalCategory)
           }
 
+          const _helpT = combinedFeature?.includes('[TRACEABILITY]')
+            ? combinedFeature.split('[TRACEABILITY]')[0].trim()
+            : combinedFeature || ''
+          const _verbT = combinedFeature?.includes('[TRACEABILITY]')
+            ? combinedFeature.split('[TRACEABILITY]').slice(1).join('[TRACEABILITY]').trim()
+            : ''
           items.push({
             id: generateSequentialUUID(Date.now(), items.length),
             guidelineId,
@@ -311,7 +317,8 @@ export default function GeneratorPage() {
             text: desc || name || 'No description provided',
             severity,
             reference: ref || undefined,
-            feature: combinedFeature || undefined
+            helpText: _helpT || undefined,
+            verbatimClauseText: _verbT || undefined,
           })
         }
       }
@@ -402,7 +409,7 @@ export default function GeneratorPage() {
           text: question || name || 'No description provided',
           severity,
           reference: ref,
-          feature: help || undefined
+          helpText: help || undefined,
         })
       })
     } else {
@@ -487,6 +494,12 @@ export default function GeneratorPage() {
             categories.push(finalCategory)
           }
 
+          const _ht2 = combinedFeature?.includes('[TRACEABILITY]')
+            ? combinedFeature.split('[TRACEABILITY]')[0].trim()
+            : combinedFeature || ''
+          const _vt2 = combinedFeature?.includes('[TRACEABILITY]')
+            ? combinedFeature.split('[TRACEABILITY]').slice(1).join('[TRACEABILITY]').trim()
+            : ''
           items.push({
             id: generateSequentialUUID(Date.now(), items.length),
             guidelineId,
@@ -494,7 +507,8 @@ export default function GeneratorPage() {
             text: desc || name || 'No description provided',
             severity,
             reference: ref || undefined,
-            feature: combinedFeature || undefined
+            helpText: _ht2 || undefined,
+            verbatimClauseText: _vt2 || undefined,
           })
         }
       }
@@ -1070,19 +1084,12 @@ export default function GeneratorPage() {
                       <SeverityBadge severity={selectedItemForModal!.severity} />
                     </div>
 
-                    {(() => {
-                      const featureText = selectedItemForModal!.feature || '';
-                      const splitIdx = featureText.indexOf('[TRACEABILITY]');
-                      let helpText = splitIdx !== -1 ? featureText.substring(0, splitIdx).trim() : featureText;
-                      return (
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">HELP & AUDIT GUIDANCE</h4>
-                          <p className="text-xs text-slate-600 leading-relaxed bg-blue-50/30 border border-blue-100/50 rounded-xl p-3.5 whitespace-pre-wrap">
-                            {helpText || 'No additional audit instructions provided for this item.'}
-                          </p>
-                        </div>
-                      );
-                    })()}
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">HELP & AUDIT GUIDANCE</h4>
+                      <p className="text-xs text-slate-600 leading-relaxed bg-blue-50/30 border border-blue-100/50 rounded-xl p-3.5 whitespace-pre-wrap">
+                        {selectedItemForModal!.helpText || 'No additional audit instructions provided for this item.'}
+                      </p>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -1093,21 +1100,16 @@ export default function GeneratorPage() {
                       </span>
                     </div>
 
-                    {(() => {
-                      const featureText = selectedItemForModal!.feature || '';
-                      const splitIdx = featureText.indexOf('[TRACEABILITY]');
-                      let traceText = splitIdx !== -1 ? featureText.substring(splitIdx + '[TRACEABILITY]'.length).trim() : '';
-                      return traceText ? (
+                    {selectedItemForModal!.verbatimClauseText ? (
                         <div>
-                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">TRACEABILITY MAPPING</h4>
+                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">VERBATIM CLAUSE TEXT</h4>
                           <p className="text-xs text-slate-700 leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-3.5 whitespace-pre-wrap font-mono">
-                            {traceText}
+                            {selectedItemForModal!.verbatimClauseText}
                           </p>
                         </div>
-                      ) : (
-                        <p className="text-sm text-slate-400 italic mt-4">No traceability mapping available.</p>
-                      );
-                    })()}
+                    ) : (
+                      <p className="text-sm text-slate-400 italic mt-4">No verbatim clause text available.</p>
+                    )}
                   </>
                 )}
               </div>
