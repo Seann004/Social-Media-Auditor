@@ -382,7 +382,14 @@ export default function AuditPage() {
     selectedGuidelineIds.length !== (project.guidelineIds.length ?? 0) ||
     selectedGuidelineIds.some((gid) => !project.guidelineIds.includes(gid))
 
-  const allAnswered = checklistItems.length > 0 && checklistItems.every((ci) => {
+  // Auditors only see enabled categories — only check those items for submission readiness
+  const enabledCategoryKeys = new Set(
+    allCategories.filter((c) => c.enabled).map((c) => `${c.guidelineId}__${c.category}`)
+  )
+  const submittableItems = isAuditor
+    ? checklistItems.filter((ci) => enabledCategoryKeys.has(`${ci.guidelineId}__${ci.category}`))
+    : checklistItems
+  const allAnswered = submittableItems.length > 0 && submittableItems.every((ci) => {
     const resp = responses[`${id}__${ci.id}`]
     return resp && resp.status !== 'not_started' && resp.status !== 'needs_review'
   })
@@ -543,7 +550,7 @@ export default function AuditPage() {
                 type="button"
                 disabled={!canSubmit || submitting}
                 onClick={handleSubmitForReview}
-                title={!canSubmit ? 'Complete all checklist items before submitting' : ''}
+                title={!canSubmit ? `${submittableItems.filter((ci) => { const r = responses[`${id}__${ci.id}`]; return !r || r.status === 'not_started' || r.status === 'needs_review' }).length} item(s) still need a response` : ''}
                 className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {submitting ? <Spinner size={13} className="animate-spin" /> : <PaperPlaneTilt size={13} />}

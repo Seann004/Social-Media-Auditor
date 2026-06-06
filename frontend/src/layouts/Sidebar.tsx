@@ -28,15 +28,22 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
   const navigate = useNavigate()
 
   const isAdmin = user?.role === 'admin'
+  const isAuditor = user?.role === 'auditor'
 
   const nextDue = [...projects]
-    .filter((p) => p.status === 'in_progress' && p.dueDate)
+    .filter((p) => p.status !== 'draft' && p.dueDate)
     .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0]
 
   const NAV = isAdmin
     ? [
         { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
         { to: '/generator', label: 'Generator', icon: Wand, exact: false },
+      ]
+    : isAuditor
+    ? [
+        { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
+        { to: '/projects', label: 'Audits', icon: FolderOpen, exact: false },
+        { to: '/reports', label: 'Reports', icon: ChartBar, exact: false },
       ]
     : [
         { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
@@ -114,15 +121,16 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
         {!isAdmin && nextDue && (
           <div className="mt-7">
             <p className="px-4 text-xs text-sidebar-muted font-mono tracking-widest uppercase mb-2">
-              Next deadline
+              {nextDue.status === 'completed' ? 'Last completed' : 'Next deadline'}
             </p>
             <NavLink
-              to={`/projects/${projects.find((p) => p.dueDate === nextDue.dueDate)?.id}`}
+              to={`/projects/${nextDue.id}`}
               className="block px-4 py-3 rounded-xl bg-[var(--color-sidebar-item-hover)] hover:bg-sidebar-item-active transition-colors"
             >
               <p className="text-sidebar-text-hover text-sm font-semibold truncate">{nextDue.name}</p>
               <p className="text-sidebar-muted text-xs mt-0.5">
-                Due {new Date(nextDue.dueDate!).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                {nextDue.status === 'completed' ? 'Completed · ' : 'Due '}
+                {new Date(nextDue.dueDate!).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
               </p>
             </NavLink>
           </div>

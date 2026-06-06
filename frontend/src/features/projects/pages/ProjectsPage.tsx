@@ -48,7 +48,7 @@ function ScoreBar({ pct }: { pct: number }) {
     <div className="flex items-center gap-2">
       <div className="relative h-1.5 w-28 bg-slate-100 rounded-full overflow-hidden">
         <div
-          className={`absolute inset-y-0 left-0 rounded-full origin-left ${color}`}
+          className={`absolute inset-y-0 left-0 w-full rounded-full origin-left ${color}`}
           style={{
             transform: `scaleX(${Math.min(pct, 100) / 100})`,
             transition: 'transform 0.9s cubic-bezier(0.16,1,0.3,1)',

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { Navigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   CaretDownIcon as CaretDown,
@@ -35,6 +36,8 @@ export default function GuidelinesPage() {
 
   const currentUser = users.find((u) => u.id === currentUserId)
   const isAdmin = currentUser?.role === 'admin'
+
+  if (currentUser?.role === 'auditor') return <Navigate to="/projects" replace />
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
