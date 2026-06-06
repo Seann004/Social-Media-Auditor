@@ -69,11 +69,16 @@ export default function RegisterPage() {
       })
       .catch((err) => {
         setLoading(false)
-        const msg = err instanceof Error ? err.message : (err as any)?.message || ''
+        const rawMsg = err instanceof Error ? err.message : (err as any)?.message || ''
+        // Backend wraps errors as JSON: {"error":"..."} — unwrap for display
+        let msg = rawMsg
+        try { msg = (JSON.parse(rawMsg) as { error: string }).error ?? rawMsg } catch { /* not JSON */ }
         if (msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('already exists')) {
           setError('An account with this email already exists.')
+        } else if (msg.toLowerCase().includes('fetch failed') || msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network')) {
+          setError('Could not reach the server. Restart the backend and try again.')
         } else {
-          setError(msg || 'Registration failed. Check backend connection.')
+          setError(msg || 'Registration failed. Please try again.')
         }
       })
   }

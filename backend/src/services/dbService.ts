@@ -1,5 +1,5 @@
 import https from 'https'
-﻿import crypto from 'crypto'
+import crypto from 'crypto'
 
 
 
@@ -21,9 +21,7 @@ import type { AuditStatus, ChecklistItemStatus, Platform, Severity, SubmissionSt
 
 
 
-// ΓöÇΓöÇΓöÇ DB row types ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-
-
+// DB row types 
 
 export interface DbProject {
 
