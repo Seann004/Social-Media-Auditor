@@ -130,6 +130,7 @@ export default function ReportsPage() {
     setGeneratingReport(true)
     try {
       await db.createAuditReport(selectedReport.projectId, currentUserId)
+      await loadReports()
     } finally {
       setGeneratingReport(false)
     }

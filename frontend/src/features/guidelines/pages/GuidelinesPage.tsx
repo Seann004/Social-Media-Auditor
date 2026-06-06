@@ -157,7 +157,7 @@ export default function GuidelinesPage() {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-base font-semibold text-slate-800">{guideline.name}</p>
+                      <p className="text-base font-semibold text-slate-800 break-all">{guideline.name}</p>
                       <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-mono">
                         v{guideline.version}
                       </span>

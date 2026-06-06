@@ -112,7 +112,26 @@ app.delete('/api/projects/:id', async (req, res) => {
 // Members
 app.post('/api/projects/:id/members', async (req, res) => {
   try {
-    await db.syncProjectMembers(req.params.id, req.body.userIds)
+    const projectId = req.params.id
+    const userIds = (req.body.userIds || []) as string[]
+    
+    // 1. Fetch current details to see existing members
+    const details = await db.fetchProjectDetails(projectId)
+    const existingUserIds = (details?.members || []).map((m: any) => m.userId) as string[]
+    
+    // 2. Perform sync
+    await db.syncProjectMembers(projectId, userIds)
+    
+    // 3. Find newly added userIds
+    const newUserIds = userIds.filter((id: string) => !existingUserIds.includes(id))
+    
+    // 4. Send emails asynchronously
+    for (const userId of newUserIds) {
+      db.sendAssignmentEmail(projectId, userId).catch((err) => {
+        console.error('Error in sendAssignmentEmail async chain:', err)
+      })
+    }
+    
     res.json({ success: true })
   } catch (error) {
     console.error('Error syncing project members:', error)
@@ -122,7 +141,17 @@ app.post('/api/projects/:id/members', async (req, res) => {
 
 app.post('/api/projects/:id/members/add', async (req, res) => {
   try {
-    await db.addProjectMember(req.params.id, req.body.userId)
+    const projectId = req.params.id
+    const userId = req.body.userId as string
+    
+    // 1. Perform add
+    await db.addProjectMember(projectId, userId)
+    
+    // 2. Send email asynchronously
+    db.sendAssignmentEmail(projectId, userId).catch((err) => {
+      console.error('Error in sendAssignmentEmail async chain:', err)
+    })
+    
     res.json({ success: true })
   } catch (error) {
     console.error('Error adding project member:', error)

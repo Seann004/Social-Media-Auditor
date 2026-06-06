@@ -217,7 +217,7 @@ export default function ProjectsPage() {
 
                     {/* Project name + platform + guidelines */}
                     <div className="w-52 shrink-0">
-                      <p className="text-base font-semibold text-slate-800 leading-tight">{project.name}</p>
+                      <p className="text-base font-semibold text-slate-800 leading-tight truncate" title={project.name}>{project.name}</p>
                       <div className="flex flex-wrap gap-1 mt-1">
                         <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium">
                           {project.platform}

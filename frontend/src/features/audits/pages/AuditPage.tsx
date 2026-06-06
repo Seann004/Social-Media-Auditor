@@ -377,9 +377,14 @@ export default function AuditPage() {
   const auditors = project.auditorIds.map((uid) => users.find((u) => u.id === uid)).filter(Boolean) as typeof users
   const categoryItems = guidelineItems.filter((ci) => ci.category === selectedCategory)
 
+  // Map project cloned guidelineIds back to original IDs for comparison
+  const projectOriginalGuidelineIds = (project.guidelineIds ?? []).map((gid) => {
+    const g = guidelines.find((x) => x.id === gid)
+    return g?.originalGuidelineId || gid
+  })
   const guidelinesDirty =
-    selectedGuidelineIds.length !== (project.guidelineIds.length ?? 0) ||
-    selectedGuidelineIds.some((gid) => !project.guidelineIds.includes(gid))
+    selectedGuidelineIds.length !== projectOriginalGuidelineIds.length ||
+    selectedGuidelineIds.some((gid) => !projectOriginalGuidelineIds.includes(gid))
 
   const allAnswered = checklistItems.length > 0 && checklistItems.every((ci) => {
     const resp = responses[`${id}__${ci.id}`]
@@ -423,13 +428,13 @@ export default function AuditPage() {
         throw new Error('No guideline associated with this category or project.')
       }
       
-      const feature = [newItemHelp.trim(), newItemTrace.trim()].filter(Boolean).join('\n[TRACEABILITY]\n')
       await addChecklistItem(id!, {
         category: selectedCategory,
         text: newItemText,
         severity: newItemSeverity,
         reference: newItemReference || undefined,
-        feature: feature || undefined,
+        helpText: newItemHelp.trim() || undefined,
+        verbatimClauseText: newItemTrace.trim() || undefined,
         guidelineId
       })
       
@@ -745,29 +750,7 @@ export default function AuditPage() {
 
       {/* Manage Guidelines tab */}
       {isHeadAuditor && activeTab === 'guidelines' && (
-<<<<<<< HEAD
-        <div className="px-8 py-8 max-w-2xl">
-          <h2 className="text-base font-semibold text-slate-800 mb-1">Manage Guideline Used</h2>
-          <p className="text-sm text-slate-500 mb-5">Select which regulatory guidelines apply to this audit project.</p>
-          <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white mb-4">
-            {projectManageGuidelines.map((g) => {
-              const checked = selectedGuidelineIds.includes(g.id)
-              return (
-                <label key={g.id} className={['flex items-start gap-4 px-5 py-4 cursor-pointer transition-colors', checked ? 'bg-blue-50/60' : 'hover:bg-slate-50'].join(' ')}>
-                  <input type="checkbox" className="sr-only" checked={checked}
-                    onChange={() => setSelectedGuidelineIds((prev) => checked ? prev.filter((x) => x !== g.id) : [...prev, g.id])} />
-                  <div className={['w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all', checked ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white'].join(' ')}>
-                    {checked && <CheckIcon size={11} weight="bold" className="text-white" />}
-                  </div>
-                  <div className="flex-1">
-                    <p className={`text-sm font-semibold ${checked ? 'text-blue-800' : 'text-slate-800'}`}>{g.name}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">{g.description}</p>
-                  </div>
-                  <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded shrink-0">v{g.version}</span>
-                </label>
-              )
-            })}
-=======
+
         <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
           <div className="px-8 py-8 w-full max-w-5xl">
             {/* Header */}
@@ -856,7 +839,7 @@ export default function AuditPage() {
                 </motion.div>
               )}
             </AnimatePresence>
->>>>>>> aed3d9727bac60f75372aa3852c010768d5c46a3
+
           </div>
         </div>
       )}
@@ -1381,8 +1364,17 @@ export default function AuditPage() {
                       <SeverityBadge severity={selectedItemForModal.severity} />
                     </div>
 
-<<<<<<< HEAD
                     {(() => {
+                      if (selectedItemForModal.helpText) {
+                        return (
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">HELP & AUDIT GUIDANCE</h4>
+                            <p className="text-xs text-slate-600 leading-relaxed bg-blue-50/30 border border-blue-100/50 rounded-xl p-3.5 whitespace-pre-wrap">
+                              {selectedItemForModal.helpText}
+                            </p>
+                          </div>
+                        );
+                      }
                       const featureText = selectedItemForModal.feature || '';
                       const splitIdx = featureText.indexOf('[TRACEABILITY]');
                       let helpText = splitIdx !== -1 ? featureText.substring(0, splitIdx).trim() : featureText;
@@ -1395,14 +1387,6 @@ export default function AuditPage() {
                         </div>
                       );
                     })()}
-=======
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">HELP & AUDIT GUIDANCE</h4>
-                      <p className="text-xs text-slate-600 leading-relaxed bg-blue-50/30 border border-blue-100/50 rounded-xl p-3.5 whitespace-pre-wrap">
-                        {selectedItemForModal!.helpText || 'No additional audit instructions provided for this item.'}
-                      </p>
-                    </div>
->>>>>>> aed3d9727bac60f75372aa3852c010768d5c46a3
                   </>
                 ) : (
                   <>
@@ -1413,34 +1397,32 @@ export default function AuditPage() {
                       </span>
                     </div>
 
-<<<<<<< HEAD
                     {(() => {
+                      if (selectedItemForModal.verbatimClauseText) {
+                        return (
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">VERBATIM CLAUSE TEXT</h4>
+                            <p className="text-xs text-slate-700 leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-3.5 whitespace-pre-wrap font-mono">
+                              {selectedItemForModal.verbatimClauseText}
+                            </p>
+                          </div>
+                        );
+                      }
                       const featureText = selectedItemForModal.feature || '';
                       const splitIdx = featureText.indexOf('[TRACEABILITY]');
                       let traceText = splitIdx !== -1 ? featureText.substring(splitIdx + '[TRACEABILITY]'.length).trim() : '';
-                      return traceText ? (
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">TRACEABILITY MAPPING</h4>
-                          <p className="text-xs text-slate-700 leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-3.5 whitespace-pre-wrap font-mono">
-                            {traceText}
-                          </p>
-                        </div>
-                      ) : (
-                        <p className="text-sm text-slate-400 italic mt-4">No traceability mapping available.</p>
-                      );
+                      if (traceText) {
+                        return (
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">VERBATIM CLAUSE TEXT</h4>
+                            <p className="text-xs text-slate-700 leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-3.5 whitespace-pre-wrap font-mono">
+                              {traceText}
+                            </p>
+                          </div>
+                        );
+                      }
+                      return <p className="text-sm text-slate-400 italic mt-4">No verbatim clause text available.</p>;
                     })()}
-=======
-                    {selectedItemForModal!.verbatimClauseText ? (
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">VERBATIM CLAUSE TEXT</h4>
-                        <p className="text-xs text-slate-700 leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-3.5 whitespace-pre-wrap font-mono">
-                          {selectedItemForModal!.verbatimClauseText}
-                        </p>
-                      </div>
-                    ) : (
-                      <p className="text-sm text-slate-400 italic mt-4">No verbatim clause text available.</p>
-                    )}
->>>>>>> aed3d9727bac60f75372aa3852c010768d5c46a3
                   </>
                 )}
               </div>
