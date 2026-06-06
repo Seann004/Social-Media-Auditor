@@ -58,7 +58,7 @@ const PRESETS: Record<string, { category: string; text: string; severity: Severi
 
 export default function GeneratorPage() {
   const navigate = useNavigate()
-  const { addSyntheticGuideline } = useStore()
+  const { addSyntheticGuideline, addAiNotification } = useStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pdfInputRef = useRef<HTMLInputElement>(null)
 
@@ -594,20 +594,34 @@ export default function GeneratorPage() {
 
   const processPdfChunks = async (chunks: string[], fileName: string) => {
     const gatheredItems: any[] = []
-    
+    let chunkAiFailed = false
+
     try {
       for (let i = 0; i < chunks.length; i++) {
         setCurrentChunkIdx(i)
-        
-        // Call backend processing endpoint
-        const chunkItems = await db.processTextChunk(chunks[i], platform)
-        gatheredItems.push(...chunkItems)
+
+        const chunkResult = await db.processTextChunk(chunks[i], platform)
+        if (!chunkResult._aiUsed) chunkAiFailed = true
+        gatheredItems.push(...chunkResult.items)
+      }
+
+      if (chunkAiFailed) {
+        addAiNotification(
+          'AI Engine failed to connect to the LLM service during PDF chunk processing — heuristic fallback was used. Results may be less accurate.',
+        )
       }
 
       setPdfStep(3)
-      
+
       // Final pass: merge & deduplicate via Groq Llama 3.3
       const mergeResult = await db.mergeChecklistItems(gatheredItems, platform)
+
+      if (!mergeResult._aiUsed) {
+        addAiNotification(
+          'AI Engine failed to connect to the LLM service during item merging — local deduplication was used. Framework name and categories may be generic.',
+          mergeResult._fallbackReason,
+        )
+      }
       
       const guidelineId = window.crypto.randomUUID()
       const cleanFileName = fileName.replace(/\.[^/.]+$/, "")

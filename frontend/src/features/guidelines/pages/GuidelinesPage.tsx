@@ -24,7 +24,7 @@ const cardVar = {
 
 export default function GuidelinesPage() {
   const navigate = useNavigate()
-  const { guidelines, checklistItems, users, currentUserId, deleteGuideline } = useStore()
+  const { guidelines, checklistItems, users, currentUserId, deleteGuideline, aiNotifications, dismissAiNotification } = useStore()
   const activeGuidelines = guidelines.filter((g) => !g.isDeleted && !g.projectId)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [expandedCat, setExpandedCat] = useState<Set<string>>(new Set())
@@ -130,6 +130,41 @@ export default function GuidelinesPage() {
             <p className="text-sm text-slate-400 mt-1">Total across all frameworks</p>
           </div>
         </motion.div>
+      )}
+
+      {/* AI Engine failure notifications — admin only */}
+      {isAdmin && aiNotifications.length > 0 && (
+        <div className="mb-5 space-y-2">
+          <AnimatePresence>
+            {aiNotifications.map((n) => (
+              <motion.div
+                key={n.id}
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                transition={{ duration: 0.2 }}
+                className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3"
+              >
+                <Warning size={18} weight="fill" className="text-amber-500 mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-amber-900">AI Engine — LLM Connection Failed</p>
+                  <p className="text-xs text-amber-700 mt-0.5">{n.message}</p>
+                  <p className="text-[10px] text-amber-500 mt-1 tabular-nums">
+                    {new Date(n.timestamp).toLocaleString()}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => dismissAiNotification(n.id)}
+                  className="p-1 rounded-lg text-amber-400 hover:text-amber-600 hover:bg-amber-100 transition-colors shrink-0"
+                  aria-label="Dismiss notification"
+                >
+                  <XIcon size={14} />
+                </button>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
       )}
 
       {/* Guidelines list */}

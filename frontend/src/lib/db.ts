@@ -413,8 +413,12 @@ export async function createUser(user: {
 
 // ─── Groq Llama Integration ──────────────────────────────────────────
 
-export async function processTextChunk(textChunk: string, platform: string): Promise<any[]> {
-  return request<any[]>('/generator/process-chunk', {
+export async function processTextChunk(textChunk: string, platform: string): Promise<{
+  items: any[]
+  _aiUsed: boolean
+  _fallbackReason?: string
+}> {
+  return request<any>('/generator/process-chunk', {
     method: 'POST',
     body: JSON.stringify({ textChunk, platform }),
   })
@@ -425,6 +429,8 @@ export async function mergeChecklistItems(items: any[], platform: string): Promi
   shortName: string
   categories: string[]
   items: any[]
+  _aiUsed: boolean
+  _fallbackReason?: string
 }> {
   return request<any>('/generator/merge-items', {
     method: 'POST',

@@ -475,12 +475,16 @@ You MUST return your output in JSON format matching this EXACT schema:
 
     const data = await response.json() as any
     const content = data.choices?.[0]?.message?.content
-    
+
     const parsed = JSON.parse(content || '{}')
-    res.json(parsed.items || [])
+    res.json({ items: parsed.items || [], _aiUsed: true })
 
   } catch (error) {
-    console.warn('Groq API failed, using local heuristic fallback parser:', error)
+    console.error('[AI_ENGINE_ERROR] Groq LLM connection failed during chunk processing:', {
+      timestamp: new Date().toISOString(),
+      error: String(error),
+      fallback: 'heuristic_parser',
+    })
     
     // Heuristic Extractor Fallback
     const sentences = (req.body.textChunk || '').split(/[.!?\n]+/)
@@ -537,7 +541,7 @@ You MUST return your output in JSON format matching this EXACT schema:
       }
     }
 
-    res.json(items.slice(0, 15))
+    res.json({ items: items.slice(0, 15), _aiUsed: false, _fallbackReason: String(error) })
   }
 })
 
@@ -609,12 +613,16 @@ You MUST return your output in JSON format matching this EXACT schema:
 
     const data = await response.json() as any
     const content = data.choices?.[0]?.message?.content
-    
+
     const parsed = JSON.parse(content || '{}')
-    res.json(parsed)
+    res.json({ ...parsed, _aiUsed: true })
 
   } catch (error) {
-    console.warn('Groq merge failed, using local deduplication fallback:', error)
+    console.error('[AI_ENGINE_ERROR] Groq LLM connection failed during item merging:', {
+      timestamp: new Date().toISOString(),
+      error: String(error),
+      fallback: 'local_deduplication',
+    })
     
     // Fallback merge
     const uniqueItems: any[] = []
@@ -641,7 +649,9 @@ You MUST return your output in JSON format matching this EXACT schema:
       name: 'Age Appropriate Design Code (Extracted Guidelines)',
       shortName: 'AADC-CODE',
       categories: categories.length > 0 ? categories : ['General'],
-      items: uniqueItems.slice(0, 15)
+      items: uniqueItems.slice(0, 15),
+      _aiUsed: false,
+      _fallbackReason: String(error),
     })
   }
 })
