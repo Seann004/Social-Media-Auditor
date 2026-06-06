@@ -31,7 +31,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
   const isAuditor = user?.role === 'auditor'
 
   const nextDue = [...projects]
-    .filter((p) => p.status !== 'draft' && p.dueDate)
+    .filter((p) => (p.status === 'in_progress' || p.status === 'under_review') && p.dueDate)
     .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0]
 
   const NAV = isAdmin
@@ -121,7 +121,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
         {!isAdmin && nextDue && (
           <div className="mt-7">
             <p className="px-4 text-xs text-sidebar-muted font-mono tracking-widest uppercase mb-2">
-              {nextDue.status === 'completed' ? 'Last completed' : 'Next deadline'}
+              Next deadline
             </p>
             <NavLink
               to={`/projects/${nextDue.id}`}
@@ -129,8 +129,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
             >
               <p className="text-sidebar-text-hover text-sm font-semibold truncate">{nextDue.name}</p>
               <p className="text-sidebar-muted text-xs mt-0.5">
-                {nextDue.status === 'completed' ? 'Completed · ' : 'Due '}
-                {new Date(nextDue.dueDate!).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                Due {new Date(nextDue.dueDate!).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
               </p>
             </NavLink>
           </div>

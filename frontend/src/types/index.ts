@@ -43,6 +43,8 @@ export interface Guideline {
   itemCount: number
   lastUpdated: string
   isDeleted?: boolean
+  projectId?: string | null
+  originalGuidelineId?: string | null
 }
 
 export interface ChecklistItem {
@@ -52,6 +54,7 @@ export interface ChecklistItem {
   text: string
   severity: Severity
   reference?: string
+  feature?: string
   itemName?: string
   itemCode?: string
   rowType?: string

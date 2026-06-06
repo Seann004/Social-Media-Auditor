@@ -23,9 +23,10 @@ export function useProjectData(projectId: string | undefined): ProjectData {
     setLoading(true)
     setError(null)
     try {
-      const [dbItems, dbResults] = await Promise.all([
+      const [dbItems, dbResults, projectDetails] = await Promise.all([
         db.fetchProjectChecklistItems(projectId),
         db.fetchAuditResults(projectId),
+        db.fetchProjectDetails(projectId),
       ])
 
       const mapped: ChecklistItem[] = dbItems.map((i) => ({
@@ -63,9 +64,44 @@ export function useProjectData(projectId: string | undefined): ProjectData {
       // Sync into the store so getProjectScore / getCategoryScore work
       useStore.setState((state) => {
         const untouched = state.checklistItems.filter((ci) => !mapped.some((m) => m.id === ci.id))
+        
+        // Map project guidelines
+        const mappedGuidelines = (projectDetails?.guidelines || []).map((g: any) => ({
+          id: g.guidelineId,
+          name: g.guidelineName,
+          shortName: g.shortName || g.guidelineName,
+          version: g.version || '1.0',
+          description: g.description || '',
+          source: g.source || '',
+          categories: g.categories || [],
+          itemCount: g.itemCount || 0,
+          lastUpdated: g.lastUpdated || '',
+          isDeleted: false,
+          projectId: projectId,
+          originalGuidelineId: g.originalGuidelineId || null
+        }))
+
+        // Merge guidelines
+        const otherGuidelines = state.guidelines.filter(g => !mappedGuidelines.some(mg => mg.id === g.id))
+
+        // Update project in projects list
+        const updatedProjects = state.projects.map((p) => {
+          if (p.id === projectId) {
+            return {
+              ...p,
+              guidelineIds: mappedGuidelines.map(mg => mg.id),
+              scope: projectDetails?.scope || [],
+              auditorIds: (projectDetails?.members || []).map((m: any) => m.userId),
+            }
+          }
+          return p
+        })
+
         return {
           checklistItems: [...untouched, ...mapped],
           responses: { ...state.responses, ...respMap },
+          guidelines: [...otherGuidelines, ...mappedGuidelines],
+          projects: updatedProjects,
         }
       })
     } catch (err) {
