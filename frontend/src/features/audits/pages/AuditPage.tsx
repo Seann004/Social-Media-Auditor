@@ -28,6 +28,7 @@ import {
 } from '@phosphor-icons/react'
 import { useStore } from '../../../store/useStore'
 import { useProjectData } from '../../../hooks/useProjectData'
+import { saveEvidenceImages } from '../../../lib/db'
 import type { ChecklistItemStatus, Severity, ChecklistItem, ProjectScore } from '../../../types'
 import SeverityBadge from '../../audits/components/SeverityBadge'
 import StatusBadge from '../../audits/components/StatusBadge'
@@ -71,7 +72,7 @@ export default function AuditPage() {
   } = useStore()
   const navigate = useNavigate()
 
-  const { checklistItems, loading, reload } = useProjectData(id)
+  const { checklistItems, loading, reload, evidenceMap } = useProjectData(id)
   const storeLoading = useStore((s) => s.loading)
   // Read responses directly from the store so optimistic updates re-render immediately
   const responses = useStore((s) => s.responses)
@@ -346,8 +347,17 @@ export default function AuditPage() {
 
   // Evidence images: itemId → array of { url, name }
   const [evidence, setEvidence] = useState<Record<string, { url: string; name: string }[]>>({})
+  const [evidenceError, setEvidenceError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [pendingEvidenceItemId, setPendingEvidenceItemId] = useState<string | null>(null)
+
+  // Initialise evidence from DB on load
+  useEffect(() => {
+    if (Object.keys(evidenceMap).length > 0) {
+      setEvidence((prev) => ({ ...evidenceMap, ...prev }))
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(evidenceMap)])
 
   function handleImageClick(itemId: string) {
     setPendingEvidenceItemId(itemId)
@@ -357,30 +367,46 @@ export default function AuditPage() {
     }
   }
 
+  const MAX_EVIDENCE_SIZE = 5 * 1024 * 1024 // 5 MB
+
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? [])
     if (!files.length || !pendingEvidenceItemId) return
     const itemId = pendingEvidenceItemId
+    setPendingEvidenceItemId(null)
+
+    const oversized = files.filter((f) => f.size > MAX_EVIDENCE_SIZE)
+    if (oversized.length > 0) {
+      setEvidenceError(`File${oversized.length > 1 ? 's' : ''} too large (max 5 MB): ${oversized.map((f) => f.name).join(', ')}`)
+      return
+    }
+    setEvidenceError(null)
+
     files.forEach((file) => {
       if (!file.type.startsWith('image/')) return
       const reader = new FileReader()
       reader.onload = (ev) => {
         const url = ev.target?.result as string
-        setEvidence((prev) => ({
-          ...prev,
-          [itemId]: [...(prev[itemId] ?? []), { url, name: file.name }],
-        }))
+        setEvidence((prev) => {
+          const updated = { ...prev, [itemId]: [...(prev[itemId] ?? []), { url, name: file.name }] }
+          if (currentUserId) {
+            saveEvidenceImages(id!, itemId, currentUserId, updated[itemId]).catch(() => {})
+          }
+          return updated
+        })
       }
       reader.readAsDataURL(file)
     })
-    setPendingEvidenceItemId(null)
   }
 
   function removeEvidence(itemId: string, index: number) {
-    setEvidence((prev) => ({
-      ...prev,
-      [itemId]: (prev[itemId] ?? []).filter((_, i) => i !== index),
-    }))
+    setEvidence((prev) => {
+      const updated = { ...prev, [itemId]: (prev[itemId] ?? []).filter((_, i) => i !== index) }
+      if (currentUserId) {
+        saveEvidenceImages(id!, itemId, currentUserId, updated[itemId] ?? []).catch(() => {})
+      }
+      return updated
+    })
   }
 
   if (isAdmin) {
@@ -1148,6 +1174,15 @@ helpText: newItemHelp.trim() || undefined,
                   className="sr-only"
                   onChange={handleFileChange}
                 />
+                {evidenceError && (
+                  <div className="mb-4 flex items-center gap-2 text-rose-700 text-xs bg-rose-50 border border-rose-200 rounded-lg px-3 py-2.5">
+                    <WarningCircle size={14} className="shrink-0" />
+                    <span>{evidenceError}</span>
+                    <button type="button" onClick={() => setEvidenceError(null)} className="ml-auto text-rose-400 hover:text-rose-600">
+                      <XIcon size={12} weight="bold" />
+                    </button>
+                  </div>
+                )}
 
                 {loading ? (
                   <div className="flex items-center justify-center py-20">
@@ -1239,12 +1274,22 @@ helpText: newItemHelp.trim() || undefined,
                           )}
 
                           {isConfirmingDelete && (
-                            <div className="mt-3 flex items-center gap-3 bg-rose-50 border border-rose-200 rounded-lg px-4 py-3">
-                              <p className="text-xs text-rose-700 flex-1">Delete this checklist item permanently?</p>
-                              <button type="button" onClick={() => handleDeleteItem(ci.id)}
-                                className="px-3 py-1.5 bg-rose-600 text-white text-xs font-medium rounded-lg hover:bg-rose-700 transition-colors">Delete</button>
-                              <button type="button" onClick={() => setConfirmDeleteItemId(null)}
-                                className="px-3 py-1.5 bg-white text-slate-600 text-xs font-medium rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors">Cancel</button>
+                            <div className="mt-3 bg-rose-50 border border-rose-200 rounded-lg px-4 py-3">
+                              <p className="text-xs font-semibold text-rose-700 mb-0.5">Delete this checklist item permanently?</p>
+                              {(() => {
+                                const r = getResponse(ci.id)
+                                return r && r.status !== 'not_started' ? (
+                                  <p className="text-xs text-rose-600 mb-3">This item has a recorded response from an auditor. Deleting it will remove that response.</p>
+                                ) : (
+                                  <p className="text-xs text-rose-500 mb-3">This action cannot be undone.</p>
+                                )
+                              })()}
+                              <div className="flex items-center gap-2">
+                                <button type="button" onClick={() => handleDeleteItem(ci.id)}
+                                  className="px-3 py-1.5 bg-rose-600 text-white text-xs font-medium rounded-lg hover:bg-rose-700 transition-colors">Delete</button>
+                                <button type="button" onClick={() => setConfirmDeleteItemId(null)}
+                                  className="px-3 py-1.5 bg-white text-slate-600 text-xs font-medium rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors">Cancel</button>
+                              </div>
                             </div>
                           )}
 

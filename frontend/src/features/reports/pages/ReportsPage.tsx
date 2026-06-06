@@ -17,7 +17,7 @@ import {
 import { useStore } from '../../../store/useStore'
 import * as db from '../../../lib/db'
 import type { DbAuditReport, DbComplianceScore } from '../../../lib/db'
-import type { SubmissionStatus } from '../../../types'
+import type { AuditStatus, SubmissionStatus } from '../../../types'
 import ScoreRing from '../../audits/components/ScoreRing'
 import StatusBadge from '../../audits/components/StatusBadge'
 
@@ -27,11 +27,11 @@ const PLATFORM_COLOR: Record<string, string> = {
   BeReal: 'bg-slate-700', 'X (Twitter)': 'bg-slate-900',
 }
 
-const SUBMISSION_STATUSES: { value: SubmissionStatus | 'all'; label: string }[] = [
-  { value: 'all', label: 'All Submissions' },
-  { value: 'pending_review', label: 'Pending Review' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'rejected', label: 'Rejected' },
+const PROJECT_STATUSES: { value: AuditStatus | 'all'; label: string }[] = [
+  { value: 'all', label: 'All Projects' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'under_review', label: 'Under Review' },
+  { value: 'completed', label: 'Completed' },
 ]
 
 function StatusChip({ status }: { status: SubmissionStatus }) {
@@ -81,7 +81,7 @@ export default function ReportsPage() {
   const [reports, setReports] = useState<DbAuditReport[]>([])
   const [loadingReports, setLoadingReports] = useState(true)
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<SubmissionStatus | 'all'>('all')
+  const [statusFilter, setStatusFilter] = useState<AuditStatus | 'all'>('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [showFilters, setShowFilters] = useState(false)
@@ -96,7 +96,7 @@ export default function ReportsPage() {
     setLoadingReports(true)
     try {
       const data = await db.fetchAuditReports(currentUserId, {
-        statusFilter: statusFilter === 'all' ? undefined : statusFilter,
+        projectStatusFilter: statusFilter === 'all' ? undefined : statusFilter,
         search: search || undefined,
         dateFrom: dateFrom || undefined,
         dateTo: dateTo || undefined,
@@ -191,7 +191,7 @@ export default function ReportsPage() {
                       <div className="pt-2 space-y-2">
                         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
                           className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-300 text-slate-700">
-                          {SUBMISSION_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                          {PROJECT_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
                         <div className="flex gap-2">
                           <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
@@ -199,7 +199,7 @@ export default function ReportsPage() {
                           <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
                             className="flex-1 text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-300 text-slate-700" />
                         </div>
-                        <button type="button" onClick={() => { setSearch(''); setStatusFilter('all'); setDateFrom(''); setDateTo('') }}
+                        <button type="button" onClick={() => { setSearch(''); setStatusFilter('all' as AuditStatus | 'all'); setDateFrom(''); setDateTo('') }}
                           className="text-xs text-slate-400 hover:text-slate-600 transition-colors">
                           Clear filters
                         </button>

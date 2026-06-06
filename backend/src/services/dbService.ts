@@ -1,5 +1,5 @@
 import https from 'https'
-﻿import crypto from 'crypto'
+import crypto from 'crypto'
 
 
 
@@ -21,9 +21,7 @@ import type { AuditStatus, ChecklistItemStatus, Platform, Severity, SubmissionSt
 
 
 
-// ΓöÇΓöÇΓöÇ DB row types ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-
-
+// DB row types 
 
 export interface DbProject {
 
@@ -129,6 +127,8 @@ export interface DbAuditResult {
   notes: string | null
 
   findings: string | null
+
+  evidenceImages: { url: string; name: string }[] | null
 
   timeSubmitted: string
 
@@ -1061,6 +1061,16 @@ export async function saveAuditFindings(projectId: string, itemId: string, userI
   if (error) throw error
 }
 
+export async function saveEvidenceImages(projectId: string, itemId: string, userId: string, images: { url: string; name: string }[]): Promise<void> {
+  const { error } = await supabase
+    .from('Audit_Result')
+    .update({ evidenceImages: images.length > 0 ? images : [] })
+    .eq('projectId', projectId)
+    .eq('itemId', itemId)
+    .eq('userId', userId)
+  if (error) throw error
+}
+
 
 export async function toggleProjectChecklistCategory(projectId: string, guidelineId: string, category: string, enabled: boolean): Promise<void> {
 
@@ -1225,7 +1235,7 @@ export async function fetchAuditResults(projectId: string): Promise<DbAuditResul
 
     .from('Audit_Result')
 
-    .select('resultId,projectId,itemId,userId,guidelineId,result,notes,findings,timeSubmitted')
+    .select('resultId,projectId,itemId,userId,guidelineId,result,notes,findings,evidenceImages,timeSubmitted')
 
     .eq('projectId', projectId)
 
@@ -1357,7 +1367,7 @@ export async function fetchAuditReports(
 
   filters?: {
 
-    statusFilter?: SubmissionStatus
+    projectStatusFilter?: AuditStatus
 
     search?: string
 
@@ -1373,7 +1383,7 @@ export async function fetchAuditReports(
 
     p_user_id: userId,
 
-    p_status_filter: filters?.statusFilter ?? null,
+    p_status_filter: null,
 
     p_search: filters?.search ?? null,
 
@@ -1385,7 +1395,15 @@ export async function fetchAuditReports(
 
   if (error) throw error
 
-  return (data as DbAuditReport[]) ?? []
+  let results = (data as DbAuditReport[]) ?? []
+
+  if (filters?.projectStatusFilter) {
+
+    results = results.filter((r) => r.projectStatus === filters.projectStatusFilter)
+
+  }
+
+  return results
 
 }
 

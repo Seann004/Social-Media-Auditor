@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavigate, Navigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   CaretDownIcon as CaretDown,
@@ -32,13 +32,18 @@ export default function GuidelinesPage() {
   const [selectedItemForModal, setSelectedItemForModal] = useState<ChecklistItem | null>(null)
   const [itemModalTab, setItemModalTab] = useState<'help' | 'traceability'>('help')
 
-  
+
 
   const currentUser = users.find((u) => u.id === currentUserId)
   const isAdmin = currentUser?.role === 'admin'
 
   if (currentUser?.role === 'auditor') return <Navigate to="/projects" replace />
-  const hour = new Date().getHours()
+  const [hour, setHour] = useState(() => new Date().getHours())
+  useEffect(() => {
+    const tick = () => setHour(new Date().getHours())
+    const id = setInterval(tick, 60_000)
+    return () => clearInterval(id)
+  }, [])
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
 
@@ -66,7 +71,7 @@ export default function GuidelinesPage() {
     setExpanded((prev) => { const next = new Set(prev); next.delete(id); return next })
   }
 
-  
+
 
   return (
     <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-8">
@@ -420,12 +425,12 @@ export default function GuidelinesPage() {
                     </div>
 
                     {selectedItemForModal!.verbatimClauseText ? (
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">VERBATIM CLAUSE TEXT</h4>
-                          <p className="text-xs text-slate-700 leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-3.5 whitespace-pre-wrap font-mono">
-                            {selectedItemForModal!.verbatimClauseText}
-                          </p>
-                        </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">VERBATIM CLAUSE TEXT</h4>
+                        <p className="text-xs text-slate-700 leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-3.5 whitespace-pre-wrap font-mono">
+                          {selectedItemForModal!.verbatimClauseText}
+                        </p>
+                      </div>
                     ) : (
                       <p className="text-sm text-slate-400 italic mt-4">No verbatim clause text available.</p>
                     )}

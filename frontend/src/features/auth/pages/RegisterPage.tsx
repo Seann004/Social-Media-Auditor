@@ -40,6 +40,7 @@ export default function RegisterPage() {
   const [passwordTouched, setPasswordTouched] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [registered, setRegistered] = useState(false)
 
   const showRules = passwordTouched && password.length > 0
   const allRulesPassed = passwordValid(password)
@@ -54,21 +55,31 @@ export default function RegisterPage() {
     if (password !== confirmPassword) { setError('Passwords do not match.'); return }
 
     const emailLower = email.trim().toLowerCase()
-    if (users.some((u) => u.name.toLowerCase() === name.trim().toLowerCase())) {
-      setError('An account with this name already exists.')
+    if (users.some((u) => (u as any).email?.toLowerCase() === emailLower)) {
+      setError('An account with this email already exists.')
       return
     }
-    void emailLower
 
     setLoading(true)
     register(email, name.trim(), role, password)
       .then(() => {
         setLoading(false)
-        navigate('/dashboard', { replace: true })
+        setRegistered(true)
+        setTimeout(() => navigate('/dashboard', { replace: true }), 1500)
       })
       .catch((err) => {
         setLoading(false)
-        setError(err instanceof Error ? err.message : (err as any)?.message || 'Registration failed. Check backend connection.')
+        const rawMsg = err instanceof Error ? err.message : (err as any)?.message || ''
+        // Backend wraps errors as JSON: {"error":"..."} — unwrap for display
+        let msg = rawMsg
+        try { msg = (JSON.parse(rawMsg) as { error: string }).error ?? rawMsg } catch { /* not JSON */ }
+        if (msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('already exists')) {
+          setError('An account with this email already exists.')
+        } else if (msg.toLowerCase().includes('fetch failed') || msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network')) {
+          setError('Could not reach the server. Restart the backend and try again.')
+        } else {
+          setError(msg || 'Registration failed. Please try again.')
+        }
       })
   }
 
@@ -253,6 +264,17 @@ export default function RegisterPage() {
                 >
                   <Warning size={14} />
                   {error}
+                </motion.div>
+              )}
+              {registered && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="flex items-center gap-2 text-emerald-700 text-sm bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5"
+                >
+                  <CheckIcon size={14} weight="bold" />
+                  Account created successfully! Redirecting…
                 </motion.div>
               )}
             </AnimatePresence>
