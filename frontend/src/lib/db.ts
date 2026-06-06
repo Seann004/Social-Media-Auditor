@@ -40,7 +40,12 @@ export interface DbChecklistItem {
   itemDescription: string
   severity: Severity
   reference: string | null
-  feature: string | null
+  itemName: string | null
+  itemCode: string | null
+  rowType: string | null
+  helpText: string | null
+  verbatimClauseText: string | null
+  answerOptions: string | null
 }
 
 export interface DbAuditResult {
@@ -51,6 +56,7 @@ export interface DbAuditResult {
   guidelineId: string
   result: ChecklistItemStatus
   notes: string | null
+  findings: string | null
   timeSubmitted: string
 }
 
@@ -275,14 +281,25 @@ export async function createChecklistItem(projectId: string, input: {
   text: string
   severity: Severity
   reference?: string
-  feature?: string
   guidelineId: string
+  itemName?: string
+  itemCode?: string
+  helpText?: string
+  verbatimClauseText?: string
+  answerOptions?: string
 }): Promise<string> {
   const res = await request<{ itemId: string }>(`/projects/${projectId}/checklist/items`, {
     method: 'POST',
     body: JSON.stringify(input),
   })
   return res.itemId
+}
+
+export async function saveAuditFindings(projectId: string, itemId: string, userId: string, findings: string): Promise<void> {
+  await request(`/projects/${projectId}/results/${itemId}/findings`, {
+    method: 'PATCH',
+    body: JSON.stringify({ userId, findings }),
+  })
 }
 
 export async function toggleProjectChecklistCategory(projectId: string, input: {

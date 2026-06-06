@@ -47,7 +47,12 @@ export interface DbChecklistItem {
   itemDescription: string
   severity: Severity
   reference: string | null
-  feature: string | null
+  itemName: string | null
+  itemCode: string | null
+  rowType: string | null
+  helpText: string | null
+  verbatimClauseText: string | null
+  answerOptions: string | null
 }
 
 export interface DbAuditResult {
@@ -58,6 +63,7 @@ export interface DbAuditResult {
   guidelineId: string
   result: ChecklistItemStatus
   notes: string | null
+  findings: string | null
   timeSubmitted: string
 }
 
@@ -324,7 +330,7 @@ export async function fetchGuidelineItems(guidelineId: string): Promise<DbCheckl
 
   const { data: items, error: itemsError } = await supabase
     .from('Checklist_Item')
-    .select('itemId,category,itemDescription,severity,reference,feature')
+    .select('itemId,category,itemDescription,severity,reference,itemName,itemCode,rowType,helpText,verbatimClauseText,answerOptions')
     .eq('checklistId', checklistId)
   if (itemsError) throw itemsError
 
@@ -335,7 +341,12 @@ export async function fetchGuidelineItems(guidelineId: string): Promise<DbCheckl
     itemDescription: i.itemDescription,
     severity: i.severity,
     reference: i.reference,
-    feature: i.feature
+    itemName: i.itemName,
+    itemCode: i.itemCode,
+    rowType: i.rowType,
+    helpText: i.helpText,
+    verbatimClauseText: i.verbatimClauseText,
+    answerOptions: i.answerOptions,
   }))
 }
 
@@ -385,7 +396,7 @@ export async function initializeProjectChecklists(projectId: string): Promise<vo
 
         const { data: globalItems, error: itemsError } = await supabase
           .from('Checklist_Item')
-          .select('itemDescription,category,severity,reference,feature,itemId')
+          .select('itemId,itemDescription,category,severity,reference,itemName,itemCode,rowType,helpText,verbatimClauseText,answerOptions')
           .order('itemId', { ascending: true })
           .eq('checklistId', globalChecklistId)
         if (itemsError) throw itemsError
@@ -398,7 +409,12 @@ export async function initializeProjectChecklists(projectId: string): Promise<vo
             category: item.category,
             severity: item.severity,
             reference: item.reference,
-            feature: item.feature
+            itemName: item.itemName,
+            itemCode: item.itemCode,
+            rowType: item.rowType,
+            helpText: item.helpText,
+            verbatimClauseText: item.verbatimClauseText,
+            answerOptions: item.answerOptions,
           }))
 
           const { error: insItemsError } = await supabase
@@ -425,7 +441,7 @@ export async function fetchProjectChecklistItems(projectId: string): Promise<DbC
 
   const { data: items, error: itemsError } = await supabase
     .from('Checklist_Item')
-    .select('itemId,checklistId,category,itemDescription,severity,reference,feature')
+    .select('itemId,checklistId,category,itemDescription,severity,reference,itemName,itemCode,rowType,helpText,verbatimClauseText,answerOptions')
     .in('checklistId', checklistIds)
     .order('itemId', { ascending: true })
   if (itemsError) throw itemsError
@@ -437,7 +453,12 @@ export async function fetchProjectChecklistItems(projectId: string): Promise<DbC
     itemDescription: i.itemDescription,
     severity: i.severity,
     reference: i.reference,
-    feature: i.feature
+    itemName: i.itemName,
+    itemCode: i.itemCode,
+    rowType: i.rowType,
+    helpText: i.helpText,
+    verbatimClauseText: i.verbatimClauseText,
+    answerOptions: i.answerOptions,
   }))
 }
 
@@ -446,7 +467,11 @@ export async function addProjectChecklistItem(projectId: string, guidelineId: st
   text: string
   severity: Severity
   reference?: string
-  feature?: string
+  itemName?: string
+  itemCode?: string
+  helpText?: string
+  verbatimClauseText?: string
+  answerOptions?: string
 }): Promise<string> {
   const { data: checklist, error: clError } = await supabase
     .from('Checklist')
@@ -468,10 +493,24 @@ export async function addProjectChecklistItem(projectId: string, guidelineId: st
       category: item.category,
       severity: item.severity,
       reference: item.reference || null,
-      feature: item.feature || null
+      itemName: item.itemName || null,
+      itemCode: item.itemCode || null,
+      helpText: item.helpText || null,
+      verbatimClauseText: item.verbatimClauseText || null,
+      answerOptions: item.answerOptions || null,
     })
   if (itemError) throw itemError
   return newItemId
+}
+
+export async function saveAuditFindings(projectId: string, itemId: string, userId: string, findings: string): Promise<void> {
+  const { error } = await supabase
+    .from('Audit_Result')
+    .update({ findings: findings || null })
+    .eq('projectId', projectId)
+    .eq('itemId', itemId)
+    .eq('userId', userId)
+  if (error) throw error
 }
 
 export async function toggleProjectChecklistCategory(projectId: string, guidelineId: string, category: string, enabled: boolean): Promise<void> {
@@ -506,11 +545,10 @@ export async function toggleProjectChecklistCategory(projectId: string, guidelin
 
     const { data: globalItems, error: itemsError } = await supabase
       .from('Checklist_Item')
-      .select('itemDescription,category,severity,reference,feature,itemId')
-          .order('itemId', { ascending: true })
+      .select('itemId,itemDescription,category,severity,reference,itemName,itemCode,rowType,helpText,verbatimClauseText,answerOptions')
+      .order('itemId', { ascending: true })
       .eq('checklistId', globalChecklistId)
       .eq('category', category)
-      .order('itemId', { ascending: true })
     if (itemsError) throw itemsError
 
     if (globalItems && globalItems.length > 0) {
@@ -521,7 +559,12 @@ export async function toggleProjectChecklistCategory(projectId: string, guidelin
         category: item.category,
         severity: item.severity,
         reference: item.reference,
-        feature: item.feature
+        itemName: item.itemName,
+        itemCode: item.itemCode,
+        rowType: item.rowType,
+        helpText: item.helpText,
+        verbatimClauseText: item.verbatimClauseText,
+        answerOptions: item.answerOptions,
       }))
       const { error: insError } = await supabase
         .from('Checklist_Item')
@@ -550,7 +593,7 @@ export async function deleteChecklistItem(itemId: string): Promise<void> {
 export async function fetchAuditResults(projectId: string): Promise<DbAuditResult[]> {
   const { data, error } = await supabase
     .from('Audit_Result')
-    .select('resultId,projectId,itemId,userId,guidelineId,result,notes,timeSubmitted')
+    .select('resultId,projectId,itemId,userId,guidelineId,result,notes,findings,timeSubmitted')
     .eq('projectId', projectId)
   if (error) throw error
   return (data as DbAuditResult[]) ?? []
@@ -672,7 +715,11 @@ export async function createGuideline(input: {
     text: string
     severity: Severity
     reference?: string
-    feature?: string
+    itemName?: string
+    itemCode?: string
+    helpText?: string
+    verbatimClauseText?: string
+    answerOptions?: string
   }[]
 }): Promise<void> {
   const { guideline, items } = input
@@ -735,7 +782,11 @@ export async function createGuideline(input: {
     category: item.category,
     severity: item.severity,
     reference: item.reference || null,
-    feature: item.feature || null
+    itemName: item.itemName || null,
+    itemCode: item.itemCode || null,
+    helpText: item.helpText || null,
+    verbatimClauseText: item.verbatimClauseText || null,
+    answerOptions: item.answerOptions || null,
   }))
 
   // Chunk the items to avoid Supabase connection timeouts and payload limits

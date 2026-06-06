@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -6,9 +6,16 @@ import {
   ShieldCheckIcon as ShieldCheck,
 } from '@phosphor-icons/react'
 import Sidebar from './Sidebar'
+import { useStore } from '../store/useStore'
 
 export default function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const initFromDb = useStore((s) => s.initFromDb)
+
+  useEffect(() => {
+    initFromDb()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div className="flex h-screen overflow-hidden bg-page-bg">

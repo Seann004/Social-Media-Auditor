@@ -6,6 +6,7 @@ import {
   CheckCircleIcon as CheckCircle,
   XCircleIcon as XCircle,
   MinusCircleIcon as MinusCircle,
+  CircleHalfIcon as CircleHalf,
   NotePencilIcon as NotePencil,
   CaretRightIcon as CaretRight,
   FlagIcon as Flag,
@@ -37,12 +38,15 @@ const AUDITOR_RESPONSE_OPTIONS: {
   value: ChecklistItemStatus; label: string; icon: typeof CheckCircle
   active: string; inactive: string
 }[] = [
-  { value: 'compliant', label: 'Pass', icon: CheckCircle,
+  { value: 'compliant', label: 'Yes', icon: CheckCircle,
     active: 'bg-emerald-600 text-white ring-emerald-600',
     inactive: 'bg-white text-slate-500 ring-slate-200 hover:ring-emerald-300 hover:text-emerald-600' },
-  { value: 'non_compliant', label: 'Fail', icon: XCircle,
+  { value: 'non_compliant', label: 'No', icon: XCircle,
     active: 'bg-rose-600 text-white ring-rose-600',
     inactive: 'bg-white text-slate-500 ring-slate-200 hover:ring-rose-300 hover:text-rose-600' },
+  { value: 'partially', label: 'Partially', icon: CircleHalf,
+    active: 'bg-amber-500 text-white ring-amber-500',
+    inactive: 'bg-white text-slate-500 ring-slate-200 hover:ring-amber-300 hover:text-amber-600' },
   { value: 'not_applicable', label: 'N/A', icon: MinusCircle,
     active: 'bg-slate-500 text-white ring-slate-500',
     inactive: 'bg-white text-slate-500 ring-slate-200 hover:ring-slate-400 hover:text-slate-600' },
@@ -57,7 +61,7 @@ export default function AuditPage() {
   const { id } = useParams<{ id: string }>()
   const {
     projects, guidelines, users, currentUserId,
-    setResponse, getProjectScore, getCategoryScore,
+    setResponse, saveFindings, getProjectScore, getCategoryScore,
     submitForReview, reviewSubmission,
     addAuditorToProject, removeAuditorFromProject,
     updateChecklistItem, deleteChecklistItem,
@@ -67,6 +71,7 @@ export default function AuditPage() {
   } = useStore()
 
   const { checklistItems, loading, reload } = useProjectData(id)
+  const storeLoading = useStore((s) => s.loading)
   // Read responses directly from the store so optimistic updates re-render immediately
   const responses = useStore((s) => s.responses)
 
@@ -186,6 +191,7 @@ export default function AuditPage() {
 
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
   const [noteValues, setNoteValues] = useState<Record<string, string>>({})
+  const [findingsValues, setFindingsValues] = useState<Record<string, string>>({})
 
   // Review panel state
   const [showReviewPanel, setShowReviewPanel] = useState(false)
@@ -207,6 +213,8 @@ export default function AuditPage() {
   // Manage Guidelines
   const [selectedGuidelineIds, setSelectedGuidelineIds] = useState<string[]>(project?.guidelineIds ?? [])
   const [savingGuidelines, setSavingGuidelines] = useState(false)
+  const [showManageGuidelines, setShowManageGuidelines] = useState(false)
+  const [activeGuidelineTab, setActiveGuidelineTab] = useState<string>(project?.guidelineIds[0] ?? '')
 
   // Manage Scope (features)
   const [scopeInput, setScopeInput] = useState('')
@@ -221,6 +229,40 @@ export default function AuditPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.status])
+
+  // Sync activeGuidelineTab when project loads (guidelineIds[0] may be empty on first render)
+  useEffect(() => {
+    if (projectGuidelines.length > 0 && !projectGuidelines.find((g) => g.id === activeGuidelineTab)) {
+      setActiveGuidelineTab(projectGuidelines[0].id)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectGuidelines.length])
+
+  // Checklist items scoped to the active guideline tab
+  const guidelineItems = useMemo(
+    () => activeGuidelineTab
+      ? checklistItems.filter((ci) => ci.guidelineId === activeGuidelineTab)
+      : checklistItems,
+    [checklistItems, activeGuidelineTab],
+  )
+
+  // Sidebar sections scoped to the active guideline tab
+  const guidelineSections = useMemo(
+    () => sections
+      .map((section) => ({
+        ...section,
+        subcategories: section.subcategories.filter((sub) => sub.guidelineId === activeGuidelineTab),
+      }))
+      .filter((section) => section.subcategories.length > 0),
+    [sections, activeGuidelineTab],
+  )
+
+  // Reset selected category to first category of the new guideline tab
+  useEffect(() => {
+    const firstCat = guidelineSections[0]?.subcategories[0]?.originalCategory ?? ''
+    setSelectedCategory(firstCat)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeGuidelineTab])
 
   // Evidence images: itemId → array of { url, name }
   const [evidence, setEvidence] = useState<Record<string, { url: string; name: string }[]>>({})
@@ -277,6 +319,13 @@ export default function AuditPage() {
   }
 
   if (!project) {
+    if (storeLoading) {
+      return (
+        <div className="flex items-center justify-center min-h-[100dvh]">
+          <Spinner size={28} className="animate-spin text-slate-300" />
+        </div>
+      )
+    }
     return (
       <div className="flex items-center justify-center min-h-[100dvh]">
         <div className="text-center">
@@ -289,7 +338,11 @@ export default function AuditPage() {
 
   const headAuditor = users.find((u) => u.id === project.headAuditorId)
   const auditors = project.auditorIds.map((uid) => users.find((u) => u.id === uid)).filter(Boolean) as typeof users
-  const categoryItems = checklistItems.filter((ci) => ci.category === selectedCategory)
+  const categoryItems = guidelineItems.filter((ci) => ci.category === selectedCategory)
+
+  const guidelinesDirty =
+    selectedGuidelineIds.length !== (project.guidelineIds.length ?? 0) ||
+    selectedGuidelineIds.some((gid) => !project.guidelineIds.includes(gid))
 
   const allAnswered = checklistItems.length > 0 && checklistItems.every((ci) => {
     const resp = responses[`${id}__${ci.id}`]
@@ -315,6 +368,11 @@ export default function AuditPage() {
     if (current && current.status !== 'not_started') {
       await setResponse(id!, itemId, guidelineId, current.status, notes)
     }
+  }
+
+  async function handleFindingsBlur(itemId: string) {
+    const findings = findingsValues[itemId] ?? ''
+    await saveFindings(id!, itemId, findings)
   }
 
   async function handleAddItem() {
@@ -648,33 +706,95 @@ export default function AuditPage() {
 
       {/* Manage Guidelines tab */}
       {isHeadAuditor && activeTab === 'guidelines' && (
-        <div className="px-8 py-8 max-w-2xl">
-          <h2 className="text-base font-semibold text-slate-800 mb-1">Manage Guideline Used</h2>
-          <p className="text-sm text-slate-500 mb-5">Select which regulatory guidelines apply to this audit project.</p>
-          <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white mb-4">
-            {guidelines.filter(g => !g.isDeleted).map((g) => {
-              const checked = selectedGuidelineIds.includes(g.id)
-              return (
-                <label key={g.id} className={['flex items-start gap-4 px-5 py-4 cursor-pointer transition-colors', checked ? 'bg-blue-50/60' : 'hover:bg-slate-50'].join(' ')}>
-                  <input type="checkbox" className="sr-only" checked={checked}
-                    onChange={() => setSelectedGuidelineIds((prev) => checked ? prev.filter((x) => x !== g.id) : [...prev, g.id])} />
-                  <div className={['w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 mt-0.5 transition-all', checked ? 'bg-blue-600 border-blue-600' : 'border-slate-300 bg-white'].join(' ')}>
-                    {checked && <CheckIcon size={11} weight="bold" className="text-white" />}
-                  </div>
-                  <div className="flex-1">
-                    <p className={`text-sm font-semibold ${checked ? 'text-blue-800' : 'text-slate-800'}`}>{g.name}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">{g.description}</p>
-                  </div>
-                  <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded shrink-0">v{g.version}</span>
-                </label>
-              )
-            })}
+        <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
+          <div className="px-8 py-8 w-full max-w-5xl">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-base font-semibold text-slate-800 mb-1">Guidelines in Use</h2>
+                <p className="text-sm text-slate-500">Regulatory frameworks applied to this audit project.</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {guidelinesDirty && (
+                  <button type="button" onClick={handleSaveGuidelines} disabled={savingGuidelines}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-60 transition-colors">
+                    {savingGuidelines ? <Spinner size={13} className="animate-spin" /> : <CheckIcon size={13} weight="bold" />}
+                    Save Changes
+                  </button>
+                )}
+                <button type="button"
+                  onClick={() => setShowManageGuidelines((v) => !v)}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                  <Plus size={13} /> {showManageGuidelines ? 'Done' : 'Manage Guidelines'}
+                </button>
+              </div>
+            </div>
+
+            {/* Currently selected guidelines */}
+            {selectedGuidelineIds.length === 0 ? (
+              <p className="text-sm text-slate-400 py-10 text-center border border-dashed border-slate-200 rounded-xl mb-6">
+                No guidelines selected. Click "Manage Guidelines" to add some.
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white mb-6">
+                {guidelines
+                  .filter((g) => selectedGuidelineIds.includes(g.id))
+                  .map((g) => (
+                    <div key={g.id} className="flex items-center gap-4 px-6 py-4">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-slate-800">{g.name}</p>
+                        <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{g.description}</p>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded">v{g.version}</span>
+                        <button type="button"
+                          onClick={() => { setActiveGuidelineTab(g.id); setActiveTab('checklist') }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors">
+                          <ListChecks size={12} /> Edit Checklist
+                        </button>
+                        <button type="button"
+                          onClick={() => setSelectedGuidelineIds((prev) => prev.filter((x) => x !== g.id))}
+                          className="p-1 text-slate-300 hover:text-rose-500 transition-colors" title="Remove">
+                          <XIcon size={14} weight="bold" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {/* Add guidelines panel */}
+            <AnimatePresence>
+              {showManageGuidelines && (
+                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                  <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-3">Add Guidelines</p>
+                  {guidelines.filter((g) => !g.isDeleted && !selectedGuidelineIds.includes(g.id)).length === 0 ? (
+                    <p className="text-sm text-slate-400 py-8 text-center border border-dashed border-slate-200 rounded-xl">
+                      All available guidelines are already selected.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white">
+                      {guidelines
+                        .filter((g) => !g.isDeleted && !selectedGuidelineIds.includes(g.id))
+                        .map((g) => (
+                          <label key={g.id} className="flex items-center gap-4 px-6 py-4 cursor-pointer hover:bg-slate-50 transition-colors">
+                            <input type="checkbox" className="sr-only"
+                              onChange={() => setSelectedGuidelineIds((prev) => [...prev, g.id])} />
+                            <div className="w-5 h-5 rounded border-2 border-slate-300 bg-white flex items-center justify-center shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold text-slate-800">{g.name}</p>
+                              <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{g.description}</p>
+                            </div>
+                            <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded shrink-0">v{g.version}</span>
+                          </label>
+                        ))}
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
-          <button type="button" onClick={handleSaveGuidelines} disabled={savingGuidelines}
-            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-60 transition-colors">
-            {savingGuidelines ? <Spinner size={14} className="animate-spin" /> : <CheckIcon size={14} weight="bold" />}
-            Save Guidelines
-          </button>
         </div>
       )}
 
@@ -717,6 +837,23 @@ export default function AuditPage() {
       {/* Checklist view */}
       {(!isHeadAuditor || activeTab === 'checklist') && (
         <div className="flex flex-col flex-1 min-h-0">
+          {/* Guideline tabs — one per selected guideline, visible to all roles */}
+          {projectGuidelines.length > 0 && (
+            <div className="border-b border-slate-200 bg-white px-3 md:px-8 flex items-center gap-0 overflow-x-auto scrollbar-none shrink-0">
+              {projectGuidelines.map((g) => (
+                <button key={g.id} type="button"
+                  onClick={() => setActiveGuidelineTab(g.id)}
+                  className={[
+                    'px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap',
+                    activeGuidelineTab === g.id
+                      ? 'border-blue-600 text-blue-700 bg-blue-50/40'
+                      : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50',
+                  ].join(' ')}>
+                  {g.shortName}
+                </button>
+              ))}
+            </div>
+          )}
           {/* Mobile: category select dropdown */}
           <div className="md:hidden px-4 py-3 bg-white border-b border-slate-200 shrink-0">
             <select
@@ -724,7 +861,7 @@ export default function AuditPage() {
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="w-full text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-300"
             >
-              {sections.map((section) => (
+              {guidelineSections.map((section) => (
                 <optgroup key={section.sectionName} label={section.sectionName}>
                   {section.subcategories.map((sub) => {
                     const cs = sub.catScore
@@ -749,7 +886,7 @@ export default function AuditPage() {
               </div>
             ) : (
               <ul className="space-y-3 list-none m-0 p-0">
-                {sections.map((section) => {
+                {guidelineSections.map((section) => {
                   const isExpanded = expandedSections.has(section.sectionName)
                   
                   return (
@@ -848,9 +985,30 @@ export default function AuditPage() {
           <div className="flex-1 overflow-y-auto">
             <AnimatePresence mode="wait">
               <motion.div key={selectedCategory} variants={container} initial="hidden" animate="show" className="px-8 py-8 max-w-4xl">
-                <div className="flex items-center justify-between mb-5">
-                  <h2 className="text-lg font-semibold text-slate-800 tracking-tight">{selectedCategory || 'Select a category'}</h2>
-                  <p className="text-sm text-slate-400 font-mono">{categoryItems.length} item{categoryItems.length !== 1 ? 's' : ''}</p>
+                <div className="mb-5">
+                  {selectedCategory && selectedCategory.includes(' > ') && (
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 mb-1">
+                      {selectedCategory.split(' > ')[0]}
+                    </p>
+                  )}
+                  <div className="flex items-start justify-between gap-4">
+                    <h2 className="text-base font-semibold text-slate-800 leading-snug min-w-0 flex-1">
+                      {selectedCategory
+                        ? selectedCategory.includes(' > ')
+                          ? selectedCategory.split(' > ').slice(1).join(' > ')
+                          : selectedCategory
+                        : 'Select a category'}
+                    </h2>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-xs text-slate-400 font-mono tabular-nums">{categoryItems.length} item{categoryItems.length !== 1 ? 's' : ''}</span>
+                      {isHeadAuditor && selectedCategory && (
+                        <button type="button" onClick={() => setShowAddItemModal(true)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors">
+                          <Plus size={12} weight="bold" /> Add Item
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 {isHeadAuditor && (
@@ -913,13 +1071,19 @@ export default function AuditPage() {
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                                   <SeverityBadge severity={ci.severity} />
+                                  {ci.itemCode && (
+                                    <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">{ci.itemCode}</span>
+                                  )}
                                   {currentStatus === 'needs_review' && (
                                     <span className="flex items-center gap-1 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md font-medium">
                                       <Flag size={9} weight="fill" /> Flagged
                                     </span>
                                   )}
                                 </div>
-                                <p className="text-base text-slate-800 leading-relaxed">{ci.text}</p>
+                                {ci.itemName && (
+                                  <p className="text-sm font-semibold text-slate-800 mb-1">{ci.itemName}</p>
+                                )}
+                                <p className="text-sm text-slate-600 leading-relaxed">{ci.text}</p>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 <button
@@ -1012,15 +1176,36 @@ export default function AuditPage() {
                               <span className={['flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ring-1',
                                 currentStatus === 'compliant' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
                                 : currentStatus === 'non_compliant' ? 'bg-rose-50 text-rose-700 ring-rose-200'
+                                : currentStatus === 'partially' ? 'bg-amber-50 text-amber-700 ring-amber-200'
                                 : currentStatus === 'not_applicable' ? 'bg-slate-100 text-slate-600 ring-slate-200'
-                                : 'bg-amber-50 text-amber-700 ring-amber-200',
+                                : 'bg-violet-50 text-violet-700 ring-violet-200',
                               ].join(' ')}>
                                 {currentStatus === 'compliant' && <CheckCircle size={12} weight="fill" />}
                                 {currentStatus === 'non_compliant' && <XCircle size={12} weight="fill" />}
+                                {currentStatus === 'partially' && <CircleHalf size={12} weight="fill" />}
                                 {currentStatus === 'not_applicable' && <MinusCircle size={12} weight="fill" />}
                                 {currentStatus === 'needs_review' && <Flag size={12} weight="fill" />}
-                                {currentStatus === 'compliant' ? 'Pass' : currentStatus === 'non_compliant' ? 'Fail' : currentStatus === 'not_applicable' ? 'N/A' : 'Flagged'}
+                                {currentStatus === 'compliant' ? 'Yes'
+                                  : currentStatus === 'non_compliant' ? 'No'
+                                  : currentStatus === 'partially' ? 'Partially'
+                                  : currentStatus === 'not_applicable' ? 'N/A'
+                                  : 'Flagged'}
                               </span>
+                            </div>
+                          )}
+
+                          {/* Findings input — always visible when auditor has responded */}
+                          {isAuditor && currentStatus !== 'not_started' && (
+                            <div className="mt-3">
+                              <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-1">Findings</label>
+                              <textarea
+                                value={findingsValues[ci.id] ?? getResponse(ci.id)?.findings ?? ''}
+                                onChange={(e) => setFindingsValues((prev) => ({ ...prev, [ci.id]: e.target.value }))}
+                                onBlur={() => handleFindingsBlur(ci.id)}
+                                placeholder="Describe what you observed on the platform…"
+                                rows={2}
+                                className="w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed"
+                              />
                             </div>
                           )}
 
@@ -1033,7 +1218,7 @@ export default function AuditPage() {
                                   <textarea value={currentNotes}
                                     onChange={(e) => setNoteValues((prev) => ({ ...prev, [ci.id]: e.target.value }))}
                                     onBlur={() => handleNotesBlur(ci.id, ci.guidelineId)}
-                                    placeholder="Record observations, evidence references, or remediation notes…" rows={3}
+                                    placeholder="Record evidence references or remediation notes…" rows={2}
                                     className="mt-3 w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed" />
                                 </motion.div>
                               )}
@@ -1082,17 +1267,6 @@ export default function AuditPage() {
         </div>
       )}
 
-      {isHeadAuditor && (
-        <div className="mt-5 flex justify-end px-8 pb-8 max-w-4xl">
-          <button
-            type="button"
-            onClick={() => setShowAddItemModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
-          >
-            <Plus size={12} weight="bold" /> Add Checklist Item
-          </button>
-        </div>
-      )}
 
       {/* Add Checklist Item Modal */}
       <AnimatePresence>
@@ -1144,19 +1318,12 @@ export default function AuditPage() {
                       <SeverityBadge severity={selectedItemForModal!.severity} />
                     </div>
 
-                    {(() => {
-                      const featureText = selectedItemForModal!.feature || '';
-                      const splitIdx = featureText.indexOf('[TRACEABILITY]');
-                      let helpText = splitIdx !== -1 ? featureText.substring(0, splitIdx).trim() : featureText;
-                      return (
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">HELP & AUDIT GUIDANCE</h4>
-                          <p className="text-xs text-slate-600 leading-relaxed bg-blue-50/30 border border-blue-100/50 rounded-xl p-3.5 whitespace-pre-wrap">
-                            {helpText || 'No additional audit instructions provided for this item.'}
-                          </p>
-                        </div>
-                      );
-                    })()}
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">HELP & AUDIT GUIDANCE</h4>
+                      <p className="text-xs text-slate-600 leading-relaxed bg-blue-50/30 border border-blue-100/50 rounded-xl p-3.5 whitespace-pre-wrap">
+                        {selectedItemForModal!.helpText || 'No additional audit instructions provided for this item.'}
+                      </p>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -1167,21 +1334,16 @@ export default function AuditPage() {
                       </span>
                     </div>
 
-                    {(() => {
-                      const featureText = selectedItemForModal!.feature || '';
-                      const splitIdx = featureText.indexOf('[TRACEABILITY]');
-                      let traceText = splitIdx !== -1 ? featureText.substring(splitIdx + '[TRACEABILITY]'.length).trim() : '';
-                      return traceText ? (
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">TRACEABILITY MAPPING</h4>
-                          <p className="text-xs text-slate-700 leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-3.5 whitespace-pre-wrap font-mono">
-                            {traceText}
-                          </p>
-                        </div>
-                      ) : (
-                        <p className="text-sm text-slate-400 italic mt-4">No traceability mapping available.</p>
-                      );
-                    })()}
+                    {selectedItemForModal!.verbatimClauseText ? (
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">VERBATIM CLAUSE TEXT</h4>
+                        <p className="text-xs text-slate-700 leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-3.5 whitespace-pre-wrap font-mono">
+                          {selectedItemForModal!.verbatimClauseText}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-400 italic mt-4">No verbatim clause text available.</p>
+                    )}
                   </>
                 )}
               </div>
