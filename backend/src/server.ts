@@ -222,18 +222,25 @@ app.get('/api/projects/:id/checklist', async (req, res) => {
 
 app.post('/api/projects/:id/checklist/items', async (req, res) => {
   try {
-    const { category, text, severity, reference, feature, guidelineId } = req.body
+    const { category, text, severity, reference, guidelineId, itemName, itemCode, helpText, verbatimClauseText, answerOptions } = req.body
     const projectId = req.params.id
     const itemId = await db.addProjectChecklistItem(projectId, guidelineId, {
-      category,
-      text,
-      severity,
-      reference,
-      feature
+      category, text, severity, reference, itemName, itemCode, helpText, verbatimClauseText, answerOptions,
     })
     res.status(201).json({ itemId })
   } catch (error) {
     console.error('Error adding checklist item:', error)
+    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+  }
+})
+
+app.patch('/api/projects/:projectId/results/:itemId/findings', async (req, res) => {
+  try {
+    const { userId, findings } = req.body
+    await db.saveAuditFindings(req.params.projectId, req.params.itemId, userId, findings ?? '')
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Error saving findings:', error)
     res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
   }
 })
@@ -398,7 +405,7 @@ You MUST return your output in JSON format matching this EXACT schema:
       "text": "Detailed check question...",
       "severity": "critical|major|minor",
       "reference": "Clause number",
-      "feature": "A detailed explanation, example, or guidance on what evidence to inspect to check this requirement."
+      "helpText": "A detailed explanation, example, or guidance on what evidence to inspect to check this requirement."
     }
   ]
 }`
@@ -485,7 +492,7 @@ You MUST return your output in JSON format matching this EXACT schema:
           text: s.replace(/^\s*-\s*/, ''),
           severity: matchedKeyword.sev,
           reference: reference || 'Clause Reference',
-          feature: `Verification instruction: Inspect the platform settings and features to ensure compliance with this requirement: "${s}"`
+          helpText: `Verification instruction: Inspect the platform settings and features to ensure compliance with this requirement: "${s}"`
         })
       }
     }
@@ -532,7 +539,7 @@ You MUST return your output in JSON format matching this EXACT schema:
       "text": "Polished check question...",
       "severity": "critical|major|minor",
       "reference": "Clause/Section reference",
-      "feature": "Polished audit guidance or explanation of how to verify this requirement."
+      "helpText": "Polished audit guidance or explanation of how to verify this requirement."
     }
   ]
 }`
@@ -584,7 +591,7 @@ You MUST return your output in JSON format matching this EXACT schema:
         text: item.text,
         severity: item.severity || 'major',
         reference: item.reference || 'N/A',
-        feature: item.feature || `Verify compliance with the child safety rule: "${item.text}"`
+        helpText: item.helpText || `Verify compliance with the child safety rule: "${item.text}"`
       })
     }
 
