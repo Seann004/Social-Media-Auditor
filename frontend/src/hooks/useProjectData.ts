@@ -6,6 +6,7 @@ import type { AuditResponse, ChecklistItem } from '../types'
 interface ProjectData {
   checklistItems: ChecklistItem[]
   responses: Record<string, AuditResponse>
+  evidenceMap: Record<string, { url: string; name: string }[]>
   loading: boolean
   error: string | null
   reload: () => void
@@ -17,6 +18,7 @@ export function useProjectData(projectId: string | undefined): ProjectData {
   const [error, setError] = useState<string | null>(null)
   const [items, setItems] = useState<ChecklistItem[]>([])
   const [responses, setResponses] = useState<Record<string, AuditResponse>>({})
+  const [evidenceMap, setEvidenceMap] = useState<Record<string, { url: string; name: string }[]>>({})
 
   const load = useCallback(async () => {
     if (!projectId || !currentUserId) return
@@ -45,6 +47,7 @@ export function useProjectData(projectId: string | undefined): ProjectData {
       }))
 
       const respMap: Record<string, AuditResponse> = {}
+      const evMap: Record<string, { url: string; name: string }[]> = {}
       for (const r of dbResults) {
         respMap[`${projectId}__${r.itemId}`] = {
           id: r.resultId,
@@ -56,10 +59,14 @@ export function useProjectData(projectId: string | undefined): ProjectData {
           auditorId: r.userId,
           updatedAt: r.timeSubmitted?.split('T')[0] ?? '',
         }
+        if (r.evidenceImages && r.evidenceImages.length > 0) {
+          evMap[r.itemId] = r.evidenceImages
+        }
       }
 
       setItems(mapped)
       setResponses(respMap)
+      setEvidenceMap(evMap)
 
       // Sync into the store so getProjectScore / getCategoryScore work
       useStore.setState((state) => {
@@ -113,5 +120,5 @@ export function useProjectData(projectId: string | undefined): ProjectData {
 
   useEffect(() => { load() }, [load])
 
-  return { checklistItems: items, responses, loading, error, reload: load }
+  return { checklistItems: items, responses, evidenceMap, loading, error, reload: load }
 }
