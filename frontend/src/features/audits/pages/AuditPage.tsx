@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeftIcon as ArrowLeft,
@@ -66,9 +66,10 @@ export default function AuditPage() {
     addAuditorToProject, removeAuditorFromProject,
     updateChecklistItem, deleteChecklistItem,
     syncProjectGuidelines, syncProjectScope,
-    updateProject,
+    updateProject, deleteProject,
     addChecklistItem, toggleProjectChecklistCategory,
   } = useStore()
+  const navigate = useNavigate()
 
   const { checklistItems, loading, reload } = useProjectData(id)
   const storeLoading = useStore((s) => s.loading)
@@ -247,6 +248,10 @@ export default function AuditPage() {
   const [showManageAuditors, setShowManageAuditors] = useState(false)
   const [auditorSearchQuery, setAuditorSearchQuery] = useState('')
 
+  // Delete project
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
   // Edit checklist item
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
   const [selectedItemForModal, setSelectedItemForModal] = useState<ChecklistItem | null>(null)
@@ -424,7 +429,14 @@ export default function AuditPage() {
     selectedGuidelineIds.length !== projectOriginalGuidelineIds.length ||
     selectedGuidelineIds.some((gid) => !projectOriginalGuidelineIds.includes(gid))
 
-  const allAnswered = checklistItems.length > 0 && checklistItems.every((ci) => {
+  // Auditors only see enabled categories — only check those items for submission readiness
+  const enabledCategoryKeys = new Set(
+    allCategories.filter((c) => c.enabled).map((c) => `${c.guidelineId}__${c.category}`)
+  )
+  const submittableItems = isAuditor
+    ? checklistItems.filter((ci) => enabledCategoryKeys.has(`${ci.guidelineId}__${ci.category}`))
+    : checklistItems
+  const allAnswered = submittableItems.length > 0 && submittableItems.every((ci) => {
     const resp = responses[`${id}__${ci.id}`]
     return resp && resp.status !== 'not_started' && resp.status !== 'needs_review'
   })
@@ -536,6 +548,17 @@ helpText: newItemHelp.trim() || undefined,
     try { await syncProjectScope(id!, scopeFeatures) } finally { setSavingScope(false) }
   }
 
+  async function handleDeleteProject() {
+    setDeleting(true)
+    try {
+      await deleteProject(id!)
+      navigate('/projects')
+    } finally {
+      setDeleting(false)
+      setShowDeleteConfirm(false)
+    }
+  }
+
 
 
   const availableToAdd = users.filter(
@@ -576,20 +599,29 @@ helpText: newItemHelp.trim() || undefined,
 
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
             {isHeadAuditor && (
-              <button
-                type="button"
-                onClick={() => setShowManageAuditors((v) => !v)}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-              >
-                <UserPlus size={13} /> Manage Auditors
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowManageAuditors((v) => !v)}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                  <UserPlus size={13} /> Manage Auditors
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-rose-600 bg-white border border-rose-200 rounded-lg hover:bg-rose-50 transition-colors"
+                >
+                  <Trash size={13} /> Delete Project
+                </button>
+              </>
             )}
             {isAuditor && project.submissionStatus === 'not_submitted' && (
               <button
                 type="button"
                 disabled={!canSubmit || submitting}
                 onClick={handleSubmitForReview}
-                title={!canSubmit ? 'Complete all checklist items before submitting' : ''}
+                title={!canSubmit ? `${submittableItems.filter((ci) => { const r = responses[`${id}__${ci.id}`]; return !r || r.status === 'not_started' || r.status === 'needs_review' }).length} item(s) still need a response` : ''}
                 className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {submitting ? <Spinner size={13} className="animate-spin" /> : <PaperPlaneTilt size={13} />}
@@ -1613,6 +1645,55 @@ helpText: newItemHelp.trim() || undefined,
                 >
                   {addingItem ? <Spinner size={12} className="animate-spin" /> : <Plus size={12} weight="bold" />}
                   Add Item
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Project Confirmation Modal */}
+      <AnimatePresence>
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !deleting && setShowDeleteConfirm(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              transition={{ type: 'spring', duration: 0.3 }}
+              className="relative w-full max-w-sm bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 z-10"
+            >
+              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-rose-50 mx-auto mb-4">
+                <Trash size={22} className="text-rose-500" />
+              </div>
+              <h3 className="text-base font-bold text-slate-900 text-center mb-1">Delete Project</h3>
+              <p className="text-sm text-slate-500 text-center mb-6">
+                Are you sure you want to delete <span className="font-semibold text-slate-700">{project.name}</span>? This action cannot be undone.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(false)}
+                  disabled={deleting}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 disabled:opacity-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteProject}
+                  disabled={deleting}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-rose-600 rounded-lg hover:bg-rose-700 disabled:opacity-50 transition-colors"
+                >
+                  {deleting ? <Spinner size={13} className="animate-spin" /> : <Trash size={13} />}
+                  Delete
                 </button>
               </div>
             </motion.div>

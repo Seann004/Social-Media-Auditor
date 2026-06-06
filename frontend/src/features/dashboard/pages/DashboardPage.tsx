@@ -336,33 +336,35 @@ export default function DashboardPage() {
 
         {/* Right panel — team + deadlines */}
         <motion.div variants={item} className="space-y-5">
-          {/* Team */}
-          <div>
-            <h2 className="text-base font-semibold text-slate-800 tracking-tight mb-3">Team</h2>
-            <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden shadow-none">
-              {auditTeam.map((u) => {
-                const projectCount = projects.filter(
-                  (p) => p.auditorIds.includes(u.id) && p.status === 'in_progress',
-                ).length
-                return (
-                  <div key={u.id} className="flex items-center gap-3 px-4 py-3">
-                    <AuditorAvatar user={u} size="sm" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-slate-700 font-medium truncate">{u.name}</p>
-                      <p className="text-[11px] text-slate-400 capitalize">
-                        {u.role.replace('_', ' ')}
-                      </p>
+          {/* Team — only shown to head auditors */}
+          {isHeadAuditor && (
+            <div>
+              <h2 className="text-base font-semibold text-slate-800 tracking-tight mb-3">Team</h2>
+              <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden shadow-none">
+                {auditTeam.map((u) => {
+                  const projectCount = projects.filter(
+                    (p) => p.auditorIds.includes(u.id) && p.status === 'in_progress',
+                  ).length
+                  return (
+                    <div key={u.id} className="flex items-center gap-3 px-4 py-3">
+                      <AuditorAvatar user={u} size="sm" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-slate-700 font-medium truncate">{u.name}</p>
+                        <p className="text-[11px] text-slate-400 capitalize">
+                          {u.role.replace('_', ' ')}
+                        </p>
+                      </div>
+                      {projectCount > 0 && (
+                        <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-medium ring-1 ring-blue-200">
+                          {projectCount} active
+                        </span>
+                      )}
                     </div>
-                    {projectCount > 0 && (
-                      <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-medium ring-1 ring-blue-200">
-                        {projectCount} active
-                      </span>
-                    )}
-                  </div>
-                )
-              })}
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Upcoming deadlines */}
           <div>

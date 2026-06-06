@@ -28,15 +28,22 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
   const navigate = useNavigate()
 
   const isAdmin = user?.role === 'admin'
+  const isAuditor = user?.role === 'auditor'
 
   const nextDue = [...projects]
-    .filter((p) => p.status === 'in_progress' && p.dueDate)
+    .filter((p) => (p.status === 'in_progress' || p.status === 'under_review') && p.dueDate)
     .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0]
 
   const NAV = isAdmin
     ? [
         { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
         { to: '/generator', label: 'Generator', icon: Wand, exact: false },
+      ]
+    : isAuditor
+    ? [
+        { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
+        { to: '/projects', label: 'Audits', icon: FolderOpen, exact: false },
+        { to: '/reports', label: 'Reports', icon: ChartBar, exact: false },
       ]
     : [
         { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
@@ -117,7 +124,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
               Next deadline
             </p>
             <NavLink
-              to={`/projects/${projects.find((p) => p.dueDate === nextDue.dueDate)?.id}`}
+              to={`/projects/${nextDue.id}`}
               className="block px-4 py-3 rounded-xl bg-[var(--color-sidebar-item-hover)] hover:bg-sidebar-item-active transition-colors"
             >
               <p className="text-sidebar-text-hover text-sm font-semibold truncate">{nextDue.name}</p>

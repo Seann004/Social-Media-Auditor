@@ -53,7 +53,7 @@ function ScoreBar({ pct }: { pct: number }) {
   return (
     <div className="flex items-center gap-2">
       <div className="relative h-1.5 w-24 bg-slate-100 rounded-full overflow-hidden">
-        <div className={`absolute inset-y-0 left-0 rounded-full origin-left ${color}`}
+        <div className={`absolute inset-y-0 left-0 w-full rounded-full origin-left ${color}`}
           style={{ transform: `scaleX(${Math.min(pct, 100) / 100})`, transition: 'transform 0.9s cubic-bezier(0.16,1,0.3,1)' }} />
       </div>
       <span className="font-mono text-xs text-slate-600 tabular-nums w-12">{pct > 0 ? `${pct.toFixed(1)}%` : '—'}</span>
@@ -90,7 +90,6 @@ export default function ReportsPage() {
   const [selectedReport, setSelectedReport] = useState<DbAuditReport | null>(null)
   const [complianceScores, setComplianceScores] = useState<DbComplianceScore[]>([])
   const [loadingScores, setLoadingScores] = useState(false)
-  const [generatingReport, setGeneratingReport] = useState(false)
 
   const loadReports = useCallback(async () => {
     if (!currentUserId) return
@@ -122,17 +121,6 @@ export default function ReportsPage() {
       setComplianceScores([])
     } finally {
       setLoadingScores(false)
-    }
-  }
-
-  async function handleGenerateReport() {
-    if (!selectedReport) return
-    setGeneratingReport(true)
-    try {
-      await db.createAuditReport(selectedReport.projectId, currentUserId)
-      await loadReports()
-    } finally {
-      setGeneratingReport(false)
     }
   }
 
@@ -171,17 +159,10 @@ export default function ReportsPage() {
             <p className="text-slate-500 text-base mt-1">View audit submission reports and generate compliance reports.</p>
           </div>
           {selectedReport && (
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={handleGenerateReport} disabled={generatingReport}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white text-sm font-medium rounded-lg hover:bg-slate-900 disabled:opacity-60 transition-colors">
-                {generatingReport ? <Spinner size={14} className="animate-spin" /> : <FileText size={14} />}
-                Generate Report
-              </button>
-              <button type="button" onClick={handleExportPDF}
-                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors shadow-sm">
-                <Download size={14} /> Export PDF
-              </button>
-            </div>
+            <button type="button" onClick={handleExportPDF}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-medium rounded-lg hover:bg-slate-50 transition-colors shadow-sm">
+              <Download size={14} /> Export PDF
+            </button>
           )}
         </div>
 
