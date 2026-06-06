@@ -14,6 +14,7 @@ export type ChecklistItemStatus =
   | 'not_started'
   | 'compliant'
   | 'non_compliant'
+  | 'partially'
   | 'not_applicable'
   | 'needs_review'
 
@@ -47,11 +48,15 @@ export interface ChecklistItem {
   id: string
   guidelineId: string
   category: string
-  feature?: string
   text: string
-  description?: string
   severity: Severity
   reference?: string
+  itemName?: string
+  itemCode?: string
+  rowType?: string
+  helpText?: string
+  verbatimClauseText?: string
+  answerOptions?: string
 }
 
 export interface AuditProject {

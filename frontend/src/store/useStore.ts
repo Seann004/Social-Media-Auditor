@@ -40,7 +40,7 @@ function calcScore(items: ChecklistItem[], responses: ResponseMap, projectId: st
     if (!resp || resp.status === 'not_started' || resp.status === 'needs_review') continue
     answered++
     if (resp.status === 'compliant') compliant++
-    else if (resp.status === 'non_compliant') nonCompliant++
+    else if (resp.status === 'non_compliant' || resp.status === 'partially') nonCompliant++
     else if (resp.status === 'not_applicable') notApplicable++
   }
   const applicable = answered - notApplicable
@@ -94,7 +94,12 @@ function mapDbItem(i: db.DbChecklistItem): ChecklistItem {
     text: i.itemDescription,
     severity: i.severity,
     reference: i.reference ?? undefined,
-    feature: i.feature ?? undefined,
+    itemName: i.itemName ?? undefined,
+    itemCode: i.itemCode ?? undefined,
+    rowType: i.rowType ?? undefined,
+    helpText: i.helpText ?? undefined,
+    verbatimClauseText: i.verbatimClauseText ?? undefined,
+    answerOptions: i.answerOptions ?? undefined,
   }
 }
 
@@ -141,8 +146,12 @@ interface StoreState {
     text: string
     severity: Severity
     reference?: string
-    feature?: string
     guidelineId: string
+    itemName?: string
+    itemCode?: string
+    helpText?: string
+    verbatimClauseText?: string
+    answerOptions?: string
   }) => Promise<void>
   toggleProjectChecklistCategory: (projectId: string, input: {
     category: string
@@ -159,7 +168,8 @@ interface StoreState {
   addSyntheticGuideline: (guideline: Guideline, items: ChecklistItem[]) => Promise<void>
 
   // Audit responses
-  setResponse: (projectId: string, itemId: string, guidelineId: string, status: ChecklistItemStatus, notes?: string) => Promise<void>
+  setResponse: (projectId: string, itemId: string, guidelineId: string, status: ChecklistItemStatus, notes?: string, findings?: string) => Promise<void>
+  saveFindings: (projectId: string, itemId: string, findings: string) => Promise<void>
 
   // Score helpers
   getProjectScore: (projectId: string) => ProjectScore
@@ -375,7 +385,11 @@ export const useStore = create<StoreState>()(
           text: input.text,
           severity: input.severity,
           reference: input.reference,
-          feature: input.feature,
+          itemName: input.itemName,
+          itemCode: input.itemCode,
+          helpText: input.helpText,
+          verbatimClauseText: input.verbatimClauseText,
+          answerOptions: input.answerOptions,
         }
       ]
     }))
@@ -440,7 +454,11 @@ export const useStore = create<StoreState>()(
         text: item.text,
         severity: item.severity,
         reference: item.reference,
-        feature: item.feature
+        helpText: item.helpText,
+        verbatimClauseText: item.verbatimClauseText,
+        itemName: item.itemName,
+        itemCode: item.itemCode,
+        answerOptions: item.answerOptions,
       }))
     })
 
@@ -450,7 +468,18 @@ export const useStore = create<StoreState>()(
     }))
   },
 
-  setResponse: async (projectId, itemId, guidelineId, status, notes = '') => {
+  saveFindings: async (projectId, itemId, findings) => {
+    const { currentUserId } = get()
+    await db.saveAuditFindings(projectId, itemId, currentUserId, findings)
+    set((state) => {
+      const key = rkey(projectId, itemId)
+      const existing = state.responses[key]
+      if (!existing) return state
+      return { responses: { ...state.responses, [key]: { ...existing, findings } } }
+    })
+  },
+
+  setResponse: async (projectId, itemId, guidelineId, status, notes = '', findings) => {
     const { currentUserId } = get()
     // Optimistic update
     set((state) => {
@@ -463,6 +492,7 @@ export const useStore = create<StoreState>()(
             id: existing?.id ?? `r_${Date.now()}`,
             projectId, checklistItemId: itemId,
             status, notes,
+            findings: findings ?? existing?.findings,
             auditorId: currentUserId,
             updatedAt: new Date().toISOString().split('T')[0],
           },
