@@ -52,6 +52,7 @@ export function useProjectData(projectId: string | undefined): ProjectData {
           checklistItemId: r.itemId,
           status: r.result,
           notes: r.notes ?? '',
+          findings: r.findings ?? undefined,
           auditorId: r.userId,
           updatedAt: r.timeSubmitted?.split('T')[0] ?? '',
         }

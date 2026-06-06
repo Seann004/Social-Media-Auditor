@@ -16,7 +16,7 @@ import {
   PencilSimpleIcon as PencilSimple,
   TrashIcon as Trash,
   UserPlusIcon as UserPlus,
-  UserMinusIcon as UserMinus,
+  MagnifyingGlassIcon as MagnifyingGlass,
   WarningCircleIcon as WarningCircle,
   BookOpenIcon as BookOpen,
   ListChecksIcon as ListChecks,
@@ -61,7 +61,7 @@ export default function AuditPage() {
   const { id } = useParams<{ id: string }>()
   const {
     projects, guidelines, users, currentUserId,
-    setResponse, saveFindings, getProjectScore, getCategoryScore,
+    setResponse, saveFindings,
     submitForReview, reviewSubmission,
     addAuditorToProject, removeAuditorFromProject,
     updateChecklistItem, deleteChecklistItem,
@@ -75,8 +75,29 @@ export default function AuditPage() {
   // Read responses directly from the store so optimistic updates re-render immediately
   const responses = useStore((s) => s.responses)
 
+
   const project = projects.find((p) => p.id === id)
-  const score = getProjectScore(id ?? '')
+
+  // Compute score from project-specific items (correct IDs) + store responses (incl. optimistic)
+  const score = useMemo(() => {
+    const total = checklistItems.length
+    let compliant = 0, nonCompliant = 0, notApplicable = 0, answered = 0, weightedCompliant = 0
+    for (const item of checklistItems) {
+      const resp = responses[`${id}__${item.id}`]
+      if (!resp || resp.status === 'not_started' || resp.status === 'needs_review') continue
+      answered++
+      if (resp.status === 'compliant') { compliant++; weightedCompliant += 1 }
+      else if (resp.status === 'partially') { nonCompliant++; weightedCompliant += 0.5 }
+      else if (resp.status === 'non_compliant') nonCompliant++
+      else if (resp.status === 'not_applicable') notApplicable++
+    }
+    const applicable = answered - notApplicable
+    const localPct = applicable > 0 ? Math.round((weightedCompliant / applicable) * 1000) / 10 : 0
+    // Use local computation — it's derived from project-specific item IDs and optimistic responses
+    const percentage = localPct
+    const progress = total > 0 ? Math.round((answered / total) * 100) : 0
+    return { total, compliant, nonCompliant, notApplicable, answered, applicable, percentage, progress }
+  }, [checklistItems, responses, id])
   const currentUser = users.find((u) => u.id === currentUserId)
   const isHeadAuditor = currentUser?.role === 'head_auditor'
   const isAuditor = currentUser?.role === 'auditor'
@@ -136,8 +157,31 @@ export default function AuditPage() {
       const subcategoryName = parts.length > 1 ? parts.slice(1).join(' > ') : sectionName
       const catConfig = allCategories.find((c) => c.category === cat)
       const isEnabled = catConfig?.enabled ?? false
-      const catScore = getCategoryScore(id!, cat)
       const guidelineId = catConfig?.guidelineId ?? ''
+
+      // Compute per-category score from project-specific items (correct IDs)
+      const catItems = checklistItems.filter((ci) => ci.category === cat && ci.guidelineId === guidelineId)
+      let c_comp = 0, c_nc = 0, c_na = 0, c_ans = 0, c_w = 0
+      for (const item of catItems) {
+        const resp = responses[`${id}__${item.id}`]
+        if (!resp || resp.status === 'not_started' || resp.status === 'needs_review') continue
+        c_ans++
+        if (resp.status === 'compliant') { c_comp++; c_w += 1 }
+        else if (resp.status === 'partially') { c_nc++; c_w += 0.5 }
+        else if (resp.status === 'non_compliant') c_nc++
+        else if (resp.status === 'not_applicable') c_na++
+      }
+      const c_app = c_ans - c_na
+      const catScore: ProjectScore = {
+        total: catItems.length,
+        compliant: c_comp,
+        nonCompliant: c_nc,
+        notApplicable: c_na,
+        answered: c_ans,
+        applicable: c_app,
+        percentage: c_app > 0 ? Math.round((c_w / c_app) * 1000) / 10 : 0,
+        progress: catItems.length > 0 ? Math.round((c_ans / catItems.length) * 100) : 0,
+      }
 
       if (!map[sectionName]) {
         map[sectionName] = {
@@ -161,7 +205,7 @@ export default function AuditPage() {
     }
 
     return Object.values(map)
-  }, [categories, allCategories, id, getCategoryScore])
+  }, [categories, allCategories, id, checklistItems, responses])
 
   useEffect(() => {
     if (selectedCategory) {
@@ -201,6 +245,7 @@ export default function AuditPage() {
 
   // Manage auditors
   const [showManageAuditors, setShowManageAuditors] = useState(false)
+  const [auditorSearchQuery, setAuditorSearchQuery] = useState('')
 
   // Edit checklist item
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
@@ -258,14 +303,7 @@ export default function AuditPage() {
   }, [project?.scope])
   const [savingScope, setSavingScope] = useState(false)
 
-  // Edit project status — keep local state in sync with store
-  const [projectStatus, setProjectStatus] = useState(project?.status ?? 'draft')
-  useEffect(() => {
-    if (project?.status && project.status !== projectStatus) {
-      setProjectStatus(project.status)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.status])
+
 
   // Sync activeGuidelineTab when project loads (guidelineIds[0] may be empty on first render)
   useEffect(() => {
@@ -433,8 +471,9 @@ export default function AuditPage() {
         text: newItemText,
         severity: newItemSeverity,
         reference: newItemReference || undefined,
-        helpText: newItemHelp.trim() || undefined,
+helpText: newItemHelp.trim() || undefined,
         verbatimClauseText: newItemTrace.trim() || undefined,
+
         guidelineId
       })
       
@@ -497,10 +536,7 @@ export default function AuditPage() {
     try { await syncProjectScope(id!, scopeFeatures) } finally { setSavingScope(false) }
   }
 
-  async function handleStatusChange(newStatus: typeof projectStatus) {
-    setProjectStatus(newStatus)
-    await updateProject(id!, { status: newStatus })
-  }
+
 
   const availableToAdd = users.filter(
     (u) => u.role === 'auditor' && !project.auditorIds.includes(u.id),
@@ -540,24 +576,13 @@ export default function AuditPage() {
 
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
             {isHeadAuditor && (
-              <>
-                <select
-                  value={projectStatus}
-                  onChange={(e) => handleStatusChange(e.target.value as typeof projectStatus)}
-                  className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-300"
-                >
-                  <option value="in_progress">In Progress</option>
-                  <option value="under_review">Under Review</option>
-                  <option value="completed">Completed</option>
-                </select>
-                <button
-                  type="button"
-                  onClick={() => setShowManageAuditors((v) => !v)}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-                >
-                  <UserPlus size={13} /> Manage Auditors
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={() => setShowManageAuditors((v) => !v)}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <UserPlus size={13} /> Manage Auditors
+              </button>
             )}
             {isAuditor && project.submissionStatus === 'not_submitted' && (
               <button
@@ -586,7 +611,7 @@ export default function AuditPage() {
           <div className="flex items-center gap-2">
             <ScoreRing percentage={score.percentage} size={44} strokeWidth={4} showLabel={false} />
             <div>
-              <p className="font-mono text-sm font-semibold text-slate-800 tabular-nums leading-none">{score.percentage.toFixed(1)}%</p>
+              <p className="font-sans text-sm font-semibold text-slate-800 tabular-nums leading-none">{score.percentage.toFixed(1)}%</p>
               <p className="text-[10px] text-slate-400 mt-0.5">Compliance</p>
             </div>
           </div>
@@ -597,23 +622,16 @@ export default function AuditPage() {
             { value: score.nonCompliant, label: 'Failing', color: 'text-rose-500' },
           ].map(({ value, label, color }) => (
             <div key={label} className="text-center hidden sm:block">
-              <p className={`font-mono text-sm font-semibold tabular-nums leading-none ${color}`}>{value}</p>
+              <p className={`font-sans text-sm font-semibold tabular-nums leading-none ${color}`}>{value}</p>
               <p className="text-[10px] text-slate-400 mt-0.5">{label}</p>
             </div>
           ))}
-          <div className="w-px h-8 bg-slate-200 hidden md:block" />
-          {auditors.length > 0 && (
-            <div className="hidden md:flex items-center gap-2">
-              <div className="flex items-center gap-1">{auditors.map((u) => <AuditorAvatar key={u.id} user={u} size="sm" />)}</div>
-              {headAuditor && <p className="text-[11px] text-slate-400">Lead: {headAuditor.name.split(' ')[0]}</p>}
-            </div>
-          )}
           <div className="ml-auto hidden sm:flex items-center gap-2">
             <div className="relative h-1.5 w-32 bg-slate-100 rounded-full overflow-hidden">
               <div className="absolute inset-y-0 left-0 bg-blue-500 rounded-full origin-left"
                 style={{ transform: `scaleX(${score.progress / 100})`, transition: 'transform 0.8s cubic-bezier(0.16,1,0.3,1)' }} />
             </div>
-            <p className="text-[11px] text-slate-400 font-mono tabular-nums whitespace-nowrap">{score.answered}/{score.total} items</p>
+            <p className="text-[11px] text-slate-400 font-sans tabular-nums whitespace-nowrap">{score.answered}/{score.total} items</p>
           </div>
         </div>
       </div>
@@ -681,46 +699,72 @@ export default function AuditPage() {
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden bg-slate-50 border-b border-slate-200 px-6 md:px-8 py-5">
             <p className="text-sm font-semibold text-slate-700 mb-4">Manage Auditors</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-              <div>
-                <p className="text-xs text-slate-500 font-medium mb-2 uppercase tracking-wide">Assigned</p>
-                <div className="space-y-2">
-                  {auditors.map((u) => (
-                    <div key={u.id} className="flex items-center gap-3 px-3 py-2.5 bg-white border border-slate-200 rounded-lg">
-                      <AuditorAvatar user={u} size="sm" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-slate-700 truncate">{u.name}</p>
-                        <p className="text-[11px] text-slate-400 capitalize">{u.role.replace('_', ' ')}</p>
-                      </div>
-                      {u.id !== project.headAuditorId && (
-                        <button type="button" onClick={() => removeAuditorFromProject(id!, u.id)}
-                          className="text-slate-400 hover:text-rose-500 transition-colors" title="Remove">
-                          <UserMinus size={14} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
+
+            {/* Search to add */}
+            <div className="relative mb-4">
+              <div className="flex items-center gap-2 px-3 py-2.5 bg-white border border-slate-200 rounded-lg">
+                <MagnifyingGlass size={14} className="text-slate-400 shrink-0" />
+                <input
+                  type="text"
+                  value={auditorSearchQuery}
+                  onChange={(e) => setAuditorSearchQuery(e.target.value)}
+                  placeholder="Search auditor to add…"
+                  className="flex-1 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none bg-transparent"
+                />
+                {auditorSearchQuery && (
+                  <button type="button" onClick={() => setAuditorSearchQuery('')}
+                    className="text-slate-400 hover:text-slate-600 transition-colors">
+                    <XIcon size={12} weight="bold" />
+                  </button>
+                )}
               </div>
-              {availableToAdd.length > 0 && (
-                <div>
-                  <p className="text-xs text-slate-500 font-medium mb-2 uppercase tracking-wide">Add Auditor</p>
-                  <div className="space-y-2">
-                    {availableToAdd.map((u) => (
-                      <div key={u.id} className="flex items-center gap-3 px-3 py-2.5 bg-white border border-slate-200 rounded-lg">
-                        <AuditorAvatar user={u} size="sm" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-slate-700 truncate">{u.name}</p>
-                        </div>
-                        <button type="button" onClick={() => addAuditorToProject(id!, u.id)}
-                          className="text-slate-400 hover:text-blue-600 transition-colors" title="Add">
-                          <UserPlus size={14} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+              {auditorSearchQuery && (
+                <div className="absolute z-10 top-full mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden">
+                  {availableToAdd.filter((u) => u.name.toLowerCase().includes(auditorSearchQuery.toLowerCase())).length === 0 ? (
+                    <p className="px-4 py-3 text-sm text-slate-400">No auditors match "{auditorSearchQuery}"</p>
+                  ) : (
+                    <ul className="max-h-48 overflow-y-auto divide-y divide-slate-50">
+                      {availableToAdd
+                        .filter((u) => u.name.toLowerCase().includes(auditorSearchQuery.toLowerCase()))
+                        .map((u) => (
+                          <li key={u.id}>
+                            <button type="button"
+                              onClick={() => { addAuditorToProject(id!, u.id); setAuditorSearchQuery('') }}
+                              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-blue-50 transition-colors text-left">
+                              <AuditorAvatar user={u} size="sm" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-slate-700 truncate">{u.name}</p>
+                              </div>
+                              <UserPlus size={14} className="text-blue-500 shrink-0" />
+                            </button>
+                          </li>
+                        ))}
+                    </ul>
+                  )}
                 </div>
               )}
+            </div>
+
+            {/* Assigned auditors */}
+            <div className="space-y-2">
+              {auditors.map((u) => (
+                <div key={u.id} className="flex items-center gap-3 px-3 py-2.5 bg-white border border-slate-200 rounded-lg">
+                  <AuditorAvatar user={u} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-700 truncate">{u.name}</p>
+                    <p className="text-[11px] text-slate-400 capitalize">
+                      {u.role.replace('_', ' ')}
+                      {u.id === project.headAuditorId && <span className="ml-1 text-blue-500">· Head Auditor</span>}
+                    </p>
+                  </div>
+                  {u.id !== project.headAuditorId && (
+                    <button type="button" onClick={() => removeAuditorFromProject(id!, u.id)}
+                      className="text-slate-400 hover:text-rose-500 transition-colors" title="Remove">
+                      <Trash size={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
           </motion.div>
         )}
@@ -1046,7 +1090,7 @@ export default function AuditPage() {
                         : 'Select a category'}
                     </h2>
                     <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-xs text-slate-400 font-mono tabular-nums">{categoryItems.length} item{categoryItems.length !== 1 ? 's' : ''}</span>
+                      <span className="text-xs text-slate-400 font-sans tabular-nums">{categoryItems.length} item{categoryItems.length !== 1 ? 's' : ''}</span>
                       {isHeadAuditor && selectedCategory && (
                         <button type="button" onClick={() => setShowAddItemModal(true)}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors">

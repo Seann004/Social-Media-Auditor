@@ -29,7 +29,6 @@ const PLATFORM_COLOR: Record<string, string> = {
   Snapchat: 'bg-yellow-400',
   YouTube: 'bg-red-600',
   Discord: 'bg-indigo-500',
-  BeReal: 'bg-slate-700',
   'X (Twitter)': 'bg-slate-900',
 }
 
@@ -64,7 +63,7 @@ function ScoreBar({ pct }: { pct: number }) {
 }
 
 export default function ProjectsPage() {
-  const { projects, users, guidelines, getProjectScore, currentUserId, initFromDb, loading } = useStore()
+  const { projects, users, guidelines, getProjectScore, complianceMap, currentUserId, initFromDb, loading } = useStore()
   const [filter, setFilter] = useState<Filter>('all')
   const currentUser = users.find((u) => u.id === currentUserId)
   const isHeadAuditor = currentUser?.role === 'head_auditor'
@@ -192,6 +191,7 @@ export default function ProjectsPage() {
           >
             {sorted.map((project) => {
               const score = getProjectScore(project.id)
+              const compliancePct = complianceMap[project.id] ?? 0
               const guidelineNames = project.guidelineIds
                 .map((gid) => guidelines.find((g) => g.id === gid)?.shortName)
                 .filter(Boolean) as string[]
@@ -236,7 +236,7 @@ export default function ProjectsPage() {
                     {/* Compliance */}
                     <div className="flex-1 min-w-0 hidden sm:block">
                       <p className="text-xs text-slate-400 mb-1">Compliance</p>
-                      <ScoreBar pct={score.percentage} />
+                      <ScoreBar pct={compliancePct} />
                     </div>
 
                     {/* Progress */}

@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import {
   ArrowLeftIcon as ArrowLeft,
   ArrowRightIcon as ArrowRight,
@@ -24,7 +24,6 @@ const PLATFORMS: { value: Platform; color: string; textColor: string }[] = [
   { value: 'Snapchat', color: 'bg-yellow-400', textColor: 'text-slate-900' },
   { value: 'YouTube', color: 'bg-red-600', textColor: 'text-white' },
   { value: 'Discord', color: 'bg-indigo-500', textColor: 'text-white' },
-  { value: 'BeReal', color: 'bg-slate-700', textColor: 'text-white' },
   { value: 'X (Twitter)', color: 'bg-slate-900', textColor: 'text-white' },
 ]
 
@@ -37,13 +36,15 @@ const item = {
   show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 100, damping: 20 } },
 }
 
-export default function NewAuditPage() {
+export default function CreateProjectPage() {
   const navigate = useNavigate()
   const { users, currentUserId, guidelines, createProject } = useStore()
   const currentUser = users.find((u) => u.id === currentUserId)!
 
   const [projectName, setProjectName] = useState('')
   const [platform, setPlatform] = useState<Platform | null>(null)
+  const [customPlatform, setCustomPlatform] = useState('')
+  const isOther = platform === 'Other'
   const [selectedGuidelines, setSelectedGuidelines] = useState<string[]>([])
   const [selectedAuditors, setSelectedAuditors] = useState<string[]>([])
   const [dueDate, setDueDate] = useState('')
@@ -54,20 +55,7 @@ export default function NewAuditPage() {
   const otherAuditors = users.filter((u) => u.id !== currentUserId && u.role === 'auditor')
 
   // Team member search state
-  const [showMemberSearch, setShowMemberSearch] = useState(false)
   const [memberSearchQuery, setMemberSearchQuery] = useState('')
-  const searchRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setShowMemberSearch(false)
-        setMemberSearchQuery('')
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
 
   // Auditors not yet added, filtered by search
   const searchableAuditors = otherAuditors.filter(
@@ -113,6 +101,7 @@ export default function NewAuditPage() {
     const newErrors: typeof errors = {}
     if (!projectName.trim()) newErrors.name = 'Enter a project name.'
     if (!platform) newErrors.platform = 'Select a platform to audit.'
+    else if (platform === 'Other' && !customPlatform.trim()) newErrors.platform = 'Enter the platform name.'
     if (selectedGuidelines.length === 0) newErrors.guidelines = 'Select at least one guideline.'
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
@@ -125,10 +114,11 @@ export default function NewAuditPage() {
     setSubmitted(true)
     if (!validate() || !platform) return
     setCreating(true)
+    const effectivePlatform = platform === 'Other' ? customPlatform.trim() : platform
     try {
       const id = await createProject({
         name: projectName.trim(),
-        platform,
+        platform: effectivePlatform,
         guidelineIds: selectedGuidelines,
         auditorIds: selectedAuditors,
         dueDate: dueDate || undefined,
@@ -201,7 +191,9 @@ export default function NewAuditPage() {
                     Platform <span className="text-rose-400">*</span>
                   </label>
                   {platform && (
-                    <span className="text-sm text-blue-600 font-medium">{platform} selected</span>
+                    <span className="text-sm text-blue-600 font-medium">
+                      {isOther ? (customPlatform.trim() || 'Other') : platform} selected
+                    </span>
                   )}
                 </div>
 
@@ -232,9 +224,7 @@ export default function NewAuditPage() {
                             : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50',
                         ].join(' ')}
                       >
-                        <div
-                          className={`w-10 h-10 rounded-lg ${color} flex items-center justify-center`}
-                        >
+                        <div className={`w-10 h-10 rounded-lg ${color} flex items-center justify-center`}>
                           <span className={`${textColor} text-xs font-bold`}>
                             {value.slice(0, 2).toUpperCase()}
                           </span>
@@ -250,7 +240,53 @@ export default function NewAuditPage() {
                       </motion.button>
                     )
                   })}
+
+                  {/* Other — custom platform */}
+                  <motion.button
+                    type="button"
+                    onClick={() => {
+                      setPlatform('Other')
+                      if (errors.platform) setErrors((e) => ({ ...e, platform: undefined }))
+                    }}
+                    whileTap={{ scale: 0.97 }}
+                    className={[
+                      'relative flex flex-col items-center gap-2.5 p-4 rounded-xl border-2 transition-all',
+                      'focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:outline-offset-1',
+                      isOther
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-dashed border-slate-300 hover:border-slate-400 hover:bg-slate-50',
+                    ].join(' ')}
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-slate-200 flex items-center justify-center">
+                      <span className="text-slate-500 text-xs font-bold">?</span>
+                    </div>
+                    <span className={`text-sm font-medium ${isOther ? 'text-blue-700' : 'text-slate-500'} text-center leading-tight`}>
+                      Other
+                    </span>
+                    {isOther && (
+                      <div className="absolute top-2 right-2 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center">
+                        <CheckIcon size={11} weight="bold" className="text-white" />
+                      </div>
+                    )}
+                  </motion.button>
                 </div>
+
+                {/* Custom platform name input */}
+                {isOther && (
+                  <div className="mt-3">
+                    <input
+                      type="text"
+                      value={customPlatform}
+                      onChange={(e) => {
+                        setCustomPlatform(e.target.value)
+                        if (errors.platform) setErrors((prev) => ({ ...prev, platform: undefined }))
+                      }}
+                      placeholder="Enter platform name (e.g. LinkedIn, Pinterest…)"
+                      autoFocus
+                      className="w-full text-sm text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent placeholder:text-slate-300 transition-all"
+                    />
+                  </div>
+                )}
               </motion.div>
 
               {/* Guidelines */}
@@ -422,77 +458,56 @@ export default function NewAuditPage() {
                   </div>
                 )}
 
-                {/* Add Member button + search dropdown */}
-                <div ref={searchRef} className="relative">
-                  {!showMemberSearch ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowMemberSearch(true)}
-                      disabled={otherAuditors.filter((u) => !selectedAuditors.includes(u.id)).length === 0}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-dashed border-slate-300 text-slate-500 text-sm font-medium rounded-xl hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                    >
-                      <UserPlus size={16} />
-                      Add Member
-                    </button>
-                  ) : (
-                    <AnimatePresence>
-                      <motion.div
-                        initial={{ opacity: 0, y: -6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -6 }}
-                        className="border border-slate-200 rounded-xl overflow-hidden shadow-lg bg-white"
+                {/* Add Member search — always visible */}
+                <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+                  {/* Search input */}
+                  <div className="flex items-center gap-2 px-3 py-2.5 border-b border-slate-100">
+                    <MagnifyingGlass size={15} className="text-slate-400 shrink-0" />
+                    <input
+                      type="text"
+                      value={memberSearchQuery}
+                      onChange={(e) => setMemberSearchQuery(e.target.value)}
+                      placeholder="Search auditor to add…"
+                      className="flex-1 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none bg-transparent"
+                    />
+                    {memberSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setMemberSearchQuery('')}
+                        className="text-slate-400 hover:text-slate-600 transition-colors"
                       >
-                        {/* Search input */}
-                        <div className="flex items-center gap-2 px-3 py-2.5 border-b border-slate-100">
-                          <MagnifyingGlass size={15} className="text-slate-400 shrink-0" />
-                          <input
-                            autoFocus
-                            type="text"
-                            value={memberSearchQuery}
-                            onChange={(e) => setMemberSearchQuery(e.target.value)}
-                            placeholder="Search auditor name…"
-                            className="flex-1 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none bg-transparent"
-                          />
+                        <XIcon size={14} weight="bold" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Results */}
+                  {searchableAuditors.length === 0 ? (
+                    <p className="px-4 py-4 text-sm text-slate-400 text-center">
+                      {memberSearchQuery ? 'No auditors match that name.' : 'All auditors have been added.'}
+                    </p>
+                  ) : (
+                    <ul className="max-h-52 overflow-y-auto divide-y divide-slate-50">
+                      {searchableAuditors.map((u) => (
+                        <li key={u.id}>
                           <button
                             type="button"
-                            onClick={() => { setShowMemberSearch(false); setMemberSearchQuery('') }}
-                            className="text-slate-400 hover:text-slate-600 transition-colors"
+                            onClick={() => {
+                              toggleAuditor(u.id)
+                              setMemberSearchQuery('')
+                            }}
+                            className="w-full flex items-center gap-3 px-4 py-3 hover:bg-blue-50 transition-colors text-left"
                           >
-                            <XIcon size={14} weight="bold" />
+                            <AuditorAvatar user={u} size="sm" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-slate-700 truncate">{u.name}</p>
+                              <p className="text-xs text-slate-400 capitalize">{u.role.replace('_', ' ')}</p>
+                            </div>
+                            <UserPlus size={14} className="text-blue-500 shrink-0" />
                           </button>
-                        </div>
-
-                        {/* Results */}
-                        {searchableAuditors.length === 0 ? (
-                          <p className="px-4 py-4 text-sm text-slate-400 text-center">
-                            {memberSearchQuery ? 'No auditors match that name.' : 'All auditors have been added.'}
-                          </p>
-                        ) : (
-                          <ul className="max-h-52 overflow-y-auto divide-y divide-slate-50">
-                            {searchableAuditors.map((u) => (
-                              <li key={u.id}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    toggleAuditor(u.id)
-                                    setMemberSearchQuery('')
-                                    setShowMemberSearch(false)
-                                  }}
-                                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-blue-50 transition-colors text-left"
-                                >
-                                  <AuditorAvatar user={u} size="sm" />
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium text-slate-700 truncate">{u.name}</p>
-                                    <p className="text-xs text-slate-400 capitalize">{u.role.replace('_', ' ')}</p>
-                                  </div>
-                                  <UserPlus size={14} className="text-blue-500 shrink-0" />
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </motion.div>
-                    </AnimatePresence>
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
               </motion.div>
@@ -528,7 +543,9 @@ export default function NewAuditPage() {
                   <div className="flex items-center justify-between pt-3">
                     <span className="text-sm text-slate-400">Platform</span>
                     <span className="text-sm font-medium text-white">
-                      {platform ?? <span className="text-slate-600">Not selected</span>}
+                      {platform
+                        ? (isOther ? (customPlatform.trim() || 'Other') : platform)
+                        : <span className="text-slate-600">Not selected</span>}
                     </span>
                   </div>
                   <div className="flex items-center justify-between pt-3">

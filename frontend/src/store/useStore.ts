@@ -34,17 +34,18 @@ function emptyScore(): ProjectScore {
 
 function calcScore(items: ChecklistItem[], responses: ResponseMap, projectId: string): ProjectScore {
   const total = items.length
-  let compliant = 0, nonCompliant = 0, notApplicable = 0, answered = 0
+  let compliant = 0, nonCompliant = 0, notApplicable = 0, answered = 0, weightedCompliant = 0
   for (const item of items) {
     const resp = responses[rkey(projectId, item.id)]
     if (!resp || resp.status === 'not_started' || resp.status === 'needs_review') continue
     answered++
-    if (resp.status === 'compliant') compliant++
-    else if (resp.status === 'non_compliant' || resp.status === 'partially') nonCompliant++
+    if (resp.status === 'compliant') { compliant++; weightedCompliant += 1 }
+    else if (resp.status === 'partially') { nonCompliant++; weightedCompliant += 0.5 }
+    else if (resp.status === 'non_compliant') nonCompliant++
     else if (resp.status === 'not_applicable') notApplicable++
   }
   const applicable = answered - notApplicable
-  const percentage = applicable > 0 ? Math.round((compliant / applicable) * 1000) / 10 : 0
+  const percentage = applicable > 0 ? Math.round((weightedCompliant / applicable) * 1000) / 10 : 0
   const progress = total > 0 ? Math.round((answered / total) * 100) : 0
   return { total, compliant, nonCompliant, notApplicable, answered, applicable, percentage, progress }
 }
@@ -284,7 +285,7 @@ export const useStore = create<StoreState>()(
       headAuditorId: currentUserId,
       notes,
       dueDate,
-      status: 'draft',
+      status: 'in_progress',
     })
     // Add head auditor as member + selected auditors
     const allMembers = Array.from(new Set([currentUserId, ...auditorIds]))
@@ -501,12 +502,14 @@ export const useStore = create<StoreState>()(
     })
     // Persist to DB + auto-transition draft → in_progress + update complianceMap
     try {
-      const scoreData = await db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes)
+      await db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes)
 
-      // Update complianceMap so Dashboard avg reflects the latest score immediately
-      if (scoreData) {
+      // Refresh complianceMap from DB (fetchProjectComplianceSummary reads result values directly
+      // and is not affected by the global-vs-project item ID mismatch in the RPC count query)
+      const updated = await db.fetchProjectComplianceSummary([projectId])
+      if (updated[projectId] !== undefined) {
         set((state) => ({
-          complianceMap: { ...state.complianceMap, [projectId]: scoreData.percentage },
+          complianceMap: { ...state.complianceMap, [projectId]: updated[projectId] },
         }))
       }
 
