@@ -110,10 +110,23 @@ export default function AuditPage() {
     [guidelines, project],
   )
 
+
+
+
+
+  const [activeGuidelineTab, setActiveGuidelineTab] = useState<string>(project?.guidelineIds[0] ?? '')
+
+  useEffect(() => {
+    if (projectGuidelines.length > 0 && !projectGuidelines.find((g) => g.id === activeGuidelineTab)) {
+      setActiveGuidelineTab(projectGuidelines[0].id)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectGuidelines.length])
+
   const allCategories = useMemo(() => {
-    const seen = new Set<string>()
     const result: { category: string; guidelineId: string; enabled: boolean }[] = []
     for (const g of projectGuidelines) {
+      const seen = new Set<string>()
       for (const cat of g.categories || []) {
         if (!seen.has(cat)) {
           seen.add(cat)
@@ -129,13 +142,17 @@ export default function AuditPage() {
     return result
   }, [projectGuidelines, checklistItems])
 
+  const activeGuidelineCategories = useMemo(() => {
+    return allCategories.filter((c) => c.guidelineId === activeGuidelineTab)
+  }, [allCategories, activeGuidelineTab])
+
   const categories = useMemo(() => {
     if (isHeadAuditor) {
-      return allCategories.map((c) => c.category)
+      return activeGuidelineCategories.map((c) => c.category)
     } else {
-      return allCategories.filter((c) => c.enabled).map((c) => c.category)
+      return activeGuidelineCategories.filter((c) => c.enabled).map((c) => c.category)
     }
-  }, [allCategories, isHeadAuditor])
+  }, [activeGuidelineCategories, isHeadAuditor])
 
   const [selectedCategory, setSelectedCategory] = useState<string>(() => categories[0] ?? '')
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
@@ -157,11 +174,10 @@ export default function AuditPage() {
       const parts = cat.split(' > ')
       const sectionName = parts[0]
       const subcategoryName = parts.length > 1 ? parts.slice(1).join(' > ') : sectionName
-      const catConfig = allCategories.find((c) => c.category === cat)
+      const catConfig = activeGuidelineCategories.find((c) => c.category === cat)
       const isEnabled = catConfig?.enabled ?? false
       const guidelineId = catConfig?.guidelineId ?? ''
 
-      // Compute per-category score from project-specific items (correct IDs)
       const catItems = checklistItems.filter((ci) => ci.category === cat && ci.guidelineId === guidelineId)
       let c_comp = 0, c_nc = 0, c_na = 0, c_ans = 0, c_w = 0
       for (const item of catItems) {
@@ -186,28 +202,18 @@ export default function AuditPage() {
       }
 
       if (!map[sectionName]) {
-        map[sectionName] = {
-          sectionName,
-          subcategories: [],
-          enabledCount: 0,
-        }
+        map[sectionName] = { sectionName, subcategories: [], enabledCount: 0 }
       }
-
-      if (isEnabled) {
-        map[sectionName].enabledCount++
-      }
-
+      if (isEnabled) map[sectionName].enabledCount++
       map[sectionName].subcategories.push({
-        subcategoryName,
-        originalCategory: cat,
-        enabled: isEnabled,
-        catScore,
-        guidelineId,
+        subcategoryName, originalCategory: cat, enabled: isEnabled, catScore, guidelineId,
       })
     }
-
     return Object.values(map)
-  }, [categories, allCategories, id, checklistItems, responses])
+  }, [categories, activeGuidelineCategories, id, checklistItems, responses])
+
+
+  console.log('AUDIT_PAGE_LOG:', { projectGuidelines, checklistItems, allCategories, categories, sections, activeGuidelineTab });
 
   useEffect(() => {
     if (selectedCategory) {
@@ -296,7 +302,6 @@ export default function AuditPage() {
 
   const [savingGuidelines, setSavingGuidelines] = useState(false)
   const [showManageGuidelines, setShowManageGuidelines] = useState(false)
-  const [activeGuidelineTab, setActiveGuidelineTab] = useState<string>(project?.guidelineIds[0] ?? '')
 
   // Manage Scope (features)
   const [scopeInput, setScopeInput] = useState('')
@@ -311,13 +316,6 @@ export default function AuditPage() {
 
 
 
-  // Sync activeGuidelineTab when project loads (guidelineIds[0] may be empty on first render)
-  useEffect(() => {
-    if (projectGuidelines.length > 0 && !projectGuidelines.find((g) => g.id === activeGuidelineTab)) {
-      setActiveGuidelineTab(projectGuidelines[0].id)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectGuidelines.length])
 
   // Checklist items scoped to the active guideline tab
   const guidelineItems = useMemo(
@@ -328,15 +326,7 @@ export default function AuditPage() {
   )
 
   // Sidebar sections scoped to the active guideline tab
-  const guidelineSections = useMemo(
-    () => sections
-      .map((section) => ({
-        ...section,
-        subcategories: section.subcategories.filter((sub) => sub.guidelineId === activeGuidelineTab),
-      }))
-      .filter((section) => section.subcategories.length > 0),
-    [sections, activeGuidelineTab],
-  )
+  const guidelineSections = sections
 
   // Reset selected category to first category of the new guideline tab
   useEffect(() => {
@@ -1080,12 +1070,17 @@ helpText: newItemHelp.trim() || undefined,
                                         onChange={async (e) => {
                                           e.stopPropagation()
                                           if (sub.guidelineId) {
-                                            await toggleProjectChecklistCategory(id!, {
-                                              category: sub.originalCategory,
-                                              enabled: !sub.enabled,
-                                              guidelineId: sub.guidelineId
-                                            })
-                                            reload()
+                                            try {
+                                              await toggleProjectChecklistCategory(id!, {
+                                                category: sub.originalCategory,
+                                                enabled: !sub.enabled,
+                                                guidelineId: sub.guidelineId
+                                              })
+                                              reload()
+                                            } catch (err) {
+                                              console.error('Failed to toggle category:', err)
+                                              alert('Failed to update category. Please try again.')
+                                            }
                                           }
                                         }}
                                         className="w-3.5 h-3.5 rounded text-blue-600 border-slate-300 focus:ring-blue-500 cursor-pointer"

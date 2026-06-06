@@ -11,6 +11,7 @@ import {
 import { useStore } from '../../../store/useStore'
 import { supabase } from '../../../lib/supabase'
 import type { UserRole } from '../../../types'
+import { hashPassword } from '../../../lib/crypto'
 
 const PASSWORD_RULES = [
   { label: 'At least 8 characters', test: (p: string) => p.length >= 8 },
@@ -50,10 +51,11 @@ export default function LoginPage() {
     }
 
     setLoading(true)
+    const hashedPassword = await hashPassword(password)
 
     const { data, error: dbError } = await supabase.rpc('verify_user_login', {
       p_email: email.trim().toLowerCase(),
-      p_password: password,
+      p_password: hashedPassword,
     })
 
     if (dbError || !data || data.length === 0) {

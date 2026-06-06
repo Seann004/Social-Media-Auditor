@@ -15,6 +15,7 @@ import type {
   Severity,
 } from '../types'
 import * as db from '../lib/db'
+import { hashPassword } from '../lib/crypto'
 
 type ResponseMap = Record<string, AuditResponse>
 
@@ -167,6 +168,7 @@ interface StoreState {
   // Guideline management (admin)
   deleteGuideline: (guidelineId: string) => Promise<void>
   addSyntheticGuideline: (guideline: Guideline, items: ChecklistItem[]) => Promise<void>
+  addGuidelineFromRealtime: (dbGuideline: db.DbGuideline, dbItems: db.DbChecklistItem[]) => void
 
   // Audit responses
   setResponse: (projectId: string, itemId: string, guidelineId: string, status: ChecklistItemStatus, notes?: string, findings?: string) => Promise<void>
@@ -213,12 +215,13 @@ export const useStore = create<StoreState>()(
     
     set({ loading: true, dbError: null })
     try {
+      const hashedPassword = password ? await hashPassword(password) : undefined
       await db.createUser({
         userId: id,
         userName: name,
         userEmail: email,
         role: role,
-        userPassword: password
+        userPassword: hashedPassword
       })
       set((state) => ({
         isAuthenticated: true,
@@ -433,6 +436,18 @@ export const useStore = create<StoreState>()(
       guidelines: state.guidelines.filter((g) => g.id !== guidelineId),
       checklistItems: state.checklistItems.filter((ci) => ci.guidelineId !== guidelineId),
     }))
+  },
+
+  addGuidelineFromRealtime: (dbGuideline, dbItems) => {
+    const mapped = mapDbGuideline({ ...dbGuideline, itemCount: dbItems.length })
+    const mappedItems = dbItems.map(mapDbItem)
+    set((state) => {
+      if (state.guidelines.some((g) => g.id === mapped.id)) return state
+      return {
+        guidelines: [mapped, ...state.guidelines],
+        checklistItems: [...mappedItems, ...state.checklistItems],
+      }
+    })
   },
 
   addSyntheticGuideline: async (guideline, items) => {

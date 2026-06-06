@@ -7,10 +7,13 @@ import {
 } from '@phosphor-icons/react'
 import Sidebar from './Sidebar'
 import { useStore } from '../store/useStore'
+import { useRealtimeGuidelines } from '../hooks/useRealtimeGuidelines'
 
 export default function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const initFromDb = useStore((s) => s.initFromDb)
+
+  useRealtimeGuidelines()
 
   useEffect(() => {
     initFromDb()

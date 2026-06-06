@@ -108,6 +108,33 @@ export interface DbChecklistItem {
 
 }
 
+export function compareReferences(a: string | null, b: string | null): number {
+  if (!a && !b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+
+  const aParts = a.split(/(\d+)/);
+  const bParts = b.split(/(\d+)/);
+
+  for (let idx = 0; idx < Math.min(aParts.length, bParts.length); idx++) {
+    const aPart = aParts[idx];
+    const bPart = bParts[idx];
+
+    if (aPart !== bPart) {
+      const aNum = parseInt(aPart, 10);
+      const bNum = parseInt(bPart, 10);
+
+      if (!isNaN(aNum) && !isNaN(bNum)) {
+        return aNum - bNum;
+      }
+      return aPart.localeCompare(bPart, undefined, { numeric: true, sensitivity: 'base' });
+    }
+  }
+
+  return aParts.length - bParts.length;
+}
+
+
 
 
 export interface DbAuditResult {
@@ -215,16 +242,76 @@ export interface DbUser {
 
 
 export async function fetchUserProjects(userId: string): Promise<DbProject[]> {
-
-  const { data, error } = await supabase.rpc('get_user_projects', { p_user_id: userId })
-
-  if (error) throw error
-
-  return (data as DbProject[]) ?? []
-
+  // 1. Get member project IDs
+  const { data: memberRows, error: memberError } = await supabase
+    .from('Project_Member')
+    .select('projectId')
+    .eq('userId', userId)
+  if (memberError) throw memberError
+  
+  const memberProjectIds = (memberRows ?? []).map(r => r.projectId)
+  
+  // 2. Fetch projects
+  let query = supabase.from('Audit_Project').select('*')
+  if (memberProjectIds.length > 0) {
+    query = query.or(`headAuditorId.eq.${userId},projectId.in.(${memberProjectIds.join(',')})`)
+  } else {
+    query = query.eq('headAuditorId', userId)
+  }
+  
+  const { data: projects, error: projectError } = await query.order('timeCreated', { ascending: false })
+  if (projectError) throw projectError
+  if (!projects || projects.length === 0) return []
+  
+  const projectIds = projects.map(p => p.projectId)
+  
+  // Fetch all members for these projects
+  const { data: allMembers, error: membersError } = await supabase
+    .from('Project_Member')
+    .select('projectId, userId')
+    .in('projectId', projectIds)
+  if (membersError) throw membersError
+  
+  // Fetch all cloned guidelines for these projects
+  const { data: allGuidelines, error: guidelinesError } = await supabase
+    .from('Guideline')
+    .select('projectId, guidelineId')
+    .in('projectId', projectIds)
+  if (guidelinesError) throw guidelinesError
+  
+  // Map them
+  const membersMap = new Map()
+  for (const m of (allMembers ?? [])) {
+    const list = membersMap.get(m.projectId) || []
+    list.push(m.userId)
+    membersMap.set(m.projectId, list)
+  }
+  
+  const guidelinesMap = new Map()
+  for (const g of (allGuidelines ?? [])) {
+    if (g.projectId) {
+      const list = guidelinesMap.get(g.projectId) || []
+      list.push(g.guidelineId)
+      guidelinesMap.set(g.projectId, list)
+    }
+  }
+  
+  return projects.map((p: any) => ({
+    projectId: p.projectId,
+    projectTitle: p.projectTitle,
+    smPlatform: p.smPlatform,
+    projectStatus: p.projectStatus,
+    submissionStatus: p.submissionStatus,
+    submissionRemarks: p.submissionRemarks,
+    headAuditorId: p.headAuditorId,
+    projectNotes: p.projectNotes,
+    dueDate: p.dueDate,
+    timeCreated: p.timeCreated,
+    updatedAt: p.updatedAt,
+    memberIds: membersMap.get(p.projectId) ?? [],
+    guidelineIds: guidelinesMap.get(p.projectId) ?? [],
+  }))
 }
-
-
 
 export async function fetchProjectDetails(projectId: string) {
 
@@ -277,49 +364,24 @@ export async function fetchProjectDetails(projectId: string) {
 
 
   // 3. Fetch guidelines (project cloned guidelines)
-
-  const { data: pgData, error: pgError } = await supabase
-
-    .from('Project_Guideline')
-
-    .select(`
-
-      guidelineId,
-
-      Guideline(guidelineId, guidelineName, shortName, version, description, source, categories, lastUpdated, originalGuidelineId)
-
-    `)
-
+  const { data: gData, error: gError } = await supabase
+    .from('Guideline')
+    .select('guidelineId, guidelineName, shortName, version, description, source, categories, lastUpdated, originalGuidelineId')
     .eq('projectId', projectId)
+  if (gError) throw gError
 
-  if (pgError) throw pgError
-
-
-
-  const guidelines = (pgData || []).map((row: any) => ({
-
+  const guidelines = (gData || []).map((row: any) => ({
     guidelineId: row.guidelineId,
-
-    guidelineName: row.Guideline?.guidelineName || '',
-
-    shortName: row.Guideline?.shortName || '',
-
-    version: row.Guideline?.version || '',
-
-    description: row.Guideline?.description || '',
-
-    source: row.Guideline?.source || '',
-
-    categories: row.Guideline?.categories || [],
-
-    lastUpdated: row.Guideline?.lastUpdated || '',
-
-    originalGuidelineId: row.Guideline?.originalGuidelineId || null,
-
+    guidelineName: row.guidelineName || '',
+    shortName: row.shortName || '',
+    version: row.version || '',
+    description: row.description || '',
+    source: row.source || '',
+    categories: row.categories || [],
+    lastUpdated: row.lastUpdated || '',
+    originalGuidelineId: row.originalGuidelineId || null,
   }))
-
-
-
+  
   // 4. Fetch scope
 
   const { data: scopeData, error: sError } = await supabase
@@ -436,40 +498,54 @@ export async function updateProject(projectId: string, updates: {
 // (compliant / applicable) where applicable = compliant + non_compliant + partially
 
 export async function fetchProjectComplianceSummary(
-
   projectIds: string[]
-
 ): Promise<Record<string, number>> {
-
   if (projectIds.length === 0) return {}
 
-  const { data, error } = await supabase
-.from('Audit_Result')
-    .select('projectId,result')
+  const { data: checklists, error: clError } = await supabase
+    .from('Checklist')
+    .select('checklistId,projectId')
+    .in('projectId', projectIds)
+  if (clError) throw clError
 
+  const checklistIds = (checklists ?? []).map((c: any) => c.checklistId)
+
+  let activeItemIds = new Set<string>()
+  if (checklistIds.length > 0) {
+    const { data: activeItems, error: itemsError } = await supabase
+      .from('Checklist_Item')
+      .select('itemId')
+      .in('checklistId', checklistIds)
+      .not('category', 'like', '__deactivated__%')
+    if (itemsError) throw itemsError
+    activeItemIds = new Set((activeItems ?? []).map((i) => i.itemId))
+  }
+
+  const { data, error } = await supabase
+    .from('Audit_Result')
+    .select('projectId,result,itemId')
     .in('projectId', projectIds)
 
   if (error) throw error
 
-const buckets: Record<string, { weightedCompliant: number; applicable: number }> = {}
-  for (const row of (data ?? []) as { projectId: string; result: string }[]) {
+  const buckets: Record<string, { weightedCompliant: number; applicable: number }> = {}
+  for (const row of (data ?? []) as { projectId: string; result: string; itemId: string }[]) {
+    if (!activeItemIds.has(row.itemId)) continue
+
     if (!buckets[row.projectId]) buckets[row.projectId] = { weightedCompliant: 0, applicable: 0 }
     if (['compliant', 'non_compliant', 'partially'].includes(row.result)) {
       buckets[row.projectId].applicable++
       if (row.result === 'compliant') buckets[row.projectId].weightedCompliant += 1
       else if (row.result === 'partially') buckets[row.projectId].weightedCompliant += 0.5
     }
-
   }
 
   return Object.fromEntries(
-Object.entries(buckets).map(([pid, { weightedCompliant, applicable }]) => [
+    Object.entries(buckets).map(([pid, { weightedCompliant, applicable }]) => [
       pid,
       applicable > 0 ? Math.round((weightedCompliant / applicable) * 1000) / 10 : 0,
     ])
-
   )
-
 }
 
 
@@ -553,15 +629,26 @@ export async function syncProjectGuidelines(projectId: string, globalGuidelineId
   if (fetchError) throw fetchError
 
   const existingClonesMap = new Map<string, string>() // originalGuidelineId -> clonedGuidelineId
-  const activeClonedIds: string[] = []
+  const keptClonedIds: string[] = []
 
   for (const clone of (existingClones ?? [])) {
     const origId = (clone as any).originalGuidelineId
     const clonedId = clone.guidelineId
+    
     if (origId) {
-      existingClonesMap.set(origId, clonedId)
+      if (globalGuidelineIds.includes(origId)) {
+        // This guideline is still selected, keep it
+        existingClonesMap.set(origId, clonedId)
+        keptClonedIds.push(clonedId)
+      } else {
+        // This guideline was deselected, delete its clone
+        const { error: delError } = await supabase
+          .from('Guideline')
+          .delete()
+          .eq('guidelineId', clonedId)
+        if (delError) throw delError
+      }
     }
-    activeClonedIds.push(clonedId)
   }
 
   // 2. Clone selected guidelines that haven't been cloned yet
@@ -594,27 +681,13 @@ export async function syncProjectGuidelines(projectId: string, globalGuidelineId
             timeUpdated: new Date().toISOString()
           })
         if (insError) throw insError
-        activeClonedIds.push(clonedGuidelineId)
       }
     }
   }
 
-  // 3. Sync Project_Guideline join table with cloned guideline IDs
-  await supabase.from('Project_Guideline').delete().eq('projectId', projectId)
-  if (activeClonedIds.length > 0) {
-    const rows = activeClonedIds.map((guidelineId) => ({ projectId, guidelineId }))
-    const { error } = await supabase.from('Project_Guideline').insert(rows)
-    if (error) throw error
-  }
-
-  // 4. Initialize project-specific checklists
+  // 3. Initialize project-specific checklists
   await initializeProjectChecklists(projectId)
 }
-
-
-// ΓöÇΓöÇΓöÇ Project Scope / Features ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-
-
 
 export async function syncProjectScope(projectId: string, features: string[]): Promise<void> {
 
@@ -695,7 +768,7 @@ export async function deleteGuideline(guidelineId: string): Promise<void> {
 
   // Soft Delete: We only remove the global template checklist to hide it from admins and prevent new uses.
 
-  // We DO NOT delete the Guideline row, Audit_Result, Project_Guideline, or project-specific Checklists,
+  // We DO NOT delete the Guideline row, Audit_Result, or project-specific Checklists,
 
   // preserving all Auditor and Head Auditor progress.
 
@@ -731,7 +804,31 @@ export async function deleteGuideline(guidelineId: string): Promise<void> {
 
 
 
-  // 2. Delete Checklist_Item rows linked to the global checklist
+  // 2. Fetch item IDs so we can delete dependent Audit_Result rows first
+
+  const { data: items, error: itemFetchError } = await supabase
+
+    .from('Checklist_Item')
+
+    .select('itemId')
+
+    .eq('checklistId', checklistId)
+
+  if (itemFetchError) throw itemFetchError
+
+  const itemIds = ((items ?? []) as { itemId: string }[]).map((i) => i.itemId)
+
+  if (itemIds.length > 0) {
+
+    const { error: arError } = await supabase.from('Audit_Result').delete().in('itemId', itemIds)
+
+    if (arError) throw arError
+
+  }
+
+
+
+  // 3. Delete Checklist_Item rows linked to the global checklist
 
   const { error: ciError } = await supabase.from('Checklist_Item').delete().eq('checklistId', checklistId)
 
@@ -739,7 +836,7 @@ export async function deleteGuideline(guidelineId: string): Promise<void> {
 
 
 
-  // 3. Delete the global Checklist itself
+  // 4. Delete the global Checklist itself
 
   const { error: cdError } = await supabase.from('Checklist').delete().eq('checklistId', checklistId)
 
@@ -752,72 +849,45 @@ export async function deleteGuideline(guidelineId: string): Promise<void> {
 // Fetch global (template) checklist items for a guideline - used by admin view
 
 export async function fetchGuidelineItems(guidelineId: string): Promise<DbChecklistItem[]> {
-
   // Find the global checklist (projectId IS NULL) for this guideline
-
   const { data: clData, error: clError } = await supabase
-
     .from('Checklist')
-
     .select('checklistId')
-
     .is('projectId', null)
-
     .eq('guidelineId', guidelineId)
-
     .limit(1)
-
     .single()
 
   if (clError) {
-
     // No checklist yet - return empty
-
     if (clError.code === 'PGRST116') return []
-
     throw clError
-
   }
-
   const checklistId = (clData as any).checklistId
 
-
-
   const { data: items, error: itemsError } = await supabase
-
     .from('Checklist_Item')
-
     .select('itemId,category,itemDescription,severity,reference,itemName,itemCode,rowType,helpText,verbatimClauseText,answerOptions')
-
     .eq('checklistId', checklistId)
 
   if (itemsError) throw itemsError
 
-
-
-  return (items ?? []).map((i: any) => ({
-
+  const mapped = (items ?? []).map((i: any) => ({
     itemId: i.itemId,
-
     guidelineId,
-
     category: i.category,
-
     itemDescription: i.itemDescription,
-
     severity: i.severity,
-
     reference: i.reference,
-
     itemName: i.itemName,
     itemCode: i.itemCode,
     rowType: i.rowType,
     helpText: i.helpText,
     verbatimClauseText: i.verbatimClauseText,
     answerOptions: i.answerOptions,
-
   }))
 
+  return mapped.sort((a, b) => compareReferences(a.reference, b.reference))
 }
 
 
@@ -828,7 +898,7 @@ export async function fetchGuidelineItems(guidelineId: string): Promise<DbCheckl
 
 export async function initializeProjectChecklists(projectId: string): Promise<void> {
   const { data: projectGuidelines, error: pgError } = await supabase
-    .from('Project_Guideline')
+    .from('Guideline')
     .select('guidelineId')
     .eq('projectId', projectId)
   if (pgError) throw pgError
@@ -914,66 +984,44 @@ export async function initializeProjectChecklists(projectId: string): Promise<vo
 }
 
 export async function fetchProjectChecklistItems(projectId: string): Promise<DbChecklistItem[]> {
-
   await initializeProjectChecklists(projectId)
 
-
-
   const { data: checklists, error: clError } = await supabase
-
     .from('Checklist')
-
     .select('checklistId,guidelineId')
-
     .eq('projectId', projectId)
 
   if (clError) throw clError
 
-
-
   if (!checklists || checklists.length === 0) return []
-
   const checklistIds = checklists.map((c: any) => c.checklistId)
 
-
-
   const { data: items, error: itemsError } = await supabase
-
     .from('Checklist_Item')
-
     .select('itemId,checklistId,category,itemDescription,severity,reference,itemName,itemCode,rowType,helpText,verbatimClauseText,answerOptions')
-
     .in('checklistId', checklistIds)
-
     .order('itemId', { ascending: true })
 
   if (itemsError) throw itemsError
 
+  const mapped = (items ?? [])
+    .filter((i: any) => !i.category?.startsWith('__deactivated__'))
+    .map((i: any) => ({
+      itemId: i.itemId,
+      guidelineId: (checklists.find((c: any) => c.checklistId === i.checklistId) as any)?.guidelineId,
+      category: i.category,
+      itemDescription: i.itemDescription,
+      severity: i.severity,
+      reference: i.reference,
+      itemName: i.itemName,
+      itemCode: i.itemCode,
+      rowType: i.rowType,
+      helpText: i.helpText,
+      verbatimClauseText: i.verbatimClauseText,
+      answerOptions: i.answerOptions,
+    }))
 
-
-  return (items ?? []).map((i: any) => ({
-
-    itemId: i.itemId,
-
-    guidelineId: (checklists.find((c: any) => c.checklistId === i.checklistId) as any)?.guidelineId,
-
-    category: i.category,
-
-    itemDescription: i.itemDescription,
-
-    severity: i.severity,
-
-    reference: i.reference,
-
-    itemName: i.itemName,
-    itemCode: i.itemCode,
-    rowType: i.rowType,
-    helpText: i.helpText,
-    verbatimClauseText: i.verbatimClauseText,
-    answerOptions: i.answerOptions,
-
-  }))
-
+  return mapped.sort((a, b) => compareReferences(a.reference, b.reference))
 }
 
 
@@ -1073,118 +1121,100 @@ export async function saveEvidenceImages(projectId: string, itemId: string, user
 
 
 export async function toggleProjectChecklistCategory(projectId: string, guidelineId: string, category: string, enabled: boolean): Promise<void> {
-
   const { data: checklist, error: clError } = await supabase
-
     .from('Checklist')
-
     .select('checklistId')
-
     .eq('projectId', projectId)
-
     .eq('guidelineId', guidelineId)
-
     .limit(1)
-
     .single()
 
   if (clError) throw clError
 
   const checklistId = (checklist as any).checklistId
 
-
-
   if (!enabled) {
-
-    const { error: delError } = await supabase
-
+    // Soft-deactivate: prefix the category with "__deactivated__" so they are ignored in active calculations
+    const { error: updError } = await supabase
       .from('Checklist_Item')
-
-      .delete()
-
+      .update({ category: `__deactivated__${category}` })
       .eq('checklistId', checklistId)
-
       .eq('category', category)
 
-      .order('itemId', { ascending: true })
-
-    if (delError) throw delError
-
+    if (updError) throw updError
   } else {
-
-    const { data: globalCL, error: gclError } = await supabase
-
-      .from('Checklist')
-
-      .select('checklistId')
-
-      .is('projectId', null)
-
-      .eq('guidelineId', guidelineId)
-
-      .limit(1)
-
-      .single()
-
-    if (gclError) throw gclError
-
-    const globalChecklistId = (globalCL as any).checklistId
-
-
-
-    const { data: globalItems, error: itemsError } = await supabase
-
+    // Check if we have previously deactivated items for this project/category
+    const { data: deactivatedItems, error: deacError } = await supabase
       .from('Checklist_Item')
+      .select('itemId')
+      .eq('checklistId', checklistId)
+      .eq('category', `__deactivated__${category}`)
+    if (deacError) throw deacError
 
-      .select('itemId,itemDescription,category,severity,reference,itemName,itemCode,rowType,helpText,verbatimClauseText,answerOptions')
-      .order('itemId', { ascending: true })
-
-      .eq('checklistId', globalChecklistId)
-
-      .eq('category', category)
-
-
-    if (itemsError) throw itemsError
-
-
-
-    if (globalItems && globalItems.length > 0) {
-
-      const newItems = globalItems.map((item: any) => ({
-
-        itemId: crypto.randomUUID(),
-
-        checklistId,
-
-        itemDescription: item.itemDescription,
-
-        category: item.category,
-
-        severity: item.severity,
-
-        reference: item.reference,
-
-        itemName: item.itemName,
-        itemCode: item.itemCode,
-        rowType: item.rowType,
-        helpText: item.helpText,
-        verbatimClauseText: item.verbatimClauseText,
-        answerOptions: item.answerOptions,
-
-      }))
-
-      const { error: insError } = await supabase
-
+    if (deactivatedItems && deactivatedItems.length > 0) {
+      // Restore the items by removing the "__deactivated__" prefix from their category
+      const { error: restoreError } = await supabase
         .from('Checklist_Item')
+        .update({ category: category })
+        .eq('checklistId', checklistId)
+        .eq('category', `__deactivated__${category}`)
+      if (restoreError) throw restoreError
+    } else {
+      // First-time enablement: clone from the global template
+      const { data: guidelineInfo, error: giError } = await supabase
+        .from('Guideline')
+        .select('originalGuidelineId')
+        .eq('guidelineId', guidelineId)
+        .single()
+      if (giError) throw giError
 
-        .insert(newItems)
+      const templateGuidelineId = (guidelineInfo as any).originalGuidelineId ?? guidelineId
 
-      if (insError) throw insError
+      const { data: globalCL, error: gclError } = await supabase
+        .from('Checklist')
+        .select('checklistId')
+        .is('projectId', null)
+        .eq('guidelineId', templateGuidelineId)
+        .limit(1)
+        .single()
 
+      if (gclError) throw gclError
+
+      const globalChecklistId = (globalCL as any).checklistId
+
+      const { data: globalItems, error: itemsError } = await supabase
+        .from('Checklist_Item')
+        .select('itemId,itemDescription,category,severity,reference,itemName,itemCode,rowType,helpText,verbatimClauseText,answerOptions')
+        .order('itemId', { ascending: true })
+        .eq('checklistId', globalChecklistId)
+        .eq('category', category)
+
+      if (itemsError) throw itemsError
+
+      if (globalItems && globalItems.length > 0) {
+        const newItems = globalItems.map((item: any) => ({
+          itemId: crypto.randomUUID(),
+          checklistId,
+          itemDescription: item.itemDescription,
+          category: item.category,
+          severity: item.severity,
+          reference: item.reference,
+          itemName: item.itemName,
+          itemCode: item.itemCode,
+          rowType: item.rowType,
+          helpText: item.helpText,
+          verbatimClauseText: item.verbatimClauseText,
+          answerOptions: item.answerOptions,
+        }))
+
+        const { error: insError } = await supabase
+          .from('Checklist_Item')
+          .insert(newItems)
+
+        if (insError) throw insError
+      }
     }
-
   }
-
 }
 
 
@@ -1346,13 +1376,106 @@ export async function reviewSubmission(projectId: string, approved: boolean, rem
 
 
 export async function fetchComplianceScores(projectId: string): Promise<DbComplianceScore[]> {
+  // 1. Fetch project guidelines
+  const { data: projectGuidelines, error: pgError } = await supabase
+    .from('Guideline')
+    .select('guidelineId')
+    .eq('projectId', projectId)
+  if (pgError) throw pgError
 
-  const { data, error } = await supabase.rpc('get_compliance_scores', { p_project_id: projectId })
+  const guidelineIds = (projectGuidelines ?? []).map((row: any) => row.guidelineId)
+  if (guidelineIds.length === 0) return []
 
-  if (error) throw error
+  // 2. Fetch checklists for the project
+  const { data: checklists, error: clError } = await supabase
+    .from('Checklist')
+    .select('checklistId,guidelineId')
+    .eq('projectId', projectId)
+  if (clError) throw clError
 
-  return (data as DbComplianceScore[]) ?? []
+  // 3. Fetch guideline details (names, shortNames, etc.)
+  const { data: guidelines, error: gError } = await supabase
+    .from('Guideline')
+    .select('guidelineId,guidelineName,shortName')
+    .in('guidelineId', guidelineIds)
+  if (gError) throw gError
 
+  // 4. Fetch checklist items
+  const checklistIds = (checklists ?? []).map((c: any) => c.checklistId)
+  let items: any[] = []
+  if (checklistIds.length > 0) {
+    const { data: itemsData, error: itemsError } = await supabase
+      .from('Checklist_Item')
+      .select('itemId,checklistId,category')
+      .in('checklistId', checklistIds)
+      .not('category', 'like', '__deactivated__%')
+    if (itemsError) throw itemsError
+    items = itemsData ?? []
+  }
+
+  // 5. Fetch audit results
+  const { data: auditResults, error: arError } = await supabase
+    .from('Audit_Result')
+    .select('itemId,result')
+    .eq('projectId', projectId)
+  if (arError) throw arError
+
+  const resultsMap = new Map<string, string>()
+  for (const r of (auditResults ?? [])) {
+    resultsMap.set(r.itemId, r.result)
+  }
+
+  const scores: DbComplianceScore[] = []
+  for (const guidelineId of guidelineIds) {
+    const g = guidelines?.find((x) => x.guidelineId === guidelineId)
+    const cl = checklists?.find((x) => x.guidelineId === guidelineId)
+    const clId = cl?.checklistId
+
+    const clItems = items.filter((i) => i.checklistId === clId)
+    let total = clItems.length
+    let answered = 0
+    let compliant = 0
+    let nonCompliant = 0
+    let notApplicable = 0
+    let weightedCompliant = 0
+
+    for (const item of clItems) {
+      const res = resultsMap.get(item.itemId)
+      if (res && res !== 'not_started' && res !== 'needs_review') {
+        answered++
+        if (res === 'compliant') {
+          compliant++
+          weightedCompliant += 1
+        } else if (res === 'partially') {
+          nonCompliant++
+          weightedCompliant += 0.5
+        } else if (res === 'non_compliant') {
+          nonCompliant++
+        } else if (res === 'not_applicable') {
+          notApplicable++
+        }
+      }
+    }
+
+    const applicable = answered - notApplicable
+    const scorePercentage = applicable > 0 ? Math.round((weightedCompliant / applicable) * 1000) / 10 : 0
+
+    scores.push({
+      scoreId: crypto.randomUUID(),
+      guidelineId,
+      guidelineName: g?.guidelineName || 'Guideline',
+      shortName: g?.shortName || 'Guideline',
+      totalItems: total,
+      answeredItems: answered,
+      compliantItems: compliant,
+      nonCompliantItems: nonCompliant,
+      notApplicableItems: notApplicable,
+      scorePercentage,
+      timeCalculated: new Date().toISOString()
+    })
+  }
+
+  return scores
 }
 
 
@@ -1362,52 +1485,124 @@ export async function fetchComplianceScores(projectId: string): Promise<DbCompli
 
 
 export async function fetchAuditReports(
-
   userId: string,
-
   filters?: {
-
     projectStatusFilter?: AuditStatus
-
     search?: string
-
     dateFrom?: string
-
     dateTo?: string
-
   }
-
 ): Promise<DbAuditReport[]> {
-
-  const { data, error } = await supabase.rpc('get_audit_reports', {
-
-    p_user_id: userId,
-
-    p_status_filter: null,
-
-    p_search: filters?.search ?? null,
-
-    p_date_from: filters?.dateFrom ?? null,
-
-    p_date_to: filters?.dateTo ?? null,
-
-  })
-
-  if (error) throw error
-
-  let results = (data as DbAuditReport[]) ?? []
-
-  if (filters?.projectStatusFilter) {
-
-    results = results.filter((r) => r.projectStatus === filters.projectStatusFilter)
-
+  // 1. Get member project IDs
+  const { data: memberRows, error: memberError } = await supabase
+    .from('Project_Member')
+    .select('projectId')
+    .eq('userId', userId)
+  if (memberError) throw memberError
+  const memberProjectIds = (memberRows ?? []).map(r => r.projectId)
+  
+  // 2. Fetch projects
+  let pQuery = supabase.from('Audit_Project').select('projectId, projectTitle, smPlatform, projectStatus, submissionStatus, submissionRemarks, headAuditorId, dueDate, timeCreated, updatedAt')
+  if (memberProjectIds.length > 0) {
+    pQuery = pQuery.or(`headAuditorId.eq.${userId},projectId.in.(${memberProjectIds.join(',')})`)
+  } else {
+    pQuery = pQuery.eq('headAuditorId', userId)
   }
-
-  return results
-
+  const { data: projects, error: projectsError } = await pQuery
+  if (projectsError) throw projectsError
+  if (!projects || projects.length === 0) return []
+  const projectIds = projects.map(p => p.projectId)
+  
+  // 3. Fetch reports
+  const { data: reports, error: reportsError } = await supabase
+    .from('Audit_Report')
+    .select('reportId, projectId, userId, timeGenerated')
+    .in('projectId', projectIds)
+  if (reportsError) throw reportsError
+  if (!reports || reports.length === 0) return []
+  
+  const reportProjectIds = Array.from(new Set(reports.map(r => r.projectId)))
+  const filteredProjects = projects.filter(p => reportProjectIds.includes(p.projectId))
+  
+  // Fetch head auditor names
+  const headAuditorIds = Array.from(new Set(filteredProjects.map(p => p.headAuditorId)))
+  const { data: users, error: usersError } = await supabase
+    .from('User')
+    .select('userId, userName')
+    .in('userId', headAuditorIds)
+  if (usersError) throw usersError
+  const userNamesMap = new Map()
+  for (const u of (users ?? [])) {
+    userNamesMap.set(u.userId, u.userName)
+  }
+  
+  // Fetch guideline IDs
+  const { data: allGuidelines, error: guidelinesError } = await supabase
+    .from('Guideline')
+    .select('projectId, guidelineId')
+    .in('projectId', reportProjectIds)
+  if (guidelinesError) throw guidelinesError
+  
+  const guidelinesMap = new Map()
+  for (const g of (allGuidelines ?? [])) {
+    if (g.projectId) {
+      const list = guidelinesMap.get(g.projectId) || []
+      list.push(g.guidelineId)
+      guidelinesMap.set(g.projectId, list)
+    }
+  }
+  
+  // Fetch compliance summaries
+  const complianceSummary = await fetchProjectComplianceSummary(reportProjectIds)
+  
+  const results = []
+  for (const r of reports) {
+    const p = filteredProjects.find(proj => proj.projectId === r.projectId)
+    if (!p) continue
+    
+    const headAuditorName = userNamesMap.get(p.headAuditorId) || 'Unknown'
+    const guidelineIds = guidelinesMap.get(p.projectId) ?? []
+    const scorePercentage = complianceSummary[p.projectId] !== undefined ? complianceSummary[p.projectId] : null
+    
+    results.push({
+      projectId: p.projectId,
+      projectTitle: p.projectTitle,
+      smPlatform: p.smPlatform,
+      projectStatus: p.projectStatus,
+      submissionStatus: p.submissionStatus,
+      submissionRemarks: p.submissionRemarks,
+      headAuditorId: p.headAuditorId,
+      headAuditorName,
+      timeCreated: r.timeGenerated,
+      updatedAt: p.updatedAt,
+      dueDate: p.dueDate,
+      scorePercentage,
+      guidelineIds,
+    })
+  }
+  
+  let filteredResults = results
+  if (filters?.projectStatusFilter) {
+    filteredResults = filteredResults.filter(r => r.projectStatus === filters.projectStatusFilter)
+  }
+  if (filters?.search) {
+    const searchLower = filters.search.toLowerCase()
+    filteredResults = filteredResults.filter(r => 
+      r.projectTitle.toLowerCase().includes(searchLower) ||
+      r.smPlatform.toLowerCase().includes(searchLower)
+    )
+  }
+  if (filters?.dateFrom) {
+    const fromDate = new Date(filters.dateFrom)
+    filteredResults = filteredResults.filter(r => new Date(r.timeCreated) >= fromDate)
+  }
+  if (filters?.dateTo) {
+    const toDate = new Date(filters.dateTo)
+    filteredResults = filteredResults.filter(r => new Date(r.timeCreated) <= toDate)
+  }
+  
+  return filteredResults
 }
-
-
 
 export async function createAuditReport(projectId: string, userId: string): Promise<string> {
 
