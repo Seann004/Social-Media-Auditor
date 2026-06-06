@@ -274,6 +274,17 @@ app.patch('/api/projects/:projectId/results/:itemId/findings', async (req, res) 
   }
 })
 
+app.patch('/api/projects/:projectId/results/:itemId/evidence', async (req, res) => {
+  try {
+    const { userId, images } = req.body
+    await db.saveEvidenceImages(req.params.projectId, req.params.itemId, userId, images ?? [])
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Error saving evidence images:', error)
+    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+  }
+})
+
 app.post('/api/projects/:id/checklist/categories/toggle', async (req, res) => {
   try {
     const { category, enabled, guidelineId } = req.body
@@ -375,7 +386,7 @@ app.get('/api/reports', async (req, res) => {
       return res.status(400).json({ error: 'userId is required' })
     }
     const filters = {
-      statusFilter: req.query.statusFilter as any,
+      projectStatusFilter: req.query.projectStatusFilter as any,
       search: req.query.search as string,
       dateFrom: req.query.dateFrom as string,
       dateTo: req.query.dateTo as string,

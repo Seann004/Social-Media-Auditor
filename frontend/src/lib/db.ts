@@ -57,6 +57,7 @@ export interface DbAuditResult {
   result: ChecklistItemStatus
   notes: string | null
   findings: string | null
+  evidenceImages: { url: string; name: string }[] | null
   timeSubmitted: string
 }
 
@@ -302,6 +303,13 @@ export async function saveAuditFindings(projectId: string, itemId: string, userI
   })
 }
 
+export async function saveEvidenceImages(projectId: string, itemId: string, userId: string, images: { url: string; name: string }[]): Promise<void> {
+  await request(`/projects/${projectId}/results/${itemId}/evidence`, {
+    method: 'PATCH',
+    body: JSON.stringify({ userId, images }),
+  })
+}
+
 export async function toggleProjectChecklistCategory(projectId: string, input: {
   category: string
   enabled: boolean
@@ -362,14 +370,14 @@ export async function fetchComplianceScores(projectId: string): Promise<DbCompli
 export async function fetchAuditReports(
   userId: string,
   filters?: {
-    statusFilter?: SubmissionStatus
+    projectStatusFilter?: AuditStatus
     search?: string
     dateFrom?: string
     dateTo?: string
   }
 ): Promise<DbAuditReport[]> {
   let query = `userId=${encodeURIComponent(userId)}`
-  if (filters?.statusFilter) query += `&statusFilter=${filters.statusFilter}`
+  if (filters?.projectStatusFilter) query += `&projectStatusFilter=${filters.projectStatusFilter}`
   if (filters?.search) query += `&search=${encodeURIComponent(filters.search)}`
   if (filters?.dateFrom) query += `&dateFrom=${filters.dateFrom}`
   if (filters?.dateTo) query += `&dateTo=${filters.dateTo}`
