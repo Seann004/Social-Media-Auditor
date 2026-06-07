@@ -42,3 +42,14 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Force background colors/fills to print — browsers strip them by default
+   unless "background graphics" is on, which would otherwise hide chart bars,
+   badges, and ring strips in the exported PDF. */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+}
