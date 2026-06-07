@@ -11,7 +11,6 @@ import {
 } from '@phosphor-icons/react'
 import type { ChecklistItem } from '../../../types'
 import { useStore } from '../../../store/useStore'
-import SeverityBadge from '../../audits/components/SeverityBadge'
 
 const container = {
   hidden: { opacity: 0 },
@@ -294,9 +293,6 @@ export default function GuidelinesPage() {
                                         <span className="text-[10px] text-slate-400 font-mono">
                                           {catItems.length} item{catItems.length !== 1 ? 's' : ''}
                                         </span>
-                                        <span className="text-[10px] text-rose-500 font-mono">
-                                          {catItems.filter((ci) => ci.severity === 'critical').length} crit
-                                        </span>
                                         <motion.div
                                           animate={{ rotate: catOpen ? 180 : 0 }}
                                           transition={{ type: 'spring', stiffness: 200, damping: 24 }}
@@ -318,7 +314,6 @@ export default function GuidelinesPage() {
                                           <div className="divide-y divide-slate-50 border-t border-slate-100">
                                             {catItems.map((ci) => (
                                               <div key={ci.id} className="flex items-start gap-3 px-4 py-3 bg-slate-50/50">
-                                                <SeverityBadge severity={ci.severity} />
                                                 <p className="flex-1 text-xs text-slate-700 leading-relaxed">{ci.text}</p>
                                                 <div className="flex items-center gap-1.5 shrink-0 ml-2">
                                                   <button
@@ -401,11 +396,6 @@ export default function GuidelinesPage() {
                       <p className="text-sm font-semibold text-slate-800 leading-relaxed bg-slate-50 border border-slate-100 rounded-xl p-3.5">
                         {selectedItemForModal!.text}
                       </p>
-                    </div>
-
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">SEVERITY</h4>
-                      <SeverityBadge severity={selectedItemForModal!.severity} />
                     </div>
 
                     <div>

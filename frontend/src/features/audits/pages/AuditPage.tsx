@@ -30,7 +30,6 @@ import { useStore } from '../../../store/useStore'
 import { useProjectData } from '../../../hooks/useProjectData'
 import { saveEvidenceImages } from '../../../lib/db'
 import type { ChecklistItemStatus, Severity, ChecklistItem, ProjectScore } from '../../../types'
-import SeverityBadge from '../../audits/components/SeverityBadge'
 import StatusBadge from '../../audits/components/StatusBadge'
 import AuditorAvatar from '../../../components/ui/AuditorAvatar'
 import ScoreRing from '../../audits/components/ScoreRing'
@@ -52,8 +51,6 @@ const AUDITOR_RESPONSE_OPTIONS: {
     active: 'bg-slate-500 text-white ring-slate-500',
     inactive: 'bg-white text-slate-500 ring-slate-200 hover:ring-slate-400 hover:text-slate-600' },
 ]
-
-const SEVERITY_OPTIONS: Severity[] = ['critical', 'major', 'minor']
 
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.05, delayChildren: 0.05 } } }
 const rowVar = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 100, damping: 22 } } }
@@ -1312,10 +1309,6 @@ helpText: newItemHelp.trim() || undefined,
                               <textarea value={editText} onChange={(e) => setEditText(e.target.value)} rows={3}
                                 className="w-full text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent" />
                               <div className="flex items-center gap-3">
-                                <select value={editSeverity} onChange={(e) => setEditSeverity(e.target.value as Severity)}
-                                  className="text-sm border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-300 bg-slate-50">
-                                  {SEVERITY_OPTIONS.map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-                                </select>
                                 <button type="button" onClick={saveEditItem}
                                   className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors">
                                   <CheckIcon size={12} weight="bold" /> Save
@@ -1330,7 +1323,6 @@ helpText: newItemHelp.trim() || undefined,
                             <div className="flex items-start justify-between gap-3">
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                                  <SeverityBadge severity={ci.severity} />
                                   {ci.itemCode && (
                                     <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">{ci.itemCode}</span>
                                   )}
@@ -1583,11 +1575,6 @@ helpText: newItemHelp.trim() || undefined,
                       </p>
                     </div>
 
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">SEVERITY</h4>
-                      <SeverityBadge severity={selectedItemForModal.severity} />
-                    </div>
-
                     {(() => {
                       if (selectedItemForModal.helpText) {
                         return (
@@ -1718,36 +1705,17 @@ helpText: newItemHelp.trim() || undefined,
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                      Severity
-                    </label>
-                    <select
-                      value={newItemSeverity}
-                      onChange={(e) => setNewItemSeverity(e.target.value as Severity)}
-                      className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-300"
-                    >
-                      {SEVERITY_OPTIONS.map((s) => (
-                        <option key={s} value={s}>
-                          {s.charAt(0).toUpperCase() + s.slice(1)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
-                      Clause Reference
-                    </label>
-                    <input
-                      type="text"
-                      value={newItemReference}
-                      onChange={(e) => setNewItemReference(e.target.value)}
-                      placeholder="e.g. Clause 4.2"
-                      className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-300"
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">
+                    Clause Reference
+                  </label>
+                  <input
+                    type="text"
+                    value={newItemReference}
+                    onChange={(e) => setNewItemReference(e.target.value)}
+                    placeholder="e.g. Clause 4.2"
+                    className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  />
                 </div>
 
                 <div>
