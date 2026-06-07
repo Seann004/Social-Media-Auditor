@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -16,7 +16,7 @@ import {
 } from '@phosphor-icons/react'
 import { useStore } from '../../../store/useStore'
 import * as db from '../../../lib/db'
-import type { DbAuditReport, DbComplianceScore } from '../../../lib/db'
+import type { DbAuditReport, DbComplianceScore, DbAuditResult, DbChecklistItem } from '../../../lib/db'
 import type { AuditStatus, SubmissionStatus } from '../../../types'
 import ScoreRing from '../../audits/components/ScoreRing'
 import StatusBadge from '../../audits/components/StatusBadge'
@@ -46,6 +46,28 @@ function StatusChip({ status }: { status: SubmissionStatus }) {
     approved: 'Approved', rejected: 'Rejected',
   }
   return <span className={`text-[10px] font-medium px-2 py-0.5 rounded-md ${map[status]}`}>{label[status]}</span>
+}
+
+function SummaryBarChart({ pass, fail, na }: { pass: number; fail: number; na: number }) {
+  const total = pass + fail + na
+  const bars: { label: string; value: number; color: string }[] = [
+    { label: 'Passing', value: pass, color: 'bg-emerald-500' },
+    { label: 'Failing', value: fail, color: 'bg-rose-500' },
+    { label: 'Not Applicable', value: na, color: 'bg-slate-400' },
+  ]
+  return (
+    <div className="space-y-2.5">
+      {bars.map(({ label, value, color }) => (
+        <div key={label} className="flex items-center gap-3">
+          <span className="w-28 shrink-0 text-xs text-slate-500">{label}</span>
+          <div className="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden ring-1 ring-inset ring-black/[0.03]">
+            <div className={`h-full rounded-full ${color}`} style={{ width: total > 0 ? `${(value / total) * 100}%` : '0%' }} />
+          </div>
+          <span className="w-7 text-right text-xs font-mono text-slate-600 tabular-nums">{value}</span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function ScoreBar({ pct }: { pct: number }) {
@@ -90,6 +112,8 @@ export default function ReportsPage() {
   const [selectedReport, setSelectedReport] = useState<DbAuditReport | null>(null)
   const [complianceScores, setComplianceScores] = useState<DbComplianceScore[]>([])
   const [loadingScores, setLoadingScores] = useState(false)
+  const [auditResults, setAuditResults] = useState<DbAuditResult[]>([])
+  const [reportChecklistItems, setReportChecklistItems] = useState<DbChecklistItem[]>([])
 
   const loadReports = useCallback(async () => {
     if (!currentUserId) return
@@ -115,14 +139,39 @@ export default function ReportsPage() {
     setSelectedReport(report)
     setLoadingScores(true)
     try {
-      const scores = await db.fetchComplianceScores(report.projectId)
+      const [scores, results, items] = await Promise.all([
+        db.fetchComplianceScores(report.projectId),
+        db.fetchAuditResults(report.projectId),
+        db.fetchProjectChecklistItems(report.projectId),
+      ])
       setComplianceScores(scores ?? [])
+      setAuditResults(results ?? [])
+      setReportChecklistItems(items ?? [])
     } catch {
       setComplianceScores([])
+      setAuditResults([])
+      setReportChecklistItems([])
     } finally {
       setLoadingScores(false)
     }
   }
+
+  const itemById = useMemo(
+    () => new Map(reportChecklistItems.map((ci) => [ci.itemId, ci])),
+    [reportChecklistItems],
+  )
+  const passResults = useMemo(
+    () => auditResults.filter((r) => r.result === 'compliant'),
+    [auditResults],
+  )
+  const failingResults = useMemo(
+    () => auditResults.filter((r) => r.result === 'non_compliant' || r.result === 'partially'),
+    [auditResults],
+  )
+  const naResults = useMemo(
+    () => auditResults.filter((r) => r.result === 'not_applicable'),
+    [auditResults],
+  )
 
   // Export Report as PDF
   function handleExportPDF() {
@@ -319,6 +368,64 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
+                {/* Quick summary — failing & not applicable items */}
+                {!loadingScores && (failingResults.length > 0 || naResults.length > 0) && (
+                  <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                    <div className="px-5 py-3 bg-slate-50 border-b border-slate-100">
+                      <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Quick Summary — Failing &amp; Not Applicable</p>
+                    </div>
+                    <div className="px-5 py-4 border-b border-slate-100">
+                      <SummaryBarChart pass={passResults.length} fail={failingResults.length} na={naResults.length} />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-100">
+                      <div className="p-5">
+                        <p className="text-xs font-semibold text-rose-600 mb-3 flex items-center gap-1.5">
+                          <XCircle size={13} weight="fill" /> Failing ({failingResults.length})
+                        </p>
+                        {failingResults.length === 0 ? (
+                          <p className="text-xs text-slate-400">No failing items.</p>
+                        ) : (
+                          <ul className="space-y-3 max-h-72 overflow-y-auto pr-1 print:max-h-none print:overflow-visible">
+                            {failingResults.map((r) => {
+                              const item = itemById.get(r.itemId)
+                              return (
+                                <li key={r.resultId} className="text-xs">
+                                  <p className="font-medium text-slate-700 leading-snug">{item?.itemName || item?.itemDescription || 'Checklist item'}</p>
+                                  <p className="text-[10px] text-slate-400 mt-0.5">
+                                    {item?.category}{r.result === 'partially' ? ' · Partially compliant' : ' · Non-compliant'}
+                                  </p>
+                                  {r.findings && <p className="text-[11px] text-rose-600 mt-1 leading-relaxed">{r.findings}</p>}
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        )}
+                      </div>
+                      <div className="p-5">
+                        <p className="text-xs font-semibold text-slate-500 mb-3 flex items-center gap-1.5">
+                          <MinusCircle size={13} weight="fill" /> Not Applicable ({naResults.length})
+                        </p>
+                        {naResults.length === 0 ? (
+                          <p className="text-xs text-slate-400">No not-applicable items.</p>
+                        ) : (
+                          <ul className="space-y-3 max-h-72 overflow-y-auto pr-1 print:max-h-none print:overflow-visible">
+                            {naResults.map((r) => {
+                              const item = itemById.get(r.itemId)
+                              return (
+                                <li key={r.resultId} className="text-xs">
+                                  <p className="font-medium text-slate-700 leading-snug">{item?.itemName || item?.itemDescription || 'Checklist item'}</p>
+                                  <p className="text-[10px] text-slate-400 mt-0.5">{item?.category}</p>
+                                  {r.notes && <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{r.notes}</p>}
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Per-guideline breakdown (category breakdown) */}
                 {loadingScores ? (
                   <div className="bg-white border border-slate-200 rounded-xl flex items-center justify-center py-12">
@@ -378,6 +485,53 @@ export default function ReportsPage() {
             <p className="text-sm font-semibold mb-2">Overall Compliance Score: {overallScore.toFixed(1)}%</p>
             <p className="text-sm text-gray-600">{totalCompliant} compliant · {totalNonCompliant} non-compliant · {totalNA} not applicable · {totalItems - totalAnswered} pending</p>
           </div>
+
+          {(failingResults.length > 0 || naResults.length > 0) && (
+            <div className="mb-8">
+              <p className="text-sm font-semibold mb-3">Quick Summary — Failing &amp; Not Applicable</p>
+
+              <div className="mb-6 max-w-md" style={{ breakInside: 'avoid' }}>
+                <SummaryBarChart pass={passResults.length} fail={failingResults.length} na={naResults.length} />
+              </div>
+
+              {/* Stacked (not side-by-side) so each section can flow and paginate naturally across PDF pages */}
+              {failingResults.length > 0 && (
+                <div className="mb-5" style={{ breakInside: 'avoid' }}>
+                  <p className="text-xs font-semibold text-red-700 uppercase tracking-wide mb-2">Failing ({failingResults.length})</p>
+                  <ul className="space-y-2.5">
+                    {failingResults.map((r) => {
+                      const item = itemById.get(r.itemId)
+                      return (
+                        <li key={r.resultId} className="text-xs" style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+                          <p className="font-medium text-gray-800">{item?.itemName || item?.itemDescription || 'Checklist item'}</p>
+                          <p className="text-gray-500">{item?.category}{r.result === 'partially' ? ' · Partially compliant' : ' · Non-compliant'}</p>
+                          {r.findings && <p className="text-red-700 mt-0.5">{r.findings}</p>}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              )}
+
+              {naResults.length > 0 && (
+                <div style={{ breakInside: 'avoid' }}>
+                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">Not Applicable ({naResults.length})</p>
+                  <ul className="space-y-2.5">
+                    {naResults.map((r) => {
+                      const item = itemById.get(r.itemId)
+                      return (
+                        <li key={r.resultId} className="text-xs" style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+                          <p className="font-medium text-gray-800">{item?.itemName || item?.itemDescription || 'Checklist item'}</p>
+                          <p className="text-gray-500">{item?.category}</p>
+                          {r.notes && <p className="text-gray-600 mt-0.5">{r.notes}</p>}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
 
           {complianceScores.length > 0 && (
             <div>

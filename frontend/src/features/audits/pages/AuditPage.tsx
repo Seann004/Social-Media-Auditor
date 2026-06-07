@@ -335,6 +335,50 @@ export default function AuditPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGuidelineTab])
 
+  // Flagged items (needs_review) — clickable navigation to the flagged checklist item
+  const flaggedItems = useMemo(
+    () => checklistItems.filter((ci) => responses[`${id}__${ci.id}`]?.status === 'needs_review'),
+    [checklistItems, responses, id],
+  )
+  const [showFlaggedList, setShowFlaggedList] = useState(false)
+  const [flaggedNavTarget, setFlaggedNavTarget] = useState<{ itemId: string; guidelineId: string; category: string } | null>(null)
+  const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null)
+  const itemRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
+  function goToFlaggedItem(item: ChecklistItem) {
+    setShowFlaggedList(false)
+    setActiveTab('checklist')
+    setFlaggedNavTarget({ itemId: item.id, guidelineId: item.guidelineId, category: item.category })
+    if (item.guidelineId !== activeGuidelineTab) {
+      setActiveGuidelineTab(item.guidelineId)
+    } else if (item.category !== selectedCategory) {
+      setSelectedCategory(item.category)
+    }
+  }
+
+  // Step 1: once the active guideline tab matches the target, switch to its category
+  useEffect(() => {
+    if (flaggedNavTarget && activeGuidelineTab === flaggedNavTarget.guidelineId && selectedCategory !== flaggedNavTarget.category) {
+      setSelectedCategory(flaggedNavTarget.category)
+    }
+  }, [flaggedNavTarget, activeGuidelineTab, selectedCategory])
+
+  // Step 2: once the category is showing the target item, scroll to it and highlight it
+  useEffect(() => {
+    if (!flaggedNavTarget || selectedCategory !== flaggedNavTarget.category) return
+    const target = flaggedNavTarget
+    const t = setTimeout(() => {
+      const el = itemRefs.current[target.itemId]
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        setHighlightedItemId(target.itemId)
+        setTimeout(() => setHighlightedItemId(null), 2200)
+      }
+      setFlaggedNavTarget(null)
+    }, 80)
+    return () => clearTimeout(t)
+  }, [flaggedNavTarget, selectedCategory])
+
   // Evidence images: itemId → array of { url, name }
   const [evidence, setEvidence] = useState<Record<string, { url: string; name: string }[]>>({})
   const [evidenceError, setEvidenceError] = useState<string | null>(null)
@@ -456,7 +500,9 @@ export default function AuditPage() {
     const resp = responses[`${id}__${ci.id}`]
     return resp && resp.status !== 'not_started' && resp.status !== 'needs_review'
   })
-  const canSubmit = isAuditor && allAnswered && project.submissionStatus === 'not_submitted' && project.status === 'in_progress'
+  const canSubmit = isAuditor && allAnswered
+    && (project.submissionStatus === 'not_submitted' || project.submissionStatus === 'rejected')
+    && project.status === 'in_progress'
 
   function getResponse(itemId: string) { return responses[`${id}__${itemId}`] }
 
@@ -636,7 +682,7 @@ helpText: newItemHelp.trim() || undefined,
                 </button>
               </>
             )}
-            {isAuditor && project.submissionStatus === 'not_submitted' && (
+            {isAuditor && (project.submissionStatus === 'not_submitted' || project.submissionStatus === 'rejected') && (
               <button
                 type="button"
                 disabled={!canSubmit || submitting}
@@ -645,7 +691,7 @@ helpText: newItemHelp.trim() || undefined,
                 className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {submitting ? <Spinner size={13} className="animate-spin" /> : <PaperPlaneTilt size={13} />}
-                Submit for Review
+                {project.submissionStatus === 'rejected' ? 'Resubmit for Review' : 'Submit for Review'}
               </button>
             )}
             {isAuditor && project.submissionStatus === 'pending_review' && (
@@ -678,9 +724,59 @@ helpText: newItemHelp.trim() || undefined,
               <p className="text-[10px] text-slate-400 mt-0.5">{label}</p>
             </div>
           ))}
+
+          {flaggedItems.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowFlaggedList((v) => !v)}
+                className={[
+                  'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium ring-1 transition-colors cursor-pointer',
+                  showFlaggedList
+                    ? 'bg-amber-500 text-white ring-amber-500'
+                    : 'bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100',
+                ].join(' ')}
+              >
+                <Flag size={12} weight="fill" />
+                {flaggedItems.length} Flagged
+                <CaretRight size={11} weight="bold" className={`transition-transform duration-200 ${showFlaggedList ? 'rotate-90' : ''}`} />
+              </button>
+
+              <AnimatePresence>
+                {showFlaggedList && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setShowFlaggedList(false)} />
+                    <motion.div
+                      initial={{ opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute left-0 top-full mt-1.5 w-72 max-h-72 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-20 py-1.5"
+                    >
+                      {flaggedItems.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => goToFlaggedItem(item)}
+                          className="w-full text-left px-3 py-2 hover:bg-amber-50 transition-colors flex items-start gap-2 cursor-pointer"
+                        >
+                          <Flag size={12} weight="fill" className="text-amber-500 mt-0.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-slate-700 truncate">{item.itemName || item.text}</p>
+                            <p className="text-[10px] text-slate-400 truncate">{item.category}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
           <div className="ml-auto hidden sm:flex items-center gap-2">
             <div className="relative h-1.5 w-32 bg-slate-100 rounded-full overflow-hidden">
-              <div className="absolute inset-y-0 left-0 bg-blue-500 rounded-full origin-left"
+              <div className="absolute inset-y-0 left-0 w-full bg-blue-500 rounded-full origin-left"
                 style={{ transform: `scaleX(${score.progress / 100})`, transition: 'transform 0.8s cubic-bezier(0.16,1,0.3,1)' }} />
             </div>
             <p className="text-[11px] text-slate-400 font-sans tabular-nums whitespace-nowrap">{score.answered}/{score.total} items</p>
@@ -1202,7 +1298,15 @@ helpText: newItemHelp.trim() || undefined,
                       const isConfirmingDelete = confirmDeleteItemId === ci.id
 
                       return (
-                        <motion.div key={ci.id} variants={rowVar} className="px-6 py-5">
+                        <motion.div
+                          key={ci.id}
+                          variants={rowVar}
+                          ref={(el: HTMLDivElement | null) => { itemRefs.current[ci.id] = el }}
+                          className={[
+                            'px-6 py-5 transition-colors duration-700',
+                            highlightedItemId === ci.id ? 'bg-amber-50 ring-1 ring-inset ring-amber-200' : '',
+                          ].join(' ')}
+                        >
                           {isEditing ? (
                             <div className="space-y-3">
                               <textarea value={editText} onChange={(e) => setEditText(e.target.value)} rows={3}

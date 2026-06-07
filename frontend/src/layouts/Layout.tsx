@@ -21,7 +21,7 @@ export default function Layout() {
   }, [])
 
   return (
-    <div className="flex h-screen overflow-hidden bg-page-bg">
+    <div className="flex h-screen overflow-hidden bg-page-bg print:block print:h-auto print:overflow-visible">
       {/* Mobile backdrop */}
       <AnimatePresence>
         {drawerOpen && (
@@ -40,7 +40,7 @@ export default function Layout() {
       {/* Sidebar — fixed drawer on mobile, static on desktop */}
       <div
         className={[
-          'fixed inset-y-0 left-0 z-30 transition-transform duration-300 ease-in-out',
+          'fixed inset-y-0 left-0 z-30 transition-transform duration-300 ease-in-out print:hidden',
           'lg:static lg:translate-x-0',
           drawerOpen ? 'translate-x-0' : '-translate-x-full',
         ].join(' ')}
@@ -49,9 +49,9 @@ export default function Layout() {
       </div>
 
       {/* Main content column */}
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+      <div className="flex flex-col flex-1 min-w-0 overflow-hidden print:block print:overflow-visible">
         {/* Mobile-only top bar */}
-        <div className="lg:hidden flex items-center gap-3 px-4 h-14 bg-primary shrink-0 border-b border-primary-hover">
+        <div className="lg:hidden print:hidden flex items-center gap-3 px-4 h-14 bg-primary shrink-0 border-b border-primary-hover">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
@@ -66,7 +66,7 @@ export default function Layout() {
           </div>
         </div>
 
-        <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">
+        <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden print:overflow-visible print:h-auto print:block">
           <Outlet />
         </main>
       </div>
