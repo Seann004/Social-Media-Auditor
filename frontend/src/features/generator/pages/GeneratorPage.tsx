@@ -58,7 +58,8 @@ const PRESETS: Record<string, { category: string; text: string; severity: Severi
 
 export default function GeneratorPage() {
   const navigate = useNavigate()
-  const { addSyntheticGuideline, addAiNotification } = useStore()
+  const { addSyntheticGuideline } = useStore()
+  const [aiErrors, setAiErrors] = useState<string[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pdfInputRef = useRef<HTMLInputElement>(null)
 
@@ -568,12 +569,11 @@ export default function GeneratorPage() {
         throw new Error('No readable text found in PDF.')
       }
 
-      // Chunk text: ~16,000 characters per chunk (~4000 tokens)
-      const textChunks = chunkText(fullText, 16000)
-      setTotalChunks(textChunks.length)
       setPdfStep(2)
-      
-      processPdfChunks(textChunks, file.name)
+      setTotalChunks(1)
+      setCurrentChunkIdx(0)
+
+      processPdfChunks(fullText, file.name)
 
     } catch (err) {
       console.error(err)
@@ -582,47 +582,23 @@ export default function GeneratorPage() {
     }
   }
 
-  const chunkText = (text: string, size: number): string[] => {
-    const chunks: string[] = []
-    let index = 0
-    while (index < text.length) {
-      chunks.push(text.slice(index, index + size))
-      index += size
-    }
-    return chunks
-  }
-
-  const processPdfChunks = async (chunks: string[], fileName: string) => {
-    const gatheredItems: any[] = []
-    let chunkAiFailed = false
-
+  const processPdfChunks = async (fullText: string, fileName: string) => {
     try {
-      for (let i = 0; i < chunks.length; i++) {
-        setCurrentChunkIdx(i)
+      // Extract a focused 4,000-character sample from the document body.
+      // Skipping the first 300 chars avoids cover-page noise (title, TOC headers).
+      // This keeps the Groq request well within the free-tier 6,000 TPM limit.
+      const sample = fullText.trimStart().slice(300, 4300)
 
-        const chunkResult = await db.processTextChunk(chunks[i], platform)
-        if (!chunkResult._aiUsed) chunkAiFailed = true
-        gatheredItems.push(...chunkResult.items)
-      }
+      const chunkResult = await db.processTextChunk(sample, platform)
 
-      if (chunkAiFailed) {
-        addAiNotification(
-          'AI Engine failed to connect to the LLM service during PDF chunk processing — heuristic fallback was used. Results may be less accurate.',
-        )
+      if (!chunkResult._aiUsed) {
+        setAiErrors((prev) => [...prev, 'AI Engine failed to connect to the LLM service — heuristic fallback was used. Results may be less accurate.'])
       }
 
       setPdfStep(3)
 
-      // Final pass: merge & deduplicate via Groq Llama 3.3
-      const mergeResult = await db.mergeChecklistItems(gatheredItems, platform)
+      const mergeResult = await db.mergeChecklistItems(chunkResult.items, platform)
 
-      if (!mergeResult._aiUsed) {
-        addAiNotification(
-          'AI Engine failed to connect to the LLM service during item merging — local deduplication was used. Framework name and categories may be generic.',
-          mergeResult._fallbackReason,
-        )
-      }
-      
       const guidelineId = window.crypto.randomUUID()
       const cleanFileName = fileName.replace(/\.[^/.]+$/, "")
 
@@ -686,6 +662,28 @@ export default function GeneratorPage() {
           <p className="text-slate-500 text-sm mt-1">Upload Excel tables containing derived checklists, or let Llama analyze PDF guidelines to derive a checklist.</p>
         </div>
       </div>
+
+      {aiErrors.length > 0 && (
+        <div className="mb-6 space-y-2">
+          {aiErrors.map((msg, i) => (
+            <div key={i} className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+              <svg className="w-4 h-4 text-amber-500 mt-0.5 shrink-0 fill-current" viewBox="0 0 256 256"><path d="M236.8,188.09,149.35,36.22a24.76,24.76,0,0,0-42.7,0L19.2,188.09a23.51,23.51,0,0,0,0,23.72A24.35,24.35,0,0,0,40.55,224h174.9a24.35,24.35,0,0,0,21.33-12.19A23.51,23.51,0,0,0,236.8,188.09ZM120,104a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm8,88a12,12,0,1,1,12-12A12,12,0,0,1,128,192Z"/></svg>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-amber-900">AI Engine — LLM Connection Failed</p>
+                <p className="text-xs text-amber-700 mt-0.5">{msg}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAiErrors((prev) => prev.filter((_, j) => j !== i))}
+                className="p-1 rounded-lg text-amber-400 hover:text-amber-600 hover:bg-amber-100 transition-colors shrink-0"
+                aria-label="Dismiss"
+              >
+                <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 256 256"><path d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z"/></svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
         {/* Left Column: Generator Form */}

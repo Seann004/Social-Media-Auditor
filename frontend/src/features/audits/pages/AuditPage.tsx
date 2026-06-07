@@ -213,7 +213,7 @@ export default function AuditPage() {
   }, [categories, activeGuidelineCategories, id, checklistItems, responses])
 
 
-  console.log('AUDIT_PAGE_LOG:', { projectGuidelines, checklistItems, allCategories, categories, sections, activeGuidelineTab });
+  console.log('AUDIT_PAGE_LOG:', { projectGuidelines, checklistItems, allCategories, categories, sections, activeGuidelineTab, storeGuidelines: useStore.getState().guidelines, storeProjects: useStore.getState().projects, project });
 
   useEffect(() => {
     if (selectedCategory) {
@@ -463,7 +463,11 @@ export default function AuditPage() {
   async function handleResponseClick(itemId: string, guidelineId: string, status: ChecklistItemStatus) {
     const current = getResponse(itemId)
     const notes = noteValues[itemId] ?? current?.notes ?? ''
-    await setResponse(id!, itemId, guidelineId, status, notes)
+    try {
+      await setResponse(id!, itemId, guidelineId, status, notes)
+    } catch {
+      alert('Failed to save your response. Please check your connection and try again.')
+    }
   }
 
   function toggleNotes(itemId: string) {

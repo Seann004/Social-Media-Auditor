@@ -19,12 +19,6 @@ import { hashPassword } from '../lib/crypto'
 
 type ResponseMap = Record<string, AuditResponse>
 
-export interface AiNotification {
-  id: string
-  message: string
-  timestamp: string
-  fallbackReason?: string
-}
 
 const ROLE_COLORS: Record<string, string> = {
   admin: 'bg-blue-600',
@@ -177,10 +171,6 @@ interface StoreState {
   addSyntheticGuideline: (guideline: Guideline, items: ChecklistItem[]) => Promise<void>
   addGuidelineFromRealtime: (dbGuideline: db.DbGuideline, dbItems: db.DbChecklistItem[]) => void
 
-  // AI Engine notifications
-  aiNotifications: AiNotification[]
-  addAiNotification: (message: string, fallbackReason?: string) => void
-  dismissAiNotification: (id: string) => void
 
   // Audit responses
   setResponse: (projectId: string, itemId: string, guidelineId: string, status: ChecklistItemStatus, notes?: string, findings?: string) => Promise<void>
@@ -204,7 +194,6 @@ export const useStore = create<StoreState>()(
   complianceMap: {},
   loading: false,
   dbError: null,
-  aiNotifications: [],
 
   login: (userId, name, role) => {
     const initials = name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
@@ -463,20 +452,6 @@ export const useStore = create<StoreState>()(
     })
   },
 
-  addAiNotification: (message, fallbackReason) => {
-    const notification: AiNotification = {
-      id: window.crypto.randomUUID(),
-      message,
-      timestamp: new Date().toISOString(),
-      fallbackReason,
-    }
-    set((state) => ({ aiNotifications: [notification, ...state.aiNotifications] }))
-  },
-
-  dismissAiNotification: (id) => {
-    set((state) => ({ aiNotifications: state.aiNotifications.filter((n) => n.id !== id) }))
-  },
-
   addSyntheticGuideline: async (guideline, items) => {
     const { currentUserId } = get()
     await db.createGuideline({
@@ -566,8 +541,9 @@ export const useStore = create<StoreState>()(
           ),
         }))
       }
-    } catch {
-      // Response already set optimistically — fail silently in UI
+    } catch (err) {
+      console.error('[setResponse] Failed to save audit result to DB:', err)
+      throw err
     }
   },
 

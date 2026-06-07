@@ -1278,41 +1278,71 @@ export async function fetchAuditResults(projectId: string): Promise<DbAuditResul
 
 
 export async function upsertAuditResult(
-
   projectId: string,
-
   itemId: string,
-
   userId: string,
-
   guidelineId: string,
-
   result: ChecklistItemStatus,
-
   notes: string = ''
-
 ): Promise<{ answered: number; compliant: number; nonCompliant: number; notApplicable: number; percentage: number; total: number }> {
 
-  const { data, error } = await supabase.rpc('upsert_audit_result', {
+  // The old upsert_audit_result RPC referenced the dropped Project_Guideline table.
+  // Use direct Supabase operations instead.
+  const { data: existing } = await supabase
+    .from('Audit_Result')
+    .select('resultId')
+    .eq('projectId', projectId)
+    .eq('itemId', itemId)
+    .eq('userId', userId)
+    .maybeSingle()
 
-    p_project_id: projectId,
+  if (existing) {
+    const { error } = await supabase
+      .from('Audit_Result')
+      .update({ result, notes: notes || null, guidelineId, timeSubmitted: new Date().toISOString() })
+      .eq('resultId', (existing as any).resultId)
+    if (error) throw error
+  } else {
+    const { error } = await supabase
+      .from('Audit_Result')
+      .insert({ projectId, itemId, userId, guidelineId, result, notes: notes || null, timeSubmitted: new Date().toISOString() })
+    if (error) throw error
+  }
 
-    p_item_id: itemId,
+  // Compute and return score summary for this project
+  const { data: allResults } = await supabase
+    .from('Audit_Result')
+    .select('result')
+    .eq('projectId', projectId)
 
-    p_user_id: userId,
+  const results = (allResults ?? []) as { result: string }[]
+  const answered = results.length
+  const notApplicable = results.filter(r => r.result === 'not_applicable').length
+  const compliant = results.filter(r => r.result === 'compliant').length
+  const nonCompliant = results.filter(r => r.result === 'non_compliant' || r.result === 'partially').length
+  const applicable = answered - notApplicable
+  const weightedCompliant = results.reduce((sum, r) => {
+    if (r.result === 'compliant') return sum + 1
+    if (r.result === 'partially') return sum + 0.5
+    return sum
+  }, 0)
+  const percentage = applicable > 0 ? Math.round((weightedCompliant / applicable) * 1000) / 10 : 0
 
-    p_guideline_id: guidelineId,
+  const { data: checklists } = await supabase
+    .from('Checklist')
+    .select('checklistId')
+    .eq('projectId', projectId)
+  const checklistIds = ((checklists ?? []) as any[]).map(c => c.checklistId)
+  let total = 0
+  if (checklistIds.length > 0) {
+    const { count } = await supabase
+      .from('Checklist_Item')
+      .select('*', { count: 'exact', head: true })
+      .in('checklistId', checklistIds)
+    total = count ?? 0
+  }
 
-    p_result: result,
-
-    p_notes: notes || null,
-
-  })
-
-  if (error) throw error
-
-  return data as { answered: number; compliant: number; nonCompliant: number; notApplicable: number; percentage: number; total: number }
-
+  return { answered, compliant, nonCompliant, notApplicable, percentage, total }
 }
 
 
@@ -1322,6 +1352,14 @@ export async function upsertAuditResult(
 
 
 export async function submitForReview(projectId: string): Promise<void> {
+
+  // Look up headAuditorId to use as the report creator
+  const { data: proj, error: projError } = await supabase
+    .from('Audit_Project')
+    .select('headAuditorId')
+    .eq('projectId', projectId)
+    .single()
+  if (projError) throw projError
 
   const { error } = await supabase
 
@@ -1341,11 +1379,30 @@ export async function submitForReview(projectId: string): Promise<void> {
 
   if (error) throw error
 
+  // Auto-create Audit_Report row if one doesn't exist yet
+  const { data: existing } = await supabase
+    .from('Audit_Report')
+    .select('reportId')
+    .eq('projectId', projectId)
+    .maybeSingle()
+  if (!existing) {
+    await supabase
+      .from('Audit_Report')
+      .insert({ projectId, userId: (proj as any).headAuditorId })
+  }
+
 }
 
 
 
 export async function reviewSubmission(projectId: string, approved: boolean, remarks: string): Promise<void> {
+
+  // Look up headAuditorId to use as report creator if needed
+  const { data: proj } = await supabase
+    .from('Audit_Project')
+    .select('headAuditorId')
+    .eq('projectId', projectId)
+    .single()
 
   const { error } = await supabase
 
@@ -1366,6 +1423,20 @@ export async function reviewSubmission(projectId: string, approved: boolean, rem
     .eq('projectId', projectId)
 
   if (error) throw error
+
+  // Ensure Audit_Report row exists (may have been skipped if project was submitted before this fix)
+  if (proj) {
+    const { data: existing } = await supabase
+      .from('Audit_Report')
+      .select('reportId')
+      .eq('projectId', projectId)
+      .maybeSingle()
+    if (!existing) {
+      await supabase
+        .from('Audit_Report')
+        .insert({ projectId, userId: (proj as any).headAuditorId })
+    }
+  }
 
 }
 
@@ -1514,14 +1585,34 @@ export async function fetchAuditReports(
   const projectIds = projects.map(p => p.projectId)
   
   // 3. Fetch reports
-  const { data: reports, error: reportsError } = await supabase
+  const { data: reportsRaw, error: reportsError } = await supabase
     .from('Audit_Report')
     .select('reportId, projectId, userId, timeGenerated')
     .in('projectId', projectIds)
   if (reportsError) throw reportsError
-  if (!reports || reports.length === 0) return []
-  
-  const reportProjectIds = Array.from(new Set(reports.map(r => r.projectId)))
+
+  const allReports: any[] = [...(reportsRaw ?? [])]
+
+  // Backfill: auto-create Audit_Report rows for submitted/completed projects that don't have one yet
+  const reportedProjectIds = new Set(allReports.map(r => r.projectId))
+  const submittedStatuses = ['pending_review', 'approved', 'rejected']
+  const needsBackfill = projects.filter(
+    p => submittedStatuses.includes(p.submissionStatus) && !reportedProjectIds.has(p.projectId)
+  )
+  if (needsBackfill.length > 0) {
+    await supabase.from('Audit_Report').insert(
+      needsBackfill.map(p => ({ projectId: p.projectId, userId: p.headAuditorId }))
+    )
+    const { data: refreshed } = await supabase
+      .from('Audit_Report')
+      .select('reportId, projectId, userId, timeGenerated')
+      .in('projectId', needsBackfill.map(p => p.projectId))
+    for (const r of refreshed ?? []) allReports.push(r)
+  }
+
+  if (allReports.length === 0) return []
+
+  const reportProjectIds = Array.from(new Set(allReports.map(r => r.projectId)))
   const filteredProjects = projects.filter(p => reportProjectIds.includes(p.projectId))
   
   // Fetch head auditor names
@@ -1556,7 +1647,7 @@ export async function fetchAuditReports(
   const complianceSummary = await fetchProjectComplianceSummary(reportProjectIds)
   
   const results = []
-  for (const r of reports) {
+  for (const r of allReports) {
     const p = filteredProjects.find(proj => proj.projectId === r.projectId)
     if (!p) continue
     

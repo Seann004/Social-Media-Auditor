@@ -412,6 +412,18 @@ app.post('/api/reports', async (req, res) => {
 
 
 // ─── Llama 3.3 Groq Generator Routes ──────────────────────────────────────────
+
+async function groqFetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const res = await fetch(url, options)
+    if (res.status !== 429) return res
+    const retryAfter = Number(res.headers.get('retry-after') || 0) || 15
+    console.warn(`[GROQ] 429 rate limit — waiting ${retryAfter}s before retry ${attempt + 1}/${retries}`)
+    await new Promise((r) => setTimeout(r, retryAfter * 1000))
+  }
+  // Final attempt — return whatever we get
+  return fetch(url, options)
+}
 app.post('/api/generator/process-chunk', async (req, res) => {
   try {
     const { textChunk, platform } = req.body
@@ -450,7 +462,7 @@ You MUST return your output in JSON format matching this EXACT schema:
   ]
 }`
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const response = await groqFetchWithRetry('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -563,6 +575,25 @@ app.post('/api/generator/merge-items', async (req, res) => {
       return res.status(500).json({ error: 'GROQ_API_KEY is not configured on the backend server' })
     }
 
+    // Pre-deduplicate and cap before sending to Groq to stay within token limits.
+    // Strip helpText from input (Groq generates new ones) and limit to 60 unique items.
+    const seenNorm = new Set<string>()
+    const dedupedItems = items
+      .filter((item: any) => {
+        const norm = (item.text || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 80)
+        if (!norm || seenNorm.has(norm)) return false
+        seenNorm.add(norm)
+        return true
+      })
+      .slice(0, 60)
+      .map((item: any) => ({
+        id: item.id,
+        category: item.category,
+        text: (item.text || '').slice(0, 300),
+        severity: item.severity,
+        reference: item.reference || '',
+      }))
+
     const systemPrompt = `You are an expert compliance auditor. You will be provided with a raw list of child safety compliance check items extracted from different parts of a document for ${platform || 'social media platforms'}.
 Your task is to:
 1. Merge and deduplicate items that are highly similar or check the exact same thing.
@@ -588,7 +619,7 @@ You MUST return your output in JSON format matching this EXACT schema:
   ]
 }`
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const response = await groqFetchWithRetry('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -599,7 +630,7 @@ You MUST return your output in JSON format matching this EXACT schema:
         model,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Here is the list of raw checklist items:\n\n${JSON.stringify(items, null, 2)}` }
+          { role: 'user', content: `Here is the list of raw checklist items:\n\n${JSON.stringify(dedupedItems, null, 2)}` }
         ],
         response_format: { type: 'json_object' },
         temperature: 0.2
