@@ -593,14 +593,16 @@ export default function GeneratorPage() {
         offset += (size - overlap);
       }
 
-      setTotalChunks(chunks.length);
+      // Only run for the first chunk
+      const processedChunks = chunks.slice(0, 1);
+      setTotalChunks(processedChunks.length);
       
       const allItems = [];
       let aiUsed = true;
 
-      for (let i = 0; i < chunks.length; i++) {
+      for (let i = 0; i < processedChunks.length; i++) {
         setCurrentChunkIdx(i);
-        const chunkResult = await db.processTextChunk(chunks[i], platform);
+        const chunkResult = await db.processTextChunk(processedChunks[i], platform);
         if (!chunkResult._aiUsed) {
           aiUsed = false;
         }
