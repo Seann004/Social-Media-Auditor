@@ -696,7 +696,7 @@ export default function GeneratorPage() {
               >
                 <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 256 256"><path d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z"/></svg>
               </button>
-            </div>
+                            </div>
           ))}
         </div>
       )}
@@ -727,7 +727,7 @@ export default function GeneratorPage() {
                 <FilePdf size={14} />
                 PDF Guidelines
               </button>
-            </div>
+                            </div>
 
             {activeTab === 'excel' ? (
               // EXCEL FILE UPLOAD VIEW
@@ -985,10 +985,6 @@ export default function GeneratorPage() {
                               >
                                 {item.reference || 'N/A'}
                               </button>
-<<<<<<< HEAD
-=======
-                              
->>>>>>> 78aaf31c1467e1f03bb79e6744485eaa754142c2
                             </div>
                           </div>
                           <p className="text-sm text-slate-700 leading-relaxed font-semibold">
@@ -1018,7 +1014,7 @@ export default function GeneratorPage() {
                       )}
                       Commit Framework to Guidelines
                     </button>
-                  </div>
+                            </div>
                 </motion.div>
               ) : (
                 // Empty State
@@ -1077,7 +1073,7 @@ export default function GeneratorPage() {
                   >
                     <XIcon size={16} weight="bold" />
                   </button>
-                </div>
+                            </div>
               </div>
 
               <div className="space-y-4 overflow-y-auto pr-1 flex-1 px-4 pb-4">
@@ -1133,7 +1129,7 @@ export default function GeneratorPage() {
                 >
                   Dismiss
                 </button>
-              </div>
+                            </div>
             </motion.div>
           </div>
         )}
