@@ -570,9 +570,6 @@ export default function GeneratorPage() {
       }
 
       setPdfStep(2)
-      setTotalChunks(1)
-      setCurrentChunkIdx(0)
-
       processPdfChunks(fullText, file.name)
 
     } catch (err) {
@@ -584,20 +581,39 @@ export default function GeneratorPage() {
 
   const processPdfChunks = async (fullText: string, fileName: string) => {
     try {
-      // Extract a focused 4,000-character sample from the document body.
-      // Skipping the first 300 chars avoids cover-page noise (title, TOC headers).
-      // This keeps the Groq request well within the free-tier 6,000 TPM limit.
-      const sample = fullText.trimStart().slice(300, 4300)
-
-      const chunkResult = await db.processTextChunk(sample, platform)
-
-      if (!chunkResult._aiUsed) {
-        setAiErrors((prev) => [...prev, 'AI Engine failed to connect to the LLM service — heuristic fallback was used. Results may be less accurate.'])
+      // Split the PDF text into ~4,000 character chunks with a 200-character overlap
+      // to ensure no context is lost at chunk boundaries.
+      const size = 4000;
+      const overlap = 200;
+      const cleanText = fullText.trim();
+      const chunks = [];
+      let offset = 0;
+      while (offset < cleanText.length) {
+        chunks.push(cleanText.slice(offset, offset + size));
+        offset += (size - overlap);
       }
 
-      setPdfStep(3)
+      setTotalChunks(chunks.length);
+      
+      const allItems = [];
+      let aiUsed = true;
 
-      const mergeResult = await db.mergeChecklistItems(chunkResult.items, platform)
+      for (let i = 0; i < chunks.length; i++) {
+        setCurrentChunkIdx(i);
+        const chunkResult = await db.processTextChunk(chunks[i], platform);
+        if (!chunkResult._aiUsed) {
+          aiUsed = false;
+        }
+        allItems.push(...(chunkResult.items || []));
+      }
+
+      if (!aiUsed) {
+        setAiErrors((prev) => [...prev, 'AI Engine failed to connect to the LLM service for one or more chunks — heuristic fallback was used. Results may be less accurate.']);
+      }
+
+      setPdfStep(3);
+
+      const mergeResult = await db.mergeChecklistItems(allItems, platform)
 
       const guidelineId = window.crypto.randomUUID()
       const cleanFileName = fileName.replace(/\.[^/.]+$/, "")
@@ -969,15 +985,7 @@ export default function GeneratorPage() {
                               >
                                 {item.reference || 'N/A'}
                               </button>
-                              <span className={`text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-full font-bold ${
-                                item.severity === 'critical'
-                                  ? 'bg-rose-50 text-rose-700 border border-rose-100'
-                                  : item.severity === 'major'
-                                  ? 'bg-amber-50 text-amber-700 border border-amber-100'
-                                  : 'bg-blue-50 text-blue-700 border border-blue-100'
-                              }`}>
-                                {item.severity}
-                              </span>
+                              
                             </div>
                           </div>
                           <p className="text-sm text-slate-700 leading-relaxed font-semibold">
