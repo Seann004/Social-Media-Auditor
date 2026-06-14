@@ -56,6 +56,55 @@ const PRESETS: Record<string, { category: string; text: string; severity: Severi
   ]
 }
 
+function removeTOC(text: string): string {
+  // Strategy: find the TOC block and cut it out entirely
+  // TOC pages typically have lines ending with page numbers (dots + number pattern)
+  
+  const lines = text.split('\n');
+  const tocStartPatterns = [
+    /^table\s+of\s+contents/i,
+    /^contents$/i,
+  ];
+  
+  // Detect TOC lines: "Some heading .............. 32" or "1. Something .... 14"
+  const isTOCLine = (line: string) =>
+    /\.{3,}\s*\d+\s*$/.test(line.trim()) ||   // "heading ........ 12"
+    /^.{1,80}\s{2,}\d{1,3}\s*$/.test(line.trim()); // "heading        12"
+
+  let inTOC = false;
+  let tocEndBuffer = 0; // grace lines after TOC ends
+  const filtered: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Detect TOC start
+    if (!inTOC && tocStartPatterns.some(p => p.test(trimmed))) {
+      inTOC = true;
+      continue;
+    }
+
+    if (inTOC) {
+      if (isTOCLine(trimmed) || trimmed === '') {
+        tocEndBuffer = 0;
+        continue; // skip TOC lines
+      } else {
+        // Non-TOC line encountered — give it a few lines grace before declaring TOC ended
+        tocEndBuffer++;
+        if (tocEndBuffer >= 3) {
+          inTOC = false; // TOC is done
+          filtered.push(line);
+        }
+        // else skip — might be a TOC section header without page number
+      }
+    } else {
+      filtered.push(line);
+    }
+  }
+
+  return filtered.join('\n');
+}
+
 export default function GeneratorPage() {
   const navigate = useNavigate()
   const { addSyntheticGuideline } = useStore()
@@ -572,7 +621,7 @@ export default function GeneratorPage() {
       setPdfStep(2)
       setTotalChunks(1)
       setCurrentChunkIdx(0)
-      processPdfChunks(fullText, file.name)
+      processPdfChunks(removeTOC(fullText), file.name)
 
     } catch (err) {
       console.error(err)

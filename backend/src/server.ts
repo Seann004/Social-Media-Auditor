@@ -114,24 +114,24 @@ app.post('/api/projects/:id/members', async (req, res) => {
   try {
     const projectId = req.params.id
     const userIds = (req.body.userIds || []) as string[]
-    
+
     // 1. Fetch current details to see existing members
     const details = await db.fetchProjectDetails(projectId)
     const existingUserIds = (details?.members || []).map((m: any) => m.userId) as string[]
-    
+
     // 2. Perform sync
     await db.syncProjectMembers(projectId, userIds)
-    
+
     // 3. Find newly added userIds
     const newUserIds = userIds.filter((id: string) => !existingUserIds.includes(id))
-    
+
     // 4. Send emails asynchronously
     for (const userId of newUserIds) {
       db.sendAssignmentEmail(projectId, userId).catch((err) => {
         console.error('Error in sendAssignmentEmail async chain:', err)
       })
     }
-    
+
     res.json({ success: true })
   } catch (error) {
     console.error('Error syncing project members:', error)
@@ -143,15 +143,15 @@ app.post('/api/projects/:id/members/add', async (req, res) => {
   try {
     const projectId = req.params.id
     const userId = req.body.userId as string
-    
+
     // 1. Perform add
     await db.addProjectMember(projectId, userId)
-    
+
     // 2. Send email asynchronously
     db.sendAssignmentEmail(projectId, userId).catch((err) => {
       console.error('Error in sendAssignmentEmail async chain:', err)
     })
-    
+
     res.json({ success: true })
   } catch (error) {
     console.error('Error adding project member:', error)
@@ -442,6 +442,27 @@ app.post('/api/generator/process-chunk', async (req, res) => {
 Analyze the provided text snippet from a regulatory guideline document and extract child safety compliance check items.
 Focus on identifying concrete, auditable items suitable for checking a platform like ${platform || 'social media platforms'}.
 
+BEFORE extracting any items, identify valid clauses using these rules:
+
+A valid clause MUST impose a concrete obligation, standard, or requirement on the reader.
+Valid clause patterns include: numbered sections (e.g. "1.", "Article 5", "Section 3.2"), 
+titled requirement blocks, or named standards.
+
+IGNORE the following — do NOT extract checklist items from them or use them as references:
+- Page headers, footers, or version/date stamps (e.g. "2.1.87 | 17 October 2022", "v1.3 | 2024")
+- Standalone page numbers
+- Document furniture: "Executive Summary", "Foreword", "Preface", "Table of Contents",
+  "Glossary", "Annex", "Appendix", "Index", "About this document", "Enforcement"
+- Sub-headings that are questions or navigation aids within a clause, such as:
+  "What do you mean by...?", "Why is this important?", "How can we...?",
+  "At a glance", "In more detail", "Background", "Overview"
+- Introductory sections that describe the document itself rather than impose requirements
+
+For the "reference" field: use the nearest valid clause number or section title as it 
+appears in the document. If the text does not belong to a clearly numbered clause, 
+group it under the closest parent section heading. Never use page numbers, 
+question sub-headings, or document metadata as a reference value.
+
 For each checklist item, you must determine:
 1. "category": A relevant category (e.g. Age Gate, Consent, Direct Messaging, Data Safety, Content Filtering, Dark Patterns).
 2. "text": The auditable question. It must be specific, actionable, and state exactly what to check.
@@ -497,12 +518,12 @@ You MUST return your output in JSON format matching this EXACT schema:
       error: String(error),
       fallback: 'heuristic_parser',
     })
-    
+
     // Heuristic Extractor Fallback
     const sentences = (req.body.textChunk || '').split(/[.!?\n]+/)
     const items: any[] = []
     let idx = 1
-    
+
     const keywords = [
       { term: 'shall', sev: 'critical' },
       { term: 'must', sev: 'critical' },
@@ -520,7 +541,7 @@ You MUST return your output in JSON format matching this EXACT schema:
     for (let s of sentences) {
       s = s.trim()
       if (s.length < 35 || s.length > 250) continue
-      
+
       const matchedKeyword = keywords.find(k => new RegExp('\\b' + k.term + '\\b', 'i').test(s))
       if (matchedKeyword) {
         let category = 'General Safety'
@@ -654,16 +675,16 @@ You MUST return your output in JSON format matching this EXACT schema:
       error: String(error),
       fallback: 'local_deduplication',
     })
-    
+
     // Fallback merge
     const uniqueItems: any[] = []
     const seenTexts = new Set()
-    
+
     for (const item of (req.body.items || [])) {
       const normalized = (item.text || '').toLowerCase().replace(/[^a-z0-9]/g, '')
       if (!normalized || seenTexts.has(normalized)) continue
       seenTexts.add(normalized)
-      
+
       uniqueItems.push({
         id: item.id || `ci_merged_${uniqueItems.length + 1}`,
         category: item.category || 'General',
