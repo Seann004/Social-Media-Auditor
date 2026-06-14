@@ -570,6 +570,8 @@ export default function GeneratorPage() {
       }
 
       setPdfStep(2)
+      setTotalChunks(1)
+      setCurrentChunkIdx(0)
       processPdfChunks(fullText, file.name)
 
     } catch (err) {
@@ -581,41 +583,20 @@ export default function GeneratorPage() {
 
   const processPdfChunks = async (fullText: string, fileName: string) => {
     try {
-      // Split the PDF text into ~4,000 character chunks with a 200-character overlap
-      // to ensure no context is lost at chunk boundaries.
-      const size = 4000;
-      const overlap = 200;
-      const cleanText = fullText.trim();
-      const chunks = [];
-      let offset = 0;
-      while (offset < cleanText.length) {
-        chunks.push(cleanText.slice(offset, offset + size));
-        offset += (size - overlap);
+      // Extract a focused 4,000-character sample from the document body.
+      // Skipping the first 300 chars avoids cover-page noise (title, TOC headers).
+      // This keeps the Groq request well within the free-tier 6,000 TPM limit.
+      const sample = fullText.trimStart().slice(300, 4300)
+
+      const chunkResult = await db.processTextChunk(sample, platform)
+
+      if (!chunkResult._aiUsed) {
+        setAiErrors((prev) => [...prev, 'AI Engine failed to connect to the LLM service — heuristic fallback was used. Results may be less accurate.'])
       }
 
-      // Only run for the first chunk
-      const processedChunks = chunks.slice(0, 1);
-      setTotalChunks(processedChunks.length);
-      
-      const allItems = [];
-      let aiUsed = true;
+      setPdfStep(3)
 
-      for (let i = 0; i < processedChunks.length; i++) {
-        setCurrentChunkIdx(i);
-        const chunkResult = await db.processTextChunk(processedChunks[i], platform);
-        if (!chunkResult._aiUsed) {
-          aiUsed = false;
-        }
-        allItems.push(...(chunkResult.items || []));
-      }
-
-      if (!aiUsed) {
-        setAiErrors((prev) => [...prev, 'AI Engine failed to connect to the LLM service for one or more chunks — heuristic fallback was used. Results may be less accurate.']);
-      }
-
-      setPdfStep(3);
-
-      const mergeResult = await db.mergeChecklistItems(allItems, platform)
+      const mergeResult = await db.mergeChecklistItems(chunkResult.items, platform)
 
       const guidelineId = window.crypto.randomUUID()
       const cleanFileName = fileName.replace(/\.[^/.]+$/, "")
