@@ -969,15 +969,6 @@ export default function GeneratorPage() {
                               >
                                 {item.reference || 'N/A'}
                               </button>
-                              <span className={`text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-full font-bold ${
-                                item.severity === 'critical'
-                                  ? 'bg-rose-50 text-rose-700 border border-rose-100'
-                                  : item.severity === 'major'
-                                  ? 'bg-amber-50 text-amber-700 border border-amber-100'
-                                  : 'bg-blue-50 text-blue-700 border border-blue-100'
-                              }`}>
-                                {item.severity}
-                              </span>
                             </div>
                           </div>
                           <p className="text-sm text-slate-700 leading-relaxed font-semibold">
