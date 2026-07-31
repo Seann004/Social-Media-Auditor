@@ -2,6 +2,9 @@ import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import * as db from './services/dbService.js'
+import { supabase } from './config/supabase.js'
+import { requireAuth, requireRole, optionalAuth, signToken } from './middleware/auth.js'
+import { requireProjectAccess, requireProjectOwner, requireChecklistItemProjectAccess, filterAccessibleProjectIds, isProjectMember } from './middleware/projectAccess.js'
 
 dotenv.config()
 
@@ -12,13 +15,48 @@ app.use(cors())
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ limit: '50mb', extended: true }))
 
+// Translates a known domain error (e.g. editing a locked/submitted audit) into its
+// proper HTTP status; anything else falls back to the existing generic 500 shape.
+function sendError(res: express.Response, error: unknown) {
+  if (error instanceof db.EditLockedError) {
+    return res.status(403).json({ error: error.message })
+  }
+  if (error instanceof db.IncompleteCoverageError) {
+    return res.status(409).json({ error: error.message })
+  }
+  res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+}
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() })
 })
 
-// ─── Users ──────────────────────────────────────────────────────────────────
-app.get('/api/users', async (req, res) => {
+// Login: verifies credentials against the DB and issues an auth token.
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body
+    if (!email || !password) {
+      return res.status(400).json({ error: 'email and password are required' })
+    }
+    const { data, error } = await supabase.rpc('verify_user_login', {
+      p_email: String(email).trim().toLowerCase(),
+      p_password: password,
+    })
+    if (error || !data || data.length === 0) {
+      return res.status(401).json({ error: 'Incorrect email or password.' })
+    }
+    const user = data[0]
+    const authUser = { userId: user.userId, userName: user.userName, role: user.role }
+    const token = signToken(authUser)
+    res.json({ token, user: authUser })
+  } catch (error) {
+    console.error('Error during login:', error)
+    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+  }
+})
+
+app.get('/api/users', requireAuth, async (req, res) => {
   try {
     const users = await db.fetchAllUsers()
     res.json(users)
@@ -28,25 +66,27 @@ app.get('/api/users', async (req, res) => {
   }
 })
 
-app.post('/api/users', async (req, res) => {
+// Registration is public, but only an already-authenticated admin may create another admin account.
+app.post('/api/users', optionalAuth, async (req, res) => {
   try {
     const { userId, userName, userEmail, role, userPassword } = req.body
+    if (role === 'admin' && req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Administrator accounts cannot be self-registered.' })
+    }
     await db.createUser({ userId, userName, userEmail, role, userPassword })
-    res.status(201).json({ success: true })
+    const token = signToken({ userId, userName, role })
+    res.status(201).json({ success: true, token })
   } catch (error) {
     console.error('Error creating user:', error)
     res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
   }
 })
 
-// ─── Projects ────────────────────────────────────────────────────────────────
-app.get('/api/projects', async (req, res) => {
+app.get('/api/projects', requireAuth, async (req, res) => {
   try {
-    const userId = req.query.userId as string
-    if (!userId) {
-      return res.status(400).json({ error: 'userId parameter is required' })
-    }
-    const projects = await db.fetchUserProjects(userId)
+    // Always scope to the authenticated caller — a client-supplied userId would let
+    // anyone read another user's project list just by changing a query param.
+    const projects = await db.fetchUserProjects(req.user!.userId)
     res.json(projects)
   } catch (error) {
     console.error('Error fetching user projects:', error)
@@ -54,13 +94,16 @@ app.get('/api/projects', async (req, res) => {
   }
 })
 
-app.get('/api/projects/compliance-summary', async (req, res) => {
+app.get('/api/projects/compliance-summary', requireAuth, async (req, res) => {
   try {
     const idsString = req.query.ids as string
     if (!idsString) {
       return res.json({})
     }
-    const ids = idsString.split(',')
+    const requestedIds = idsString.split(',')
+    // Silently drop ids the caller isn't the head auditor or a member of, rather
+    // than leaking compliance data for arbitrary projects.
+    const ids = await filterAccessibleProjectIds(req.user!.userId, requestedIds)
     const summary = await db.fetchProjectComplianceSummary(ids)
     res.json(summary)
   } catch (error) {
@@ -69,7 +112,7 @@ app.get('/api/projects/compliance-summary', async (req, res) => {
   }
 })
 
-app.get('/api/projects/:id', async (req, res) => {
+app.get('/api/projects/:id', requireAuth, requireProjectAccess('id'), async (req, res) => {
   try {
     const details = await db.fetchProjectDetails(req.params.id)
     res.json(details)
@@ -79,7 +122,7 @@ app.get('/api/projects/:id', async (req, res) => {
   }
 })
 
-app.post('/api/projects', async (req, res) => {
+app.post('/api/projects', requireAuth, requireRole('head_auditor'), async (req, res) => {
   try {
     const projectId = await db.createProject(req.body)
     res.status(201).json({ projectId })
@@ -89,7 +132,7 @@ app.post('/api/projects', async (req, res) => {
   }
 })
 
-app.patch('/api/projects/:id', async (req, res) => {
+app.patch('/api/projects/:id', requireAuth, requireProjectAccess('id'), async (req, res) => {
   try {
     await db.updateProject(req.params.id, req.body)
     res.json({ success: true })
@@ -99,7 +142,7 @@ app.patch('/api/projects/:id', async (req, res) => {
   }
 })
 
-app.delete('/api/projects/:id', async (req, res) => {
+app.delete('/api/projects/:id', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
   try {
     await db.deleteProject(req.params.id)
     res.json({ success: true })
@@ -110,7 +153,7 @@ app.delete('/api/projects/:id', async (req, res) => {
 })
 
 // Members
-app.post('/api/projects/:id/members', async (req, res) => {
+app.post('/api/projects/:id/members', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
     const projectId = req.params.id
     const userIds = (req.body.userIds || []) as string[]
@@ -139,7 +182,7 @@ app.post('/api/projects/:id/members', async (req, res) => {
   }
 })
 
-app.post('/api/projects/:id/members/add', async (req, res) => {
+app.post('/api/projects/:id/members/add', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
     const projectId = req.params.id
     const userId = req.body.userId as string
@@ -159,7 +202,7 @@ app.post('/api/projects/:id/members/add', async (req, res) => {
   }
 })
 
-app.delete('/api/projects/:id/members/:userId', async (req, res) => {
+app.delete('/api/projects/:id/members/:userId', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
     await db.removeProjectMember(req.params.id, req.params.userId)
     res.json({ success: true })
@@ -170,18 +213,18 @@ app.delete('/api/projects/:id/members/:userId', async (req, res) => {
 })
 
 // Guidelines
-app.post('/api/projects/:id/guidelines', async (req, res) => {
+app.post('/api/projects/:id/guidelines', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
     await db.syncProjectGuidelines(req.params.id, req.body.guidelineIds)
     res.json({ success: true })
   } catch (error) {
     console.error('Error syncing guidelines:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
 // Scope
-app.post('/api/projects/:id/scope', async (req, res) => {
+app.post('/api/projects/:id/scope', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
     await db.syncProjectScope(req.params.id, req.body.features)
     res.json({ success: true })
@@ -192,7 +235,7 @@ app.post('/api/projects/:id/scope', async (req, res) => {
 })
 
 // Create guideline template (admin)
-app.post('/api/guidelines', async (req, res) => {
+app.post('/api/guidelines', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { guideline, items } = req.body
     console.log("--- POST /api/guidelines received ---");
@@ -206,8 +249,7 @@ app.post('/api/guidelines', async (req, res) => {
   }
 })
 
-// ─── Guidelines Global ──────────────────────────────────────────────────────
-app.get('/api/guidelines', async (req, res) => {
+app.get('/api/guidelines', requireAuth, async (req, res) => {
   try {
     const guidelines = await db.fetchGuidelines()
     res.json(guidelines)
@@ -217,7 +259,7 @@ app.get('/api/guidelines', async (req, res) => {
   }
 })
 
-app.delete('/api/guidelines/:id', async (req, res) => {
+app.delete('/api/guidelines/:id', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     await db.deleteGuideline(req.params.id)
     res.json({ success: true })
@@ -228,7 +270,7 @@ app.delete('/api/guidelines/:id', async (req, res) => {
 })
 
 // Fetch global template items for a guideline (admin/guidelines view)
-app.get('/api/guidelines/:id/items', async (req, res) => {
+app.get('/api/guidelines/:id/items', requireAuth, async (req, res) => {
   try {
     const items = await db.fetchGuidelineItems(req.params.id)
     res.json(items)
@@ -238,8 +280,7 @@ app.get('/api/guidelines/:id/items', async (req, res) => {
   }
 })
 
-// ─── Checklist Items ──────────────────────────────────────────────────────────
-app.get('/api/projects/:id/checklist', async (req, res) => {
+app.get('/api/projects/:id/checklist', requireAuth, requireProjectAccess('id'), async (req, res) => {
   try {
     const items = await db.fetchProjectChecklistItems(req.params.id)
     res.json(items)
@@ -249,7 +290,7 @@ app.get('/api/projects/:id/checklist', async (req, res) => {
   }
 })
 
-app.post('/api/projects/:id/checklist/items', async (req, res) => {
+app.post('/api/projects/:id/checklist/items', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
     const { category, text, severity, reference, guidelineId, itemName, itemCode, helpText, verbatimClauseText, answerOptions } = req.body
     const projectId = req.params.id
@@ -263,29 +304,29 @@ app.post('/api/projects/:id/checklist/items', async (req, res) => {
   }
 })
 
-app.patch('/api/projects/:projectId/results/:itemId/findings', async (req, res) => {
+app.patch('/api/projects/:projectId/results/:itemId/findings', requireAuth, requireProjectAccess('projectId'), async (req, res) => {
   try {
     const { userId, findings } = req.body
     await db.saveAuditFindings(req.params.projectId, req.params.itemId, userId, findings ?? '')
     res.json({ success: true })
   } catch (error) {
     console.error('Error saving findings:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
-app.patch('/api/projects/:projectId/results/:itemId/evidence', async (req, res) => {
+app.patch('/api/projects/:projectId/results/:itemId/evidence', requireAuth, requireProjectAccess('projectId'), async (req, res) => {
   try {
     const { userId, images } = req.body
     await db.saveEvidenceImages(req.params.projectId, req.params.itemId, userId, images ?? [])
     res.json({ success: true })
   } catch (error) {
     console.error('Error saving evidence images:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
-app.post('/api/projects/:id/checklist/categories/toggle', async (req, res) => {
+app.post('/api/projects/:id/checklist/categories/toggle', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
     const { category, enabled, guidelineId } = req.body
     const projectId = req.params.id
@@ -297,7 +338,7 @@ app.post('/api/projects/:id/checklist/categories/toggle', async (req, res) => {
   }
 })
 
-app.patch('/api/checklist/items/:id', async (req, res) => {
+app.patch('/api/checklist/items/:id', requireAuth, requireRole('head_auditor'), requireChecklistItemProjectAccess('id'), async (req, res) => {
   try {
     await db.updateChecklistItem(req.params.id, req.body)
     res.json({ success: true })
@@ -307,7 +348,7 @@ app.patch('/api/checklist/items/:id', async (req, res) => {
   }
 })
 
-app.delete('/api/checklist/items/:id', async (req, res) => {
+app.delete('/api/checklist/items/:id', requireAuth, requireRole('head_auditor'), requireChecklistItemProjectAccess('id'), async (req, res) => {
   try {
     await db.deleteChecklistItem(req.params.id)
     res.json({ success: true })
@@ -317,8 +358,7 @@ app.delete('/api/checklist/items/:id', async (req, res) => {
   }
 })
 
-// ─── Audit Results ────────────────────────────────────────────────────────────
-app.get('/api/projects/:id/results', async (req, res) => {
+app.get('/api/projects/:id/results', requireAuth, requireProjectAccess('id'), async (req, res) => {
   try {
     const results = await db.fetchAuditResults(req.params.id)
     res.json(results)
@@ -328,7 +368,7 @@ app.get('/api/projects/:id/results', async (req, res) => {
   }
 })
 
-app.post('/api/projects/:id/results', async (req, res) => {
+app.post('/api/projects/:id/results', requireAuth, requireProjectAccess('id'), async (req, res) => {
   try {
     const { itemId, userId, guidelineId, result, notes } = req.body
     const scoreData = await db.upsertAuditResult(
@@ -342,12 +382,11 @@ app.post('/api/projects/:id/results', async (req, res) => {
     res.json(scoreData)
   } catch (error) {
     console.error('Error upserting audit result:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
-// ─── Submission Workflow ──────────────────────────────────────────────────────
-app.post('/api/projects/:id/submit', async (req, res) => {
+app.post('/api/projects/:id/submit', requireAuth, requireRole('auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
     await db.submitForReview(req.params.id)
     res.json({ success: true })
@@ -357,19 +396,18 @@ app.post('/api/projects/:id/submit', async (req, res) => {
   }
 })
 
-app.post('/api/projects/:id/review', async (req, res) => {
+app.post('/api/projects/:id/review', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
   try {
     const { approved, remarks } = req.body
     await db.reviewSubmission(req.params.id, approved, remarks)
     res.json({ success: true })
   } catch (error) {
     console.error('Error reviewing project submission:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
-// ─── Compliance Scores & Reports ──────────────────────────────────────────────
-app.get('/api/projects/:id/compliance-scores', async (req, res) => {
+app.get('/api/projects/:id/compliance-scores', requireAuth, requireProjectAccess('id'), async (req, res) => {
   try {
     const scores = await db.fetchComplianceScores(req.params.id)
     res.json(scores)
@@ -379,19 +417,16 @@ app.get('/api/projects/:id/compliance-scores', async (req, res) => {
   }
 })
 
-app.get('/api/reports', async (req, res) => {
+app.get('/api/reports', requireAuth, async (req, res) => {
   try {
-    const userId = req.query.userId as string
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' })
-    }
+    // Always scope to the authenticated caller — see the same fix on GET /api/projects.
     const filters = {
       projectStatusFilter: req.query.projectStatusFilter as any,
       search: req.query.search as string,
       dateFrom: req.query.dateFrom as string,
       dateTo: req.query.dateTo as string,
     }
-    const reports = await db.fetchAuditReports(userId, filters)
+    const reports = await db.fetchAuditReports(req.user!.userId, filters)
     res.json(reports)
   } catch (error) {
     console.error('Error fetching audit reports:', error)
@@ -399,9 +434,12 @@ app.get('/api/reports', async (req, res) => {
   }
 })
 
-app.post('/api/reports', async (req, res) => {
+app.post('/api/reports', requireAuth, async (req, res) => {
   try {
     const { projectId, userId } = req.body
+    if (!projectId || !(await isProjectMember(projectId, req.user!.userId))) {
+      return res.status(403).json({ error: 'You do not have access to this project.' })
+    }
     const reportId = await db.createAuditReport(projectId, userId)
     res.status(201).json({ reportId })
   } catch (error) {
@@ -410,8 +448,6 @@ app.post('/api/reports', async (req, res) => {
   }
 })
 
-
-// ─── Llama 3.3 Groq Generator Routes ──────────────────────────────────────────
 
 async function groqFetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
   for (let attempt = 0; attempt < retries; attempt++) {
@@ -424,7 +460,7 @@ async function groqFetchWithRetry(url: string, options: RequestInit, retries = 3
   // Final attempt — return whatever we get
   return fetch(url, options)
 }
-app.post('/api/generator/process-chunk', async (req, res) => {
+app.post('/api/generator/process-chunk', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { textChunk, platform } = req.body
     if (!textChunk) {
@@ -578,7 +614,7 @@ You MUST return your output in JSON format matching this EXACT schema:
   }
 })
 
-app.post('/api/generator/merge-items', async (req, res) => {
+app.post('/api/generator/merge-items', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { items, platform } = req.body
     if (!items || !Array.isArray(items)) {

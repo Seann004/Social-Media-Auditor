@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   ShieldCheckIcon as ShieldCheck,
   SquaresFourIcon as SquaresFour,
@@ -26,6 +27,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
   const user = users.find((u) => u.id === currentUserId)
   const location = useLocation()
   const navigate = useNavigate()
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
 
   const isAdmin = user?.role === 'admin'
   const isAuditor = user?.role === 'auditor'
@@ -80,7 +82,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
           )}
         </div>
         <p className="text-sidebar-muted text-xs mt-2 font-mono tracking-[0.1em] uppercase">
-          Child Safety Platform
+          Compliance Audit Platform
         </p>
       </div>
 
@@ -140,7 +142,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
       <div className="px-4 pb-5 pt-3 border-t border-sidebar-border">
         <button
           type="button"
-          onClick={handleLogout}
+          onClick={() => setShowLogoutConfirm(true)}
           className="w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-[var(--color-sidebar-item-hover)] transition-colors group focus-visible:outline-2 focus-visible:outline-[rgba(255,255,255,0.5)] focus-visible:outline-offset-1"
         >
           <div
@@ -160,6 +162,53 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
           />
         </button>
       </div>
+
+      {/* Sign Out Confirmation Modal */}
+      <AnimatePresence>
+        {showLogoutConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowLogoutConfirm(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              transition={{ type: 'spring', duration: 0.3 }}
+              className="relative w-full max-w-sm bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 z-10"
+            >
+              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-slate-100 mx-auto mb-4">
+                <SignOut size={22} className="text-slate-500" />
+              </div>
+              <h3 className="text-base font-bold text-slate-900 text-center mb-1">Sign Out</h3>
+              <p className="text-sm text-slate-500 text-center mb-6">
+                Are you sure you want to sign out of SafetyAudit?
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowLogoutConfirm(false)}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-slate-800 rounded-lg hover:bg-slate-900 transition-colors"
+                >
+                  <SignOut size={13} />
+                  Sign Out
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </aside>
   )
 }

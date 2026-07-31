@@ -269,13 +269,13 @@ export default function GuidelinesPage() {
                             acc[section].push(cat)
                             return acc
                           }, {})
-                        ).map(([section, cats]) => (
+                        ).map(([section, cats], sIdx) => (
                           <div key={section} className="space-y-2">
                             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mt-4 mb-2 px-1">
-                              {section}
+                              {sIdx + 1}. {section}
                             </h4>
                             <div className="space-y-2 pl-3 border-l border-slate-100">
-                              {cats.map((cat) => {
+                              {cats.map((cat, subIdx) => {
                                 const catItems = items.filter((ci) => ci.category === cat)
                                 const catKey = `${guideline.id}_${cat}`
                                 const catOpen = expandedCat.has(catKey)
@@ -288,7 +288,7 @@ export default function GuidelinesPage() {
                                       onClick={() => toggleCat(catKey)}
                                       className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 transition-colors focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:outline-inset"
                                     >
-                                      <p className="flex-1 text-xs font-semibold text-slate-700">{displayName}</p>
+                                      <p className="flex-1 text-xs font-semibold text-slate-700">{sIdx + 1}.{subIdx + 1} {displayName}</p>
                                       <div className="flex items-center gap-3">
                                         <span className="text-[10px] text-slate-400 font-mono">
                                           {catItems.length} item{catItems.length !== 1 ? 's' : ''}
@@ -312,9 +312,9 @@ export default function GuidelinesPage() {
                                           className="overflow-hidden"
                                         >
                                           <div className="divide-y divide-slate-50 border-t border-slate-100">
-                                            {catItems.map((ci) => (
+                                            {catItems.map((ci, itemIdx) => (
                                               <div key={ci.id} className="flex items-start gap-3 px-4 py-3 bg-slate-50/50">
-                                                <p className="flex-1 text-xs text-slate-700 leading-relaxed">{ci.text}</p>
+                                                <p className="flex-1 text-xs text-slate-700 leading-relaxed">{itemIdx + 1}. {ci.text}</p>
                                                 <div className="flex items-center gap-1.5 shrink-0 ml-2">
                                                   <button
                                                     type="button"

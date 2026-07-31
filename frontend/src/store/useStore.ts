@@ -108,6 +108,7 @@ function mapDbItem(i: db.DbChecklistItem): ChecklistItem {
 
 interface StoreState {
   isAuthenticated: boolean
+  authToken: string | null
   users: User[]
   currentUserId: string
   guidelines: Guideline[]
@@ -115,10 +116,11 @@ interface StoreState {
   projects: AuditProject[]
   responses: ResponseMap
   complianceMap: Record<string, number>  // projectId → avg score % from DB
+  projectItemCounts: Record<string, { answered: number; total: number }>  // projectId → checklist progress from DB
   loading: boolean
   dbError: string | null
 
-  login: (userId: string, name: string, role: UserRole) => void
+  login: (userId: string, name: string, role: UserRole, token: string) => void
   logout: () => void
   register: (email: string, name: string, role: UserRole, password?: string) => Promise<void>
   initFromDb: () => Promise<void>
@@ -185,6 +187,7 @@ export const useStore = create<StoreState>()(
   persist(
     (set, get) => ({
   isAuthenticated: false,
+  authToken: null,
   users: [],
   currentUserId: '',
   guidelines: [],
@@ -192,15 +195,17 @@ export const useStore = create<StoreState>()(
   projects: [],
   responses: {},
   complianceMap: {},
+  projectItemCounts: {},
   loading: false,
   dbError: null,
 
-  login: (userId, name, role) => {
+  login: (userId, name, role, token) => {
     const initials = name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
     const color = ROLE_COLORS[role] ?? 'bg-slate-500'
     const loggedInUser: User = { id: userId, name, role, initials, color }
     set((state) => ({
       isAuthenticated: true,
+      authToken: token,
       currentUserId: userId,
       users: state.users.some((u) => u.id === userId)
         ? state.users.map((u) => (u.id === userId ? loggedInUser : u))
@@ -208,17 +213,17 @@ export const useStore = create<StoreState>()(
     }))
   },
 
-  logout: () => set({ isAuthenticated: false, currentUserId: '', projects: [], responses: {}, checklistItems: [] }),
+  logout: () => set({ isAuthenticated: false, authToken: null, currentUserId: '', projects: [], responses: {}, checklistItems: [] }),
 
   register: async (email, name, role, password) => {
     const id = window.crypto.randomUUID()
     const initials = name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
     const color = ROLE_COLORS[role] ?? 'bg-slate-500'
-    
+
     set({ loading: true, dbError: null })
     try {
       const hashedPassword = password ? await hashPassword(password) : undefined
-      await db.createUser({
+      const { token } = await db.createUser({
         userId: id,
         userName: name,
         userEmail: email,
@@ -227,6 +232,7 @@ export const useStore = create<StoreState>()(
       })
       set((state) => ({
         isAuthenticated: true,
+        authToken: token,
         currentUserId: id,
         users: [...state.users, { id, name, role, initials, color }],
         loading: false
@@ -249,9 +255,16 @@ export const useStore = create<StoreState>()(
         db.fetchGuidelines(),
         db.fetchUserProjects(currentUserId),
       ])
-      // Fetch compliance scores for all projects from DB
+      // Fetch compliance scores + item progress for all projects from DB in one bulk call
+      // (avoids depending on whichever single project's checklist happens to be loaded locally)
       const projectIds = (dbProjects ?? []).map((p) => p.projectId)
-      const complianceMap = await db.fetchProjectComplianceSummary(projectIds)
+      const complianceSummary = await db.fetchProjectComplianceSummary(projectIds)
+      const complianceMap: Record<string, number> = {}
+      const projectItemCounts: Record<string, { answered: number; total: number }> = {}
+      for (const [pid, s] of Object.entries(complianceSummary)) {
+        complianceMap[pid] = s.percentage
+        projectItemCounts[pid] = { answered: s.answered, total: s.total }
+      }
 
       const users: User[] = dbUsers.map((u) => ({
         id: u.userId,
@@ -276,7 +289,25 @@ export const useStore = create<StoreState>()(
       )
       const globalChecklistItems = allGuidelineItems.flat().map(mapDbItem)
 
-      set({ users, guidelines, projects, complianceMap, checklistItems: globalChecklistItems, loading: false })
+      // Merge rather than replace guidelines/checklistItems: Layout mounts on every
+      // protected page (including a direct URL nav / refresh straight into a project
+      // page) and calls initFromDb() unconditionally, racing against that project's own
+      // useProjectData() fetch. This only loads GLOBAL guideline templates — if it
+      // resolves after useProjectData, a blind replace would wipe out the project-specific
+      // cloned guideline/items useProjectData just wrote, leaving the audit page's
+      // category list empty even though the project itself loaded fine.
+      set((state) => {
+        const projectSpecificGuidelines = state.guidelines.filter((g) => g.projectId)
+        const projectSpecificItems = state.checklistItems.filter(
+          (ci) => !globalChecklistItems.some((gi) => gi.id === ci.id)
+        )
+        return {
+          users, projects, complianceMap, projectItemCounts,
+          guidelines: [...projectSpecificGuidelines, ...guidelines],
+          checklistItems: [...projectSpecificItems, ...globalChecklistItems],
+          loading: false,
+        }
+      })
     } catch (err) {
       set({ loading: false, dbError: String(err) })
     }
@@ -521,12 +552,17 @@ export const useStore = create<StoreState>()(
     try {
       await db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes)
 
-      // Refresh complianceMap from DB (fetchProjectComplianceSummary reads result values directly
-      // and is not affected by the global-vs-project item ID mismatch in the RPC count query)
+      // Refresh complianceMap + projectItemCounts from DB (fetchProjectComplianceSummary reads
+      // result values directly and is not affected by the global-vs-project item ID mismatch
+      // in the RPC count query)
       const updated = await db.fetchProjectComplianceSummary([projectId])
       if (updated[projectId] !== undefined) {
         set((state) => ({
-          complianceMap: { ...state.complianceMap, [projectId]: updated[projectId] },
+          complianceMap: { ...state.complianceMap, [projectId]: updated[projectId].percentage },
+          projectItemCounts: {
+            ...state.projectItemCounts,
+            [projectId]: { answered: updated[projectId].answered, total: updated[projectId].total },
+          },
         }))
       }
 
@@ -570,6 +606,7 @@ export const useStore = create<StoreState>()(
       // Only persist auth — all other data is re-fetched from DB on login
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
+        authToken: state.authToken,
         currentUserId: state.currentUserId,
         users: state.users.filter((u) => u.id === state.currentUserId),
       }),

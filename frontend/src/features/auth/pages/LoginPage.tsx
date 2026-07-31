@@ -9,8 +9,7 @@ import {
   XIcon,
 } from '@phosphor-icons/react'
 import { useStore } from '../../../store/useStore'
-import { supabase } from '../../../lib/supabase'
-import type { UserRole } from '../../../types'
+import * as db from '../../../lib/db'
 import { hashPassword } from '../../../lib/crypto'
 
 const PASSWORD_RULES = [
@@ -53,23 +52,17 @@ export default function LoginPage() {
     setLoading(true)
     const hashedPassword = await hashPassword(password)
 
-    const { data, error: dbError } = await supabase.rpc('verify_user_login', {
-      p_email: email.trim().toLowerCase(),
-      p_password: hashedPassword,
-    })
-
-    if (dbError || !data || data.length === 0) {
+    try {
+      const { token, user } = await db.login(email.trim().toLowerCase(), hashedPassword)
+      login(user.userId, user.userName, user.role, token)
+      // Pre-load DB data (non-blocking — pages handle their own loading)
+      const { initFromDb } = useStore.getState()
+      initFromDb().catch(() => {})
+      navigate('/dashboard', { replace: true })
+    } catch {
       setLoading(false)
       setError('Incorrect email or password.')
-      return
     }
-
-    const user = data[0]
-    login(user.userId, user.userName, user.role as UserRole)
-    // Pre-load DB data (non-blocking — pages handle their own loading)
-    const { initFromDb } = useStore.getState()
-    initFromDb().catch(() => {})
-    navigate('/dashboard', { replace: true })
   }
 
   return (
@@ -103,7 +96,7 @@ export default function LoginPage() {
               <div>
                 <p className="text-heading font-bold text-base tracking-tight leading-none">SafetyAudit</p>
                 <p className="text-muted text-xs font-mono tracking-[0.12em] uppercase mt-0.5">
-                  Child Safety Platform
+                  Compliance Audit Platform
                 </p>
               </div>
             </div>

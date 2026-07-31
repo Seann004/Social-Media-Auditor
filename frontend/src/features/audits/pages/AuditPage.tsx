@@ -247,6 +247,7 @@ export default function AuditPage() {
   const [showReviewPanel, setShowReviewPanel] = useState(false)
   const [reviewRemarks, setReviewRemarks] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [reviewError, setReviewError] = useState<string | null>(null)
 
   // Manage auditors
   const [showManageAuditors, setShowManageAuditors] = useState(false)
@@ -391,6 +392,7 @@ export default function AuditPage() {
   }, [JSON.stringify(evidenceMap)])
 
   function handleImageClick(itemId: string) {
+    if (answersLocked) return
     setPendingEvidenceItemId(itemId)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
@@ -411,10 +413,14 @@ export default function AuditPage() {
       setEvidenceError(`File${oversized.length > 1 ? 's' : ''} too large (max 5 MB): ${oversized.map((f) => f.name).join(', ')}`)
       return
     }
+    const notImages = files.filter((f) => !f.type.startsWith('image/'))
+    if (notImages.length > 0) {
+      setEvidenceError(`Only image files can be attached as evidence: ${notImages.map((f) => f.name).join(', ')}`)
+      return
+    }
     setEvidenceError(null)
 
     files.forEach((file) => {
-      if (!file.type.startsWith('image/')) return
       const reader = new FileReader()
       reader.onload = (ev) => {
         const url = ev.target?.result as string
@@ -431,6 +437,7 @@ export default function AuditPage() {
   }
 
   function removeEvidence(itemId: string, index: number) {
+    if (answersLocked) return
     setEvidence((prev) => {
       const updated = { ...prev, [itemId]: (prev[itemId] ?? []).filter((_, i) => i !== index) }
       if (currentUserId) {
@@ -501,9 +508,14 @@ export default function AuditPage() {
     && (project.submissionStatus === 'not_submitted' || project.submissionStatus === 'rejected')
     && project.status === 'in_progress'
 
+  // Once a project is awaiting review or already approved, answers are frozen —
+  // editing them after submission would silently invalidate the head auditor's decision.
+  const answersLocked = project.submissionStatus === 'pending_review' || project.submissionStatus === 'approved'
+
   function getResponse(itemId: string) { return responses[`${id}__${itemId}`] }
 
   async function handleResponseClick(itemId: string, guidelineId: string, status: ChecklistItemStatus) {
+    if (answersLocked) return
     const current = getResponse(itemId)
     const notes = noteValues[itemId] ?? current?.notes ?? ''
     try {
@@ -518,6 +530,7 @@ export default function AuditPage() {
   }
 
   async function handleNotesBlur(itemId: string, guidelineId: string) {
+    if (answersLocked) return
     const current = getResponse(itemId)
     const notes = noteValues[itemId] ?? ''
     if (current && current.status !== 'not_started') {
@@ -526,6 +539,7 @@ export default function AuditPage() {
   }
 
   async function handleFindingsBlur(itemId: string) {
+    if (answersLocked) return
     const findings = findingsValues[itemId] ?? ''
     await saveFindings(id!, itemId, findings)
   }
@@ -573,12 +587,28 @@ helpText: newItemHelp.trim() || undefined,
 
   async function handleApprove() {
     setSubmitting(true)
-    try { await reviewSubmission(id!, true, reviewRemarks); setShowReviewPanel(false) } finally { setSubmitting(false) }
+    setReviewError(null)
+    try {
+      await reviewSubmission(id!, true, reviewRemarks)
+      setShowReviewPanel(false)
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Failed to approve this audit. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   async function handleReject() {
     setSubmitting(true)
-    try { await reviewSubmission(id!, false, reviewRemarks); setShowReviewPanel(false) } finally { setSubmitting(false) }
+    setReviewError(null)
+    try {
+      await reviewSubmission(id!, false, reviewRemarks)
+      setShowReviewPanel(false)
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Failed to reject this audit. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   function startEditItem(itemId: string, text: string, severity: Severity) {
@@ -791,7 +821,7 @@ helpText: newItemHelp.trim() || undefined,
                 <p className="text-sm font-semibold text-amber-800 mb-0.5">Audit Submitted for Review</p>
                 <p className="text-xs text-amber-700">Review the findings and approve or reject this submission.</p>
               </div>
-              <button type="button" onClick={() => setShowReviewPanel((v) => !v)}
+              <button type="button" onClick={() => { setShowReviewPanel((v) => !v); setReviewError(null) }}
                 className="shrink-0 flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-amber-800 bg-amber-100 border border-amber-300 rounded-lg hover:bg-amber-200 transition-colors">
                 {showReviewPanel ? 'Hide Review' : 'Review Submission'}
               </button>
@@ -800,6 +830,11 @@ helpText: newItemHelp.trim() || undefined,
               {showReviewPanel && (
                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden mt-4">
                   <div className="bg-white border border-amber-200 rounded-xl p-5">
+                    {reviewError && (
+                      <div className="mb-3 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg">
+                        {reviewError}
+                      </div>
+                    )}
                     <label className="block text-sm font-semibold text-slate-700 mb-2">Review Remarks</label>
                     <textarea value={reviewRemarks} onChange={(e) => setReviewRemarks(e.target.value)}
                       placeholder="Provide feedback or reasons for your decision…" rows={3}
@@ -1096,13 +1131,13 @@ helpText: newItemHelp.trim() || undefined,
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="w-full text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-300"
             >
-              {guidelineSections.map((section) => (
-                <optgroup key={section.sectionName} label={section.sectionName}>
-                  {section.subcategories.map((sub) => {
+              {guidelineSections.map((section, sIdx) => (
+                <optgroup key={section.sectionName} label={`${sIdx + 1}. ${section.sectionName}`}>
+                  {section.subcategories.map((sub, subIdx) => {
                     const cs = sub.catScore
                     return (
                       <option key={sub.originalCategory} value={sub.originalCategory}>
-                        {sub.subcategoryName}{!sub.enabled && isHeadAuditor ? ' (Deactivated)' : cs.applicable > 0 ? ` — ${cs.percentage.toFixed(0)}%` : ''}
+                        {sIdx + 1}.{subIdx + 1} {sub.subcategoryName}{!sub.enabled && isHeadAuditor ? ' (Deactivated)' : cs.applicable > 0 ? ` — ${cs.percentage.toFixed(0)}%` : ''}
                       </option>
                     )
                   })}
@@ -1121,9 +1156,9 @@ helpText: newItemHelp.trim() || undefined,
               </div>
             ) : (
               <ul className="space-y-3 list-none m-0 p-0">
-                {guidelineSections.map((section) => {
+                {guidelineSections.map((section, sIdx) => {
                   const isExpanded = expandedSections.has(section.sectionName)
-                  
+
                   return (
                     <li key={section.sectionName} className="space-y-1">
                       {/* Section Header Button */}
@@ -1142,7 +1177,7 @@ helpText: newItemHelp.trim() || undefined,
                         }}
                         className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-left text-[11px] font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors uppercase tracking-wider"
                       >
-                        <span className="truncate pr-2">{section.sectionName}</span>
+                        <span className="truncate pr-2">{sIdx + 1}. {section.sectionName}</span>
                         <CaretRight
                           size={12}
                           className={["transform transition-transform text-slate-400 shrink-0", isExpanded ? "rotate-90" : ""].join(' ')}
@@ -1152,7 +1187,7 @@ helpText: newItemHelp.trim() || undefined,
                       {/* Subcategories (Only visible if expanded) */}
                       {isExpanded && (
                         <ul className="pl-2 space-y-1 border-l border-slate-200 ml-1.5 list-none">
-                          {section.subcategories.map((sub) => {
+                          {section.subcategories.map((sub, subIdx) => {
                             const active = sub.originalCategory === selectedCategory
                             const barColor = sub.catScore.percentage >= 80 ? 'bg-emerald-500' : sub.catScore.percentage >= 60 ? 'bg-amber-400' : sub.catScore.percentage > 0 ? 'bg-rose-400' : 'bg-slate-300'
 
@@ -1187,7 +1222,7 @@ helpText: newItemHelp.trim() || undefined,
                                   <button type="button" onClick={() => setSelectedCategory(sub.originalCategory)}
                                     className={['flex-1 text-left py-2 pr-2.5 text-slate-600 focus:outline-none', isHeadAuditor ? 'pl-1' : 'pl-2.5', !sub.enabled && isHeadAuditor ? 'opacity-50' : ''].join(' ')}>
                                     <div className="flex items-center justify-between mb-0.5">
-                                      <span className={`text-xs font-medium leading-tight ${active ? 'text-slate-800 font-semibold' : 'text-slate-600'}`}>{sub.subcategoryName}</span>
+                                      <span className={`text-xs font-medium leading-tight ${active ? 'text-slate-800 font-semibold' : 'text-slate-600'}`}>{sIdx + 1}.{subIdx + 1} {sub.subcategoryName}</span>
                                       {active && <CaretRight size={10} className="text-slate-400 shrink-0" />}
                                     </div>
                                     {sub.enabled && (
@@ -1286,7 +1321,7 @@ helpText: newItemHelp.trim() || undefined,
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl bg-white overflow-hidden">
-                    {categoryItems.map((ci) => {
+                    {categoryItems.map((ci, itemIdx) => {
                       const resp = getResponse(ci.id)
                       const currentStatus = resp?.status ?? 'not_started'
                       const notesOpen = expandedNotes.has(ci.id)
@@ -1335,7 +1370,7 @@ helpText: newItemHelp.trim() || undefined,
                                 {ci.itemName && (
                                   <p className="text-sm font-semibold text-slate-800 mb-1">{ci.itemName}</p>
                                 )}
-                                <p className="text-sm text-slate-600 leading-relaxed">{ci.text}</p>
+                                <p className="text-sm text-slate-600 leading-relaxed">{itemIdx + 1}. {ci.text}</p>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 <button
@@ -1395,19 +1430,22 @@ helpText: newItemHelp.trim() || undefined,
                                 const isActive = currentStatus === value
                                 return (
                                   <motion.button key={value} type="button" whileTap={{ scale: 0.97 }}
+                                    disabled={answersLocked}
                                     onClick={() => handleResponseClick(ci.id, ci.guidelineId, value)}
-                                    className={['flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ring-1 transition-all', isActive ? active : inactive].join(' ')}>
+                                    className={['flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ring-1 transition-all', isActive ? active : inactive, answersLocked ? 'opacity-50 cursor-not-allowed' : ''].join(' ')}>
                                     <Icon size={15} weight={isActive ? 'fill' : 'regular'} /> {label}
                                   </motion.button>
                                 )
                               })}
                               {/* Flag for Review */}
                               <motion.button type="button" whileTap={{ scale: 0.97 }}
+                                disabled={answersLocked}
                                 onClick={() => handleResponseClick(ci.id, ci.guidelineId, 'needs_review')}
                                 className={['flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ring-1 transition-all',
                                   currentStatus === 'needs_review'
                                     ? 'bg-amber-500 text-white ring-amber-500'
                                     : 'bg-white text-slate-500 ring-slate-200 hover:ring-amber-300 hover:text-amber-600',
+                                  answersLocked ? 'opacity-50 cursor-not-allowed' : '',
                                 ].join(' ')}>
                                 <Flag size={15} weight={currentStatus === 'needs_review' ? 'fill' : 'regular'} /> Flag
                               </motion.button>
@@ -1421,9 +1459,11 @@ helpText: newItemHelp.trim() || undefined,
                                   {currentNotes ? 'Notes' : 'Add note'}
                                 </button>
                                 <button type="button" onClick={() => handleImageClick(ci.id)}
-                                  title="Attach image as evidence"
+                                  disabled={answersLocked}
+                                  title={answersLocked ? 'Locked while this audit is under review' : 'Attach image as evidence'}
                                   className={['flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium ring-1 transition-colors',
                                     (evidence[ci.id]?.length ?? 0) > 0 ? 'ring-violet-200 text-violet-600 bg-violet-50' : 'ring-slate-200 text-slate-400 hover:text-violet-600 hover:ring-violet-300 bg-white',
+                                    answersLocked ? 'opacity-50 cursor-not-allowed' : '',
                                   ].join(' ')}>
                                   <Image size={13} weight={(evidence[ci.id]?.length ?? 0) > 0 ? 'fill' : 'regular'} />
                                   {(evidence[ci.id]?.length ?? 0) > 0 ? `${evidence[ci.id].length} photo${evidence[ci.id].length > 1 ? 's' : ''}` : 'Add photo'}
@@ -1464,9 +1504,10 @@ helpText: newItemHelp.trim() || undefined,
                                 value={findingsValues[ci.id] ?? getResponse(ci.id)?.findings ?? ''}
                                 onChange={(e) => setFindingsValues((prev) => ({ ...prev, [ci.id]: e.target.value }))}
                                 onBlur={() => handleFindingsBlur(ci.id)}
+                                readOnly={answersLocked}
                                 placeholder="Describe what you observed on the platform…"
                                 rows={2}
-                                className="w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed"
+                                className={['w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed', answersLocked ? 'opacity-70 cursor-not-allowed' : ''].join(' ')}
                               />
                             </div>
                           )}
@@ -1480,8 +1521,9 @@ helpText: newItemHelp.trim() || undefined,
                                   <textarea value={currentNotes}
                                     onChange={(e) => setNoteValues((prev) => ({ ...prev, [ci.id]: e.target.value }))}
                                     onBlur={() => handleNotesBlur(ci.id, ci.guidelineId)}
+                                    readOnly={answersLocked}
                                     placeholder="Record evidence references or remediation notes…" rows={2}
-                                    className="mt-3 w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed" />
+                                    className={['mt-3 w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed', answersLocked ? 'opacity-70 cursor-not-allowed' : ''].join(' ')} />
                                 </motion.div>
                               )}
                             </AnimatePresence>

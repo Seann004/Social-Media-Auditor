@@ -63,7 +63,7 @@ function ScoreBar({ pct }: { pct: number }) {
 }
 
 export default function ProjectsPage() {
-  const { projects, users, guidelines, getProjectScore, complianceMap, currentUserId, initFromDb, loading } = useStore()
+  const { projects, users, guidelines, complianceMap, projectItemCounts, currentUserId, initFromDb, loading } = useStore()
   const [filter, setFilter] = useState<Filter>('all')
   const currentUser = users.find((u) => u.id === currentUserId)
   const isHeadAuditor = currentUser?.role === 'head_auditor'
@@ -190,7 +190,7 @@ export default function ProjectsPage() {
             className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden"
           >
             {sorted.map((project) => {
-              const score = getProjectScore(project.id)
+              const itemCounts = projectItemCounts[project.id] ?? { answered: 0, total: 0 }
               const compliancePct = complianceMap[project.id] ?? 0
               const guidelineNames = project.guidelineIds
                 .map((gid) => guidelines.find((g) => g.id === gid)?.shortName)
@@ -243,7 +243,7 @@ export default function ProjectsPage() {
                     <div className="hidden md:block w-28 shrink-0">
                       <p className="text-xs text-slate-400 mb-0.5">Progress</p>
                       <p className="text-xs text-slate-700 font-mono tabular-nums">
-                        {score.answered}/{score.total} items
+                        {itemCounts.answered}/{itemCounts.total} items
                       </p>
                     </div>
 
