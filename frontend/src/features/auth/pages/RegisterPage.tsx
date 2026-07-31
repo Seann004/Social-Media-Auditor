@@ -22,10 +22,11 @@ function passwordValid(p: string) {
   return PASSWORD_RULES.every((r) => r.test(p))
 }
 
+// Administrator is intentionally excluded — admin accounts are not self-serve.
+// The backend also rejects role: 'admin' on unauthenticated registration as defense in depth.
 const ROLE_OPTIONS: { value: UserRole; label: string; description: string }[] = [
   { value: 'head_auditor', label: 'Head Auditor', description: 'Manage projects, assign auditors, review submissions' },
   { value: 'auditor', label: 'Auditor', description: 'Conduct audits, record findings, submit for review' },
-  { value: 'admin', label: 'Administrator', description: 'Manage compliance guidelines and generate synthetic check items' },
 ]
 
 export default function RegisterPage() {
@@ -110,7 +111,7 @@ export default function RegisterPage() {
               <div>
                 <p className="text-heading font-bold text-base tracking-tight leading-none">SafetyAudit</p>
                 <p className="text-muted text-xs font-mono tracking-[0.12em] uppercase mt-0.5">
-                  Child Safety Platform
+                  Compliance Audit Platform
                 </p>
               </div>
             </div>

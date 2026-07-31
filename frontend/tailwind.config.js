@@ -4,8 +4,10 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['"Plus Jakarta Sans"', 'ui-sans-serif', 'system-ui'],
-        mono: ['"Space Mono"', 'ui-monospace', 'monospace'],
+        // Inter is the only typeface in this project — sans and mono both resolve to
+        // it (use `tabular-nums` for aligned figures instead of switching family).
+        sans: ['Inter', 'ui-sans-serif', 'system-ui'],
+        mono: ['Inter', 'ui-sans-serif', 'system-ui'],
       },
       fontSize: {
         // Bump every tier up one step so the whole UI reads larger

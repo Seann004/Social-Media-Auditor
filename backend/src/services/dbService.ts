@@ -237,7 +237,6 @@ export interface DbUser {
 
 
 
-// ΓöÇΓöÇΓöÇ Projects ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 
 
@@ -494,12 +493,20 @@ export async function updateProject(projectId: string, updates: {
 
 }
 
-// Compute live compliance percentage per project directly from Audit_Result rows
-// (compliant / applicable) where applicable = compliant + non_compliant + partially
+export interface ProjectComplianceSummary {
+  percentage: number
+  answered: number
+  total: number
+}
 
+// Compute live compliance percentage + answered/total item counts per project directly
+// from Audit_Result rows (compliant / applicable) where applicable = compliant + non_compliant + partially.
+// This bulk-computes for a whole list of projects in one pass — used by ProjectsPage/Dashboard
+// so per-project progress doesn't depend on whichever single project's checklist happens to be
+// loaded in the client-side store (see: "Progress 0/0 items" bug).
 export async function fetchProjectComplianceSummary(
   projectIds: string[]
-): Promise<Record<string, number>> {
+): Promise<Record<string, ProjectComplianceSummary>> {
   if (projectIds.length === 0) return {}
 
   const { data: checklists, error: clError } = await supabase
@@ -508,17 +515,27 @@ export async function fetchProjectComplianceSummary(
     .in('projectId', projectIds)
   if (clError) throw clError
 
-  const checklistIds = (checklists ?? []).map((c: any) => c.checklistId)
+  const checklistToProject = new Map<string, string>()
+  for (const c of (checklists ?? []) as { checklistId: string; projectId: string }[]) {
+    checklistToProject.set(c.checklistId, c.projectId)
+  }
+  const checklistIds = Array.from(checklistToProject.keys())
 
-  let activeItemIds = new Set<string>()
+  const activeItemToProject = new Map<string, string>()
+  const totalByProject: Record<string, number> = {}
   if (checklistIds.length > 0) {
     const { data: activeItems, error: itemsError } = await supabase
       .from('Checklist_Item')
-      .select('itemId')
+      .select('itemId,checklistId')
       .in('checklistId', checklistIds)
       .not('category', 'like', '__deactivated__%')
     if (itemsError) throw itemsError
-    activeItemIds = new Set((activeItems ?? []).map((i) => i.itemId))
+    for (const item of (activeItems ?? []) as { itemId: string; checklistId: string }[]) {
+      const pid = checklistToProject.get(item.checklistId)
+      if (!pid) continue
+      activeItemToProject.set(item.itemId, pid)
+      totalByProject[pid] = (totalByProject[pid] ?? 0) + 1
+    }
   }
 
   const { data, error } = await supabase
@@ -528,11 +545,13 @@ export async function fetchProjectComplianceSummary(
 
   if (error) throw error
 
-  const buckets: Record<string, { weightedCompliant: number; applicable: number }> = {}
+  const buckets: Record<string, { weightedCompliant: number; applicable: number; answered: number }> = {}
   for (const row of (data ?? []) as { projectId: string; result: string; itemId: string }[]) {
-    if (!activeItemIds.has(row.itemId)) continue
+    if (!activeItemToProject.has(row.itemId)) continue
 
-    if (!buckets[row.projectId]) buckets[row.projectId] = { weightedCompliant: 0, applicable: 0 }
+    if (!buckets[row.projectId]) buckets[row.projectId] = { weightedCompliant: 0, applicable: 0, answered: 0 }
+    // Matches AuditPage's own score calc: everything except 'needs_review' (flagged) counts as answered.
+    if (row.result !== 'needs_review') buckets[row.projectId].answered++
     if (['compliant', 'non_compliant', 'partially'].includes(row.result)) {
       buckets[row.projectId].applicable++
       if (row.result === 'compliant') buckets[row.projectId].weightedCompliant += 1
@@ -540,12 +559,16 @@ export async function fetchProjectComplianceSummary(
     }
   }
 
-  return Object.fromEntries(
-    Object.entries(buckets).map(([pid, { weightedCompliant, applicable }]) => [
-      pid,
-      applicable > 0 ? Math.round((weightedCompliant / applicable) * 1000) / 10 : 0,
-    ])
-  )
+  const result: Record<string, ProjectComplianceSummary> = {}
+  for (const pid of projectIds) {
+    const b = buckets[pid]
+    result[pid] = {
+      percentage: b && b.applicable > 0 ? Math.round((b.weightedCompliant / b.applicable) * 1000) / 10 : 0,
+      answered: b?.answered ?? 0,
+      total: totalByProject[pid] ?? 0,
+    }
+  }
+  return result
 }
 
 
@@ -568,7 +591,6 @@ export async function deleteProject(projectId: string): Promise<void> {
 
 
 
-// ΓöÇΓöÇΓöÇ Project Members ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 
 
@@ -616,11 +638,15 @@ export async function syncProjectMembers(projectId: string, userIds: string[]): 
 
 
 
-// ΓöÇΓöÇΓöÇ Project Guidelines ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 
 
 export async function syncProjectGuidelines(projectId: string, globalGuidelineIds: string[]): Promise<void> {
+  // Without this, a head auditor could attach a brand-new, entirely unaudited guideline
+  // to a project that's already pending review or approved — the project would keep
+  // showing as "Completed" while silently carrying 0% coverage on the new framework.
+  await assertProjectEditable(projectId)
+
   // 1. Fetch existing cloned guidelines for this project
   const { data: existingClones, error: fetchError } = await supabase
     .from('Guideline')
@@ -705,7 +731,6 @@ export async function syncProjectScope(projectId: string, features: string[]): P
 
 
 
-// ΓöÇΓöÇΓöÇ Guidelines ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 
 
@@ -892,7 +917,6 @@ export async function fetchGuidelineItems(guidelineId: string): Promise<DbCheckl
 
 
 
-// ΓöÇΓöÇΓöÇ Checklist Items ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 
 
@@ -1099,7 +1123,30 @@ export async function addProjectChecklistItem(projectId: string, guidelineId: st
 }
 
 
+export class EditLockedError extends Error {
+  constructor(message = 'This audit is locked because it has been submitted for review.') {
+    super(message)
+    this.name = 'EditLockedError'
+  }
+}
+
+// Once a project is awaiting review or already approved, its answers/findings/evidence
+// are frozen — editing them after submission would silently invalidate the head auditor's decision.
+async function assertProjectEditable(projectId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('Audit_Project')
+    .select('submissionStatus')
+    .eq('projectId', projectId)
+    .single()
+  if (error) throw error
+  const status = (data as any)?.submissionStatus
+  if (status === 'pending_review' || status === 'approved') {
+    throw new EditLockedError()
+  }
+}
+
 export async function saveAuditFindings(projectId: string, itemId: string, userId: string, findings: string): Promise<void> {
+  await assertProjectEditable(projectId)
   const { error } = await supabase
     .from('Audit_Result')
     .update({ findings: findings || null })
@@ -1110,6 +1157,7 @@ export async function saveAuditFindings(projectId: string, itemId: string, userI
 }
 
 export async function saveEvidenceImages(projectId: string, itemId: string, userId: string, images: { url: string; name: string }[]): Promise<void> {
+  await assertProjectEditable(projectId)
   const { error } = await supabase
     .from('Audit_Result')
     .update({ evidenceImages: images.length > 0 ? images : [] })
@@ -1255,7 +1303,6 @@ export async function deleteChecklistItem(itemId: string): Promise<void> {
 
 
 
-// ΓöÇΓöÇΓöÇ Audit Results (14.2, 14.3) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 
 
@@ -1285,6 +1332,8 @@ export async function upsertAuditResult(
   result: ChecklistItemStatus,
   notes: string = ''
 ): Promise<{ answered: number; compliant: number; nonCompliant: number; notApplicable: number; percentage: number; total: number }> {
+
+  await assertProjectEditable(projectId)
 
   // The old upsert_audit_result RPC referenced the dropped Project_Guideline table.
   // Use direct Supabase operations instead.
@@ -1347,7 +1396,6 @@ export async function upsertAuditResult(
 
 
 
-// ΓöÇΓöÇΓöÇ Submission Workflow ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 
 
@@ -1395,7 +1443,25 @@ export async function submitForReview(projectId: string): Promise<void> {
 
 
 
+export class IncompleteCoverageError extends Error {
+  constructor(message = 'This audit cannot be approved until every checklist item across all attached guidelines has been answered.') {
+    super(message)
+    this.name = 'IncompleteCoverageError'
+  }
+}
+
 export async function reviewSubmission(projectId: string, approved: boolean, remarks: string): Promise<void> {
+
+  // A project can have multiple guidelines attached; approving it should mean every
+  // active item across all of them has been answered, not just the ones a guideline
+  // that happened to get audited first. Rejections are always allowed regardless.
+  if (approved) {
+    const summary = await fetchProjectComplianceSummary([projectId])
+    const coverage = summary[projectId]
+    if (!coverage || coverage.total === 0 || coverage.answered < coverage.total) {
+      throw new IncompleteCoverageError()
+    }
+  }
 
   // Look up headAuditorId to use as report creator if needed
   const { data: proj } = await supabase
@@ -1442,7 +1508,6 @@ export async function reviewSubmission(projectId: string, approved: boolean, rem
 
 
 
-// ΓöÇΓöÇΓöÇ Compliance Scores ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 
 
@@ -1551,7 +1616,6 @@ export async function fetchComplianceScores(projectId: string): Promise<DbCompli
 
 
 
-// ΓöÇΓöÇΓöÇ Audit Reports ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 
 
@@ -1653,7 +1717,7 @@ export async function fetchAuditReports(
     
     const headAuditorName = userNamesMap.get(p.headAuditorId) || 'Unknown'
     const guidelineIds = guidelinesMap.get(p.projectId) ?? []
-    const scorePercentage = complianceSummary[p.projectId] !== undefined ? complianceSummary[p.projectId] : null
+    const scorePercentage = complianceSummary[p.projectId]?.percentage ?? null
     
     results.push({
       projectId: p.projectId,
@@ -1715,7 +1779,6 @@ export async function createAuditReport(projectId: string, userId: string): Prom
 
 
 
-// ΓöÇΓöÇΓöÇ Users ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 
 
@@ -2010,8 +2073,12 @@ export async function sendAssignmentEmail(projectId: string, userId: string) {
     const headAuditorName = (headAuditor as any)?.userName || 'Head Auditor'
     const projectTitle = (project as any).projectTitle
 
-    const brevoApiKey = process.env.BREVO_API_KEY || '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'
-    const senderEmail = process.env.BREVO_SENDER_EMAIL || 'den519000@gmail.com'
+    const brevoApiKey = process.env.BREVO_API_KEY
+    const senderEmail = process.env.BREVO_SENDER_EMAIL
+    if (!brevoApiKey || !senderEmail) {
+      console.warn('[Email] BREVO_API_KEY or BREVO_SENDER_EMAIL not configured — skipping assignment email.')
+      return
+    }
 
     // For testing/mocking, route dummy emails to den519000@gmail.com so they actually deliver!
     const toEmail = user.userEmail.includes('@example.com') ? 'den519000@gmail.com' : user.userEmail

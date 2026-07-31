@@ -1044,7 +1044,7 @@ export default function GeneratorPage() {
                       ) : (
                         <Check size={16} weight="bold" />
                       )}
-                      Commit Framework to Guidelines
+                      Save as Guideline
                     </button>
                             </div>
                 </motion.div>
