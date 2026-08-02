@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import {
   ShieldCheckIcon as ShieldCheck,
   SquaresFourIcon as SquaresFour,
@@ -12,6 +12,8 @@ import {
   MagicWandIcon as Wand,
 } from '@phosphor-icons/react'
 import { useStore } from '../store/useStore'
+import Modal from '../components/ui/Modal'
+import Button from '../components/ui/Button'
 
 const container = {
   hidden: { opacity: 0 },
@@ -75,7 +77,8 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
             <button
               type="button"
               onClick={onClose}
-              className="lg:hidden p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+              aria-label="Close menu"
+              className="lg:hidden p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
             >
               <XIcon size={18} weight="bold" />
             </button>
@@ -127,7 +130,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
             </p>
             <NavLink
               to={`/projects/${nextDue.id}`}
-              className="block px-4 py-3 rounded-xl bg-[var(--color-sidebar-item-hover)] hover:bg-sidebar-item-active transition-colors"
+              className="block px-4 py-3 rounded-xl bg-[var(--color-sidebar-item-hover)] hover:bg-sidebar-item-active transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-muted"
             >
               <p className="text-sidebar-text-hover text-sm font-semibold truncate">{nextDue.name}</p>
               <p className="text-sidebar-muted text-xs mt-0.5">
@@ -164,51 +167,30 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
       </div>
 
       {/* Sign Out Confirmation Modal */}
-      <AnimatePresence>
-        {showLogoutConfirm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowLogoutConfirm(false)}
-              className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              transition={{ type: 'spring', duration: 0.3 }}
-              className="relative w-full max-w-sm bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 z-10"
-            >
-              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-slate-100 mx-auto mb-4">
-                <SignOut size={22} className="text-slate-500" />
-              </div>
-              <h3 className="text-base font-bold text-slate-900 text-center mb-1">Sign Out</h3>
-              <p className="text-sm text-slate-500 text-center mb-6">
-                Are you sure you want to sign out of SafetyAudit?
-              </p>
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowLogoutConfirm(false)}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-slate-800 rounded-lg hover:bg-slate-900 transition-colors"
-                >
-                  <SignOut size={13} />
-                  Sign Out
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal
+        open={showLogoutConfirm}
+        onClose={() => setShowLogoutConfirm(false)}
+        size="sm"
+        panelClassName="p-6"
+        labelledBy="signout-modal-title"
+      >
+        <div className="flex items-center justify-center w-12 h-12 rounded-full bg-slate-100 mx-auto mb-4">
+          <SignOut size={22} className="text-slate-500" />
+        </div>
+        <h3 id="signout-modal-title" className="text-base font-bold text-slate-900 text-center mb-1">Sign Out</h3>
+        <p className="text-sm text-slate-500 text-center mb-6">
+          Are you sure you want to sign out of SafetyAudit?
+        </p>
+        <div className="flex gap-3">
+          <Button variant="neutral" size="md" fullWidth onClick={() => setShowLogoutConfirm(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="md" fullWidth onClick={handleLogout}>
+            <SignOut size={13} />
+            Sign Out
+          </Button>
+        </div>
+      </Modal>
     </aside>
   )
 }

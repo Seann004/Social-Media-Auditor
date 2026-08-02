@@ -11,6 +11,7 @@ export default {
       },
       fontSize: {
         // Bump every tier up one step so the whole UI reads larger
+        '2xs':['0.75rem',   { lineHeight: '1rem'    }],
         xs:   ['0.8125rem', { lineHeight: '1.25rem' }],   // was 0.75
         sm:   ['0.9375rem', { lineHeight: '1.5rem'  }],   // was 0.875
         base: ['1.0625rem', { lineHeight: '1.75rem' }],   // was 1

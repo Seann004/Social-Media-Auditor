@@ -1,19 +1,49 @@
+import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
-import dotenv from 'dotenv'
+import rateLimit from 'express-rate-limit'
 import * as db from './services/dbService.js'
 import { supabase } from './config/supabase.js'
 import { requireAuth, requireRole, optionalAuth, signToken } from './middleware/auth.js'
 import { requireProjectAccess, requireProjectOwner, requireChecklistItemProjectAccess, filterAccessibleProjectIds, isProjectMember } from './middleware/projectAccess.js'
 
-dotenv.config()
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET is not set. Refusing to start — every request would silently fail auth.')
+  process.exit(1)
+}
 
 const app = express()
 const port = process.env.PORT || 3000
 
-app.use(cors())
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean)
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
+    callback(new Error('Not allowed by CORS'))
+  },
+}))
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ limit: '50mb', extended: true }))
+
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+app.use('/api', generalLimiter)
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please try again later.' },
+})
 
 // Translates a known domain error (e.g. editing a locked/submitted audit) into its
 // proper HTTP status; anything else falls back to the existing generic 500 shape.
@@ -24,6 +54,10 @@ function sendError(res: express.Response, error: unknown) {
   if (error instanceof db.IncompleteCoverageError) {
     return res.status(409).json({ error: error.message })
   }
+  if (error instanceof db.ResultNotFoundError) {
+    return res.status(404).json({ error: error.message })
+  }
+  console.error(error)
   res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
 }
 
@@ -33,7 +67,7 @@ app.get('/api/health', (req, res) => {
 })
 
 // Login: verifies credentials against the DB and issues an auth token.
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body
     if (!email || !password) {
@@ -51,18 +85,18 @@ app.post('/api/auth/login', async (req, res) => {
     const token = signToken(authUser)
     res.json({ token, user: authUser })
   } catch (error) {
-    console.error('Error during login:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
 app.get('/api/users', requireAuth, async (req, res) => {
   try {
     const users = await db.fetchAllUsers()
-    res.json(users)
+    const isAdmin = req.user!.role === 'admin'
+    const shaped = isAdmin ? users : users.map(({ userEmail, ...rest }) => rest)
+    res.json(shaped)
   } catch (error) {
-    console.error('Error fetching users:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -70,15 +104,16 @@ app.get('/api/users', requireAuth, async (req, res) => {
 app.post('/api/users', optionalAuth, async (req, res) => {
   try {
     const { userId, userName, userEmail, role, userPassword } = req.body
-    if (role === 'admin' && req.user?.role !== 'admin') {
-      return res.status(403).json({ error: 'Administrator accounts cannot be self-registered.' })
+    const isCallerAdmin = req.user?.role === 'admin'
+    const finalRole = (role === 'admin' || role === 'head_auditor') && !isCallerAdmin ? 'auditor' : role
+    if ((finalRole === 'admin' || finalRole === 'head_auditor') && !isCallerAdmin) {
+      return res.status(403).json({ error: 'That role cannot be self-registered.' })
     }
-    await db.createUser({ userId, userName, userEmail, role, userPassword })
-    const token = signToken({ userId, userName, role })
+    await db.createUser({ userId, userName, userEmail, role: finalRole, userPassword })
+    const token = signToken({ userId, userName, role: finalRole })
     res.status(201).json({ success: true, token })
   } catch (error) {
-    console.error('Error creating user:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -89,8 +124,7 @@ app.get('/api/projects', requireAuth, async (req, res) => {
     const projects = await db.fetchUserProjects(req.user!.userId)
     res.json(projects)
   } catch (error) {
-    console.error('Error fetching user projects:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -107,8 +141,7 @@ app.get('/api/projects/compliance-summary', requireAuth, async (req, res) => {
     const summary = await db.fetchProjectComplianceSummary(ids)
     res.json(summary)
   } catch (error) {
-    console.error('Error fetching compliance summary:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -117,18 +150,16 @@ app.get('/api/projects/:id', requireAuth, requireProjectAccess('id'), async (req
     const details = await db.fetchProjectDetails(req.params.id)
     res.json(details)
   } catch (error) {
-    console.error('Error fetching project details:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
 app.post('/api/projects', requireAuth, requireRole('head_auditor'), async (req, res) => {
   try {
-    const projectId = await db.createProject(req.body)
+    const projectId = await db.createProject({ ...req.body, headAuditorId: req.user!.userId })
     res.status(201).json({ projectId })
   } catch (error) {
-    console.error('Error creating project:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -137,8 +168,7 @@ app.patch('/api/projects/:id', requireAuth, requireProjectAccess('id'), async (r
     await db.updateProject(req.params.id, req.body)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error updating project:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -147,8 +177,7 @@ app.delete('/api/projects/:id', requireAuth, requireRole('head_auditor'), requir
     await db.deleteProject(req.params.id)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error deleting project:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -177,8 +206,7 @@ app.post('/api/projects/:id/members', requireAuth, requireRole('head_auditor'), 
 
     res.json({ success: true })
   } catch (error) {
-    console.error('Error syncing project members:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -197,8 +225,7 @@ app.post('/api/projects/:id/members/add', requireAuth, requireRole('head_auditor
 
     res.json({ success: true })
   } catch (error) {
-    console.error('Error adding project member:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -207,8 +234,7 @@ app.delete('/api/projects/:id/members/:userId', requireAuth, requireRole('head_a
     await db.removeProjectMember(req.params.id, req.params.userId)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error removing project member:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -218,7 +244,6 @@ app.post('/api/projects/:id/guidelines', requireAuth, requireRole('head_auditor'
     await db.syncProjectGuidelines(req.params.id, req.body.guidelineIds)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error syncing guidelines:', error)
     sendError(res, error)
   }
 })
@@ -229,8 +254,7 @@ app.post('/api/projects/:id/scope', requireAuth, requireRole('head_auditor'), re
     await db.syncProjectScope(req.params.id, req.body.features)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error syncing project scope:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -244,8 +268,7 @@ app.post('/api/guidelines', requireAuth, requireRole('admin'), async (req, res) 
     await db.createGuideline({ guideline, items })
     res.status(201).json({ success: true })
   } catch (error) {
-    console.error('Error creating guideline:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -254,8 +277,7 @@ app.get('/api/guidelines', requireAuth, async (req, res) => {
     const guidelines = await db.fetchGuidelines()
     res.json(guidelines)
   } catch (error) {
-    console.error('Error fetching guidelines:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -264,8 +286,7 @@ app.delete('/api/guidelines/:id', requireAuth, requireRole('admin'), async (req,
     await db.deleteGuideline(req.params.id)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error deleting guideline:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -275,8 +296,7 @@ app.get('/api/guidelines/:id/items', requireAuth, async (req, res) => {
     const items = await db.fetchGuidelineItems(req.params.id)
     res.json(items)
   } catch (error) {
-    console.error('Error fetching guideline items:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -285,8 +305,7 @@ app.get('/api/projects/:id/checklist', requireAuth, requireProjectAccess('id'), 
     const items = await db.fetchProjectChecklistItems(req.params.id)
     res.json(items)
   } catch (error) {
-    console.error('Error fetching checklist items:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -299,29 +318,26 @@ app.post('/api/projects/:id/checklist/items', requireAuth, requireRole('head_aud
     })
     res.status(201).json({ itemId })
   } catch (error) {
-    console.error('Error adding checklist item:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
 app.patch('/api/projects/:projectId/results/:itemId/findings', requireAuth, requireProjectAccess('projectId'), async (req, res) => {
   try {
-    const { userId, findings } = req.body
-    await db.saveAuditFindings(req.params.projectId, req.params.itemId, userId, findings ?? '')
+    const { findings } = req.body
+    await db.saveAuditFindings(req.params.projectId, req.params.itemId, req.user!.userId, findings ?? '')
     res.json({ success: true })
   } catch (error) {
-    console.error('Error saving findings:', error)
     sendError(res, error)
   }
 })
 
 app.patch('/api/projects/:projectId/results/:itemId/evidence', requireAuth, requireProjectAccess('projectId'), async (req, res) => {
   try {
-    const { userId, images } = req.body
-    await db.saveEvidenceImages(req.params.projectId, req.params.itemId, userId, images ?? [])
+    const { images } = req.body
+    await db.saveEvidenceImages(req.params.projectId, req.params.itemId, req.user!.userId, images ?? [])
     res.json({ success: true })
   } catch (error) {
-    console.error('Error saving evidence images:', error)
     sendError(res, error)
   }
 })
@@ -333,8 +349,7 @@ app.post('/api/projects/:id/checklist/categories/toggle', requireAuth, requireRo
     await db.toggleProjectChecklistCategory(projectId, guidelineId, category, enabled)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error toggling category:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -343,8 +358,7 @@ app.patch('/api/checklist/items/:id', requireAuth, requireRole('head_auditor'), 
     await db.updateChecklistItem(req.params.id, req.body)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error updating checklist item:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -353,8 +367,7 @@ app.delete('/api/checklist/items/:id', requireAuth, requireRole('head_auditor'),
     await db.deleteChecklistItem(req.params.id)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error deleting checklist item:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -363,8 +376,7 @@ app.get('/api/projects/:id/results', requireAuth, requireProjectAccess('id'), as
     const results = await db.fetchAuditResults(req.params.id)
     res.json(results)
   } catch (error) {
-    console.error('Error fetching audit results:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -381,7 +393,6 @@ app.post('/api/projects/:id/results', requireAuth, requireProjectAccess('id'), a
     )
     res.json(scoreData)
   } catch (error) {
-    console.error('Error upserting audit result:', error)
     sendError(res, error)
   }
 })
@@ -391,8 +402,7 @@ app.post('/api/projects/:id/submit', requireAuth, requireRole('auditor'), requir
     await db.submitForReview(req.params.id)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error submitting project for review:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -402,7 +412,6 @@ app.post('/api/projects/:id/review', requireAuth, requireRole('head_auditor'), r
     await db.reviewSubmission(req.params.id, approved, remarks)
     res.json({ success: true })
   } catch (error) {
-    console.error('Error reviewing project submission:', error)
     sendError(res, error)
   }
 })
@@ -412,8 +421,7 @@ app.get('/api/projects/:id/compliance-scores', requireAuth, requireProjectAccess
     const scores = await db.fetchComplianceScores(req.params.id)
     res.json(scores)
   } catch (error) {
-    console.error('Error fetching compliance scores:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -429,8 +437,7 @@ app.get('/api/reports', requireAuth, async (req, res) => {
     const reports = await db.fetchAuditReports(req.user!.userId, filters)
     res.json(reports)
   } catch (error) {
-    console.error('Error fetching audit reports:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -443,8 +450,7 @@ app.post('/api/reports', requireAuth, async (req, res) => {
     const reportId = await db.createAuditReport(projectId, userId)
     res.status(201).json({ reportId })
   } catch (error) {
-    console.error('Error creating audit report:', error)
-    res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
+    sendError(res, error)
   }
 })
 
@@ -460,6 +466,7 @@ async function groqFetchWithRetry(url: string, options: RequestInit, retries = 3
   // Final attempt — return whatever we get
   return fetch(url, options)
 }
+
 app.post('/api/generator/process-chunk', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { textChunk, platform } = req.body
@@ -481,7 +488,7 @@ Focus on identifying concrete, auditable items suitable for checking a platform 
 BEFORE extracting any items, identify valid clauses using these rules:
 
 A valid clause MUST impose a concrete obligation, standard, or requirement on the reader.
-Valid clause patterns include: numbered sections (e.g. "1.", "Article 5", "Section 3.2"), 
+Valid clause patterns include: numbered sections (e.g. "1.", "Article 5", "Section 3.2"),
 titled requirement blocks, or named standards.
 
 IGNORE the following — do NOT extract checklist items from them or use them as references:
@@ -494,9 +501,9 @@ IGNORE the following — do NOT extract checklist items from them or use them as
   "At a glance", "In more detail", "Background", "Overview"
 - Introductory sections that describe the document itself rather than impose requirements
 
-For the "reference" field: use the nearest valid clause number or section title as it 
-appears in the document. If the text does not belong to a clearly numbered clause, 
-group it under the closest parent section heading. Never use page numbers, 
+For the "reference" field: use the nearest valid clause number or section title as it
+appears in the document. If the text does not belong to a clearly numbered clause,
+group it under the closest parent section heading. Never use page numbers,
 question sub-headings, or document metadata as a reference value.
 
 For each checklist item, you must determine:

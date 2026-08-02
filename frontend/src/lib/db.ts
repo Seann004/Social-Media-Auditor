@@ -139,8 +139,8 @@ export async function login(email: string, hashedPassword: string): Promise<{
   })
 }
 
-export async function fetchUserProjects(userId: string): Promise<DbProject[]> {
-  return request<DbProject[]>(`/projects?userId=${encodeURIComponent(userId)}`)
+export async function fetchUserProjects(_userId: string): Promise<DbProject[]> {
+  return request<DbProject[]>('/projects')
 }
 
 export async function fetchProjectDetails(projectId: string) {
@@ -379,7 +379,7 @@ export async function fetchComplianceScores(projectId: string): Promise<DbCompli
 }
 
 export async function fetchAuditReports(
-  userId: string,
+  _userId: string,
   filters?: {
     projectStatusFilter?: AuditStatus
     search?: string
@@ -387,12 +387,12 @@ export async function fetchAuditReports(
     dateTo?: string
   }
 ): Promise<DbAuditReport[]> {
-  let query = `userId=${encodeURIComponent(userId)}`
+  let query = ''
   if (filters?.projectStatusFilter) query += `&projectStatusFilter=${filters.projectStatusFilter}`
   if (filters?.search) query += `&search=${encodeURIComponent(filters.search)}`
   if (filters?.dateFrom) query += `&dateFrom=${filters.dateFrom}`
   if (filters?.dateTo) query += `&dateTo=${filters.dateTo}`
-  return request<DbAuditReport[]>(`/reports?${query}`)
+  return request<DbAuditReport[]>(`/reports?${query.replace(/^&/, '')}`)
 }
 
 export async function createAuditReport(projectId: string, userId: string): Promise<string> {

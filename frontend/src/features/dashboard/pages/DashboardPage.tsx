@@ -6,6 +6,10 @@ import GuidelinesPage from '../../guidelines/pages/GuidelinesPage'
 import { useStore } from '../../../store/useStore'
 import StatusBadge from '../../audits/components/StatusBadge'
 import AuditorAvatar from '../../../components/ui/AuditorAvatar'
+import { buttonClasses } from '../../../components/ui/Button'
+import { platformColor, platformInitial } from '../../../lib/platformColors'
+import { scoreColor, formatPercent } from '../../../lib/scoreColor'
+import { AUDIT_STATUS_COLOR } from '../../../lib/statusColors'
 
 // ── Mini SVG donut chart ────────────────────────────────────────────────────
 function DonutChart({ segments, size = 72, stroke = 9, center }: {
@@ -40,6 +44,44 @@ function DonutChart({ segments, size = 72, stroke = 9, center }: {
   )
 }
 
+function DashboardSkeleton() {
+  return (
+    <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-10 animate-pulse">
+      <div className="mb-8 space-y-2">
+        <div className="h-7 w-64 rounded-lg bg-slate-200" />
+        <div className="h-4 w-44 rounded bg-slate-100" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+        {[0, 1].map((i) => (
+          <div key={i} className="bg-white border border-slate-200 rounded-xl px-5 py-5 flex items-center gap-4">
+            <div className="w-[72px] h-[72px] rounded-full bg-slate-100 shrink-0" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3.5 w-28 rounded bg-slate-200" />
+              <div className="h-2.5 w-20 rounded bg-slate-100" />
+              <div className="h-2.5 w-24 rounded bg-slate-100" />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-4 px-5 py-5">
+              <div className="w-8 h-8 rounded-lg bg-slate-200 shrink-0" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3.5 w-2/5 rounded bg-slate-200" />
+                <div className="h-2.5 w-1/4 rounded bg-slate-100" />
+              </div>
+              <div className="h-5 w-20 rounded-md bg-slate-100" />
+            </div>
+          ))}
+        </div>
+        <div className="bg-white border border-slate-200 rounded-xl h-48" />
+      </div>
+    </div>
+  )
+}
+
 
 const container = {
   hidden: { opacity: 0 },
@@ -48,28 +90,6 @@ const container = {
 const item = {
   hidden: { opacity: 0, y: 14 },
   show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 100, damping: 20 } },
-}
-
-const PLATFORM_INITIAL: Record<string, string> = {
-  TikTok: 'TK',
-  Instagram: 'IG',
-  Facebook: 'FB',
-  Snapchat: 'SC',
-  YouTube: 'YT',
-  Discord: 'DC',
-  BeReal: 'BR',
-  'X (Twitter)': 'XTW',
-}
-
-const PLATFORM_COLOR: Record<string, string> = {
-  TikTok: 'bg-slate-800',
-  Instagram: 'bg-pink-500',
-  Facebook: 'bg-blue-600',
-  Snapchat: 'bg-yellow-400',
-  YouTube: 'bg-red-600',
-  Discord: 'bg-indigo-500',
-  BeReal: 'bg-slate-700',
-  'X (Twitter)': 'bg-slate-900',
 }
 
 function ScoreBar({ pct, color }: { pct: number; color: string }) {
@@ -87,7 +107,7 @@ function ScoreBar({ pct, color }: { pct: number; color: string }) {
 }
 
 export default function DashboardPage() {
-  const { projects, users, currentUserId, guidelines, complianceMap, initFromDb } = useStore()
+  const { projects, users, currentUserId, guidelines, complianceMap, initFromDb, loading } = useStore()
   const currentUser = users.find((u) => u.id === currentUserId) ?? users[0]
   const location = useLocation()
 
@@ -120,17 +140,26 @@ export default function DashboardPage() {
     completed: completedProjects.length,
   }
 
-  const upcomingDeadlines = projects
+  const upcomingDeadlines = visibleProjects
     .filter((p) => p.status === 'in_progress' && p.dueDate)
     .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))
     .slice(0, 3)
   // Only auditors and head auditors appear in the team panel — admins are excluded
   const auditTeam = users.filter((u) => u.role !== 'admin')
 
+  const todayIso = new Date().toISOString().split('T')[0]
+  const overdueCount = visibleProjects.filter(
+    (p) => p.dueDate && p.dueDate < todayIso && p.status !== 'completed',
+  ).length
+  const awaitingReviewCount = statusCounts.under_review
 
   // Admin sees combined dashboard and guidelines
   if (isAdmin) {
     return <GuidelinesPage />
+  }
+
+  if (loading && visibleProjects.length === 0) {
+    return <DashboardSkeleton />
   }
 
   return (
@@ -152,10 +181,7 @@ export default function DashboardPage() {
           </p>
         </div>
         {isHeadAuditor && (
-          <Link
-            to="/projects/new"
-            className="hidden md:flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors focus-visible:outline-2 focus-visible:outline-blue-500 focus-visible:outline-offset-1"
-          >
+          <Link to="/projects/new" className={buttonClasses('primary', 'md', 'hidden md:inline-flex')}>
             New Audit
             <ArrowRight size={14} weight="bold" />
           </Link>
@@ -170,10 +196,10 @@ export default function DashboardPage() {
           <DonutChart
             size={72} stroke={9}
             segments={[
-              { value: statusCounts.draft, color: '#94a3b8' },
-              { value: statusCounts.in_progress, color: '#2563eb' },
-              { value: statusCounts.under_review, color: '#d97706' },
-              { value: statusCounts.completed, color: '#059669' },
+              { value: statusCounts.draft, color: AUDIT_STATUS_COLOR.draft.hex },
+              { value: statusCounts.in_progress, color: AUDIT_STATUS_COLOR.in_progress.hex },
+              { value: statusCounts.under_review, color: AUDIT_STATUS_COLOR.under_review.hex },
+              { value: statusCounts.completed, color: AUDIT_STATUS_COLOR.completed.hex },
             ]}
             center={
               <span className="text-base font-bold text-slate-800">{visibleProjects.length}</span>
@@ -184,25 +210,25 @@ export default function DashboardPage() {
             <div className="space-y-0.5">
               {!isAuditor && statusCounts.draft > 0 && (
                 <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                  <span className="inline-block w-2 h-2 rounded-full bg-slate-400" />
+                  <span className={`inline-block w-2 h-2 rounded-full ${AUDIT_STATUS_COLOR.draft.dot}`} />
                   {statusCounts.draft} draft
                 </p>
               )}
               {statusCounts.in_progress > 0 && (
                 <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                  <span className="inline-block w-2 h-2 rounded-full bg-blue-500" />
+                  <span className={`inline-block w-2 h-2 rounded-full ${AUDIT_STATUS_COLOR.in_progress.dot}`} />
                   {statusCounts.in_progress} active
                 </p>
               )}
               {statusCounts.under_review > 0 && (
                 <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                  <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
+                  <span className={`inline-block w-2 h-2 rounded-full ${AUDIT_STATUS_COLOR.under_review.dot}`} />
                   {statusCounts.under_review} in review
                 </p>
               )}
               {statusCounts.completed > 0 && (
                 <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                  <span className={`inline-block w-2 h-2 rounded-full ${AUDIT_STATUS_COLOR.completed.dot}`} />
                   {statusCounts.completed} done
                 </p>
               )}
@@ -218,23 +244,43 @@ export default function DashboardPage() {
           <DonutChart
             size={72} stroke={9}
             segments={[
-              { value: activeProjects.length, color: '#2563eb' },
+              { value: activeProjects.length, color: AUDIT_STATUS_COLOR.in_progress.hex },
               { value: Math.max(visibleProjects.length - activeProjects.length, 0), color: '#e2e8f0' },
             ]}
             center={
               <span className="text-base font-bold text-blue-600">{activeProjects.length}</span>
             }
           />
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-semibold text-slate-600 mb-1">In Progress</p>
             <p className="text-xs text-slate-400">
               {visibleProjects.length > 0
                 ? `${Math.round((activeProjects.length / visibleProjects.length) * 100)}% of total`
                 : 'No audits yet'}
             </p>
-            <p className="text-xs text-slate-300 mt-1">
-              {visibleProjects.length - activeProjects.length} other status
-            </p>
+            <div className="flex items-center gap-4 mt-2.5">
+              <Link
+                to="/projects"
+                className="group/stat rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+              >
+                <p className={`font-mono text-base font-semibold tabular-nums leading-none ${awaitingReviewCount > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+                  {awaitingReviewCount}
+                </p>
+                <p className="text-2xs text-slate-400 mt-1 group-hover/stat:text-slate-600 transition-colors">
+                  {isHeadAuditor ? 'Awaiting my review' : 'Awaiting review'}
+                </p>
+              </Link>
+              <span className="w-px h-8 bg-slate-100" />
+              <Link
+                to="/projects"
+                className="group/stat rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+              >
+                <p className={`font-mono text-base font-semibold tabular-nums leading-none ${overdueCount > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
+                  {overdueCount}
+                </p>
+                <p className="text-2xs text-slate-400 mt-1 group-hover/stat:text-slate-600 transition-colors">Overdue</p>
+              </Link>
+            </div>
           </div>
         </div>
 
@@ -270,24 +316,20 @@ export default function DashboardPage() {
                 const auditors = project.auditorIds
                   .map((uid) => users.find((u) => u.id === uid))
                   .filter(Boolean) as typeof users
-                const barColor =
-                  scorePct >= 80 ? 'bg-emerald-500'
-                    : scorePct >= 60 ? 'bg-amber-400'
-                    : scorePct > 0 ? 'bg-rose-400'
-                    : 'bg-slate-300'
+                const barColor = scoreColor(scorePct).bar
 
                 return (
                   <Link
                     key={project.id}
                     to={`/projects/${project.id}`}
-                    className="flex items-center gap-4 px-5 py-5 hover:bg-slate-50 transition-colors group"
+                    className="flex items-center gap-4 px-5 py-5 hover:bg-slate-50 transition-colors group focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-600"
                   >
                     {/* Platform dot */}
                     <div
-                      className={`w-8 h-8 rounded-lg ${PLATFORM_COLOR[project.platform] ?? 'bg-slate-700'} flex items-center justify-center shrink-0`}
+                      className={`w-8 h-8 rounded-lg ${platformColor(project.platform)} flex items-center justify-center shrink-0`}
                     >
-                      <span className="text-white text-[9px] font-bold">
-                        {PLATFORM_INITIAL[project.platform]}
+                      <span className="text-white text-2xs font-bold">
+                        {platformInitial(project.platform)}
                       </span>
                     </div>
 
@@ -295,13 +337,13 @@ export default function DashboardPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-base font-medium text-slate-800 truncate">{project.name}</p>
                       <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium">
+                        <span className="text-2xs text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-md font-medium">
                           {project.platform}
                         </span>
                         {projGuidelines.map((g) => (
                           <span
                             key={g.id}
-                            className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium"
+                            className="text-2xs text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-md font-medium"
                           >
                             {g.shortName}
                           </span>
@@ -312,8 +354,8 @@ export default function DashboardPage() {
                     {/* Score bar */}
                     <div className="hidden sm:flex flex-col items-end gap-1">
                       <ScoreBar pct={scorePct} color={barColor} />
-                      <span className="font-mono text-[11px] text-slate-500 tabular-nums">
-                        {scorePct > 0 ? `${scorePct.toFixed(1)}%` : '—'}
+                      <span className="font-mono text-2xs text-slate-500 tabular-nums">
+                        {scorePct > 0 ? `${formatPercent(scorePct)}%` : '—'}
                       </span>
                     </div>
 
@@ -355,12 +397,12 @@ export default function DashboardPage() {
                       <AuditorAvatar user={u} size="sm" />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-slate-700 font-medium truncate">{u.name}</p>
-                        <p className="text-[11px] text-slate-400 capitalize">
+                        <p className="text-2xs text-slate-400 capitalize">
                           {u.role.replace('_', ' ')}
                         </p>
                       </div>
                       {projectCount > 0 && (
-                        <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-medium ring-1 ring-blue-200">
+                        <span className="text-2xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-md font-medium ring-1 ring-blue-200">
                           {projectCount} active
                         </span>
                       )}
@@ -390,11 +432,11 @@ export default function DashboardPage() {
                       <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${urgent ? 'bg-rose-400' : 'bg-slate-300'}`} />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-slate-700 font-medium truncate">{p.name}</p>
-                        <p className="text-[11px] text-slate-400">
+                        <p className="text-2xs text-slate-400">
                           {due.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                         </p>
                       </div>
-                      <span className={`text-[11px] font-mono font-medium ${urgent ? 'text-rose-500' : 'text-slate-400'}`}>
+                      <span className={`text-2xs font-mono font-medium ${urgent ? 'text-rose-500' : 'text-slate-400'}`}>
                         {daysLeft > 0 ? `${daysLeft}d` : 'overdue'}
                       </span>
                     </Link>

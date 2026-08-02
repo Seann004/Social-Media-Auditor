@@ -41,6 +41,9 @@ export default function App() {
             {/* Head Auditor ONLY Routes */}
             <Route element={<RoleRoute allowedRoles={['head_auditor']} />}>
               <Route path="/projects/new" element={<CreateProjectPage />} />
+            </Route>
+
+            <Route element={<RoleRoute allowedRoles={['head_auditor', 'admin']} />}>
               <Route path="/guidelines" element={<GuidelinesPage />} />
             </Route>
           </Route>
