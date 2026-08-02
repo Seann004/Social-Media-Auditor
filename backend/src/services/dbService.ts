@@ -481,11 +481,18 @@ export async function updateProject(projectId: string, updates: {
 
 }): Promise<void> {
 
+  const allowed: Record<string, unknown> = {}
+  if (updates.projectTitle !== undefined) allowed.projectTitle = updates.projectTitle
+  if (updates.smPlatform !== undefined) allowed.smPlatform = updates.smPlatform
+  if (updates.projectStatus !== undefined) allowed.projectStatus = updates.projectStatus
+  if (updates.projectNotes !== undefined) allowed.projectNotes = updates.projectNotes
+  if (updates.dueDate !== undefined) allowed.dueDate = updates.dueDate
+
   const { error } = await supabase
 
     .from('Audit_Project')
 
-    .update({ ...updates, updatedAt: new Date().toISOString() })
+    .update({ ...allowed, updatedAt: new Date().toISOString() })
 
     .eq('projectId', projectId)
 
@@ -575,14 +582,6 @@ export async function fetchProjectComplianceSummary(
 
 export async function deleteProject(projectId: string): Promise<void> {
 
-  // Delete project-specific guidelines
-
-  await supabase.from('Guideline').delete().eq('projectId', projectId)
-
-
-
-  // Delete project itself
-
   const { error } = await supabase.from('Audit_Project').delete().eq('projectId', projectId)
 
   if (error) throw error
@@ -623,6 +622,19 @@ export async function removeProjectMember(projectId: string, userId: string): Pr
 
 
 export async function syncProjectMembers(projectId: string, userIds: string[]): Promise<void> {
+
+  if (userIds.length > 0) {
+    const { data: validUsers, error: userError } = await supabase
+      .from('User')
+      .select('userId')
+      .in('userId', userIds)
+    if (userError) throw userError
+    const validIds = new Set((validUsers ?? []).map((u: any) => u.userId))
+    const missing = userIds.filter((id) => !validIds.has(id))
+    if (missing.length > 0) {
+      throw new Error(`Cannot sync members: unknown user id(s): ${missing.join(', ')}`)
+    }
+  }
 
   await supabase.from('Project_Member').delete().eq('projectId', projectId)
 
@@ -1145,26 +1157,37 @@ async function assertProjectEditable(projectId: string): Promise<void> {
   }
 }
 
+export class ResultNotFoundError extends Error {
+  constructor(message = 'Answer this checklist item before attaching findings or evidence to it.') {
+    super(message)
+    this.name = 'ResultNotFoundError'
+  }
+}
+
 export async function saveAuditFindings(projectId: string, itemId: string, userId: string, findings: string): Promise<void> {
   await assertProjectEditable(projectId)
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('Audit_Result')
     .update({ findings: findings || null })
     .eq('projectId', projectId)
     .eq('itemId', itemId)
     .eq('userId', userId)
+    .select('resultId')
   if (error) throw error
+  if (!data || data.length === 0) throw new ResultNotFoundError()
 }
 
 export async function saveEvidenceImages(projectId: string, itemId: string, userId: string, images: { url: string; name: string }[]): Promise<void> {
   await assertProjectEditable(projectId)
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('Audit_Result')
     .update({ evidenceImages: images.length > 0 ? images : [] })
     .eq('projectId', projectId)
     .eq('itemId', itemId)
     .eq('userId', userId)
+    .select('resultId')
   if (error) throw error
+  if (!data || data.length === 0) throw new ResultNotFoundError()
 }
 
 
@@ -1342,13 +1365,12 @@ export async function upsertAuditResult(
     .select('resultId')
     .eq('projectId', projectId)
     .eq('itemId', itemId)
-    .eq('userId', userId)
     .maybeSingle()
 
   if (existing) {
     const { error } = await supabase
       .from('Audit_Result')
-      .update({ result, notes: notes || null, guidelineId, timeSubmitted: new Date().toISOString() })
+      .update({ result, notes: notes || null, guidelineId, userId, timeSubmitted: new Date().toISOString() })
       .eq('resultId', (existing as any).resultId)
     if (error) throw error
   } else {
@@ -1848,7 +1870,7 @@ export async function createGuideline(input: {
 
   const { guideline, items } = input
 
-  
+
 
   let userId = guideline.userId
 
@@ -1866,7 +1888,7 @@ export async function createGuideline(input: {
 
   }
 
-  
+
 
   if (!userId) {
 

@@ -56,6 +56,28 @@ const PRESETS: Record<string, { category: string; text: string; severity: Severi
   ]
 }
 
+const CHUNK_SIZE = 4000
+const MAX_CHUNKS = 25
+
+function chunkText(text: string, maxChars: number = CHUNK_SIZE): string[] {
+  const chunks: string[] = []
+  let remaining = text.trimStart()
+
+  while (remaining.length > 0 && chunks.length < MAX_CHUNKS) {
+    if (remaining.length <= maxChars) {
+      chunks.push(remaining)
+      break
+    }
+    let splitAt = remaining.lastIndexOf('\n\n', maxChars)
+    if (splitAt < maxChars * 0.5) splitAt = remaining.lastIndexOf('. ', maxChars)
+    if (splitAt < maxChars * 0.5) splitAt = maxChars
+    chunks.push(remaining.slice(0, splitAt))
+    remaining = remaining.slice(splitAt).trimStart()
+  }
+
+  return chunks
+}
+
 function removeTOC(text: string): string {
   // Strategy: find the TOC block and cut it out entirely
   // TOC pages typically have lines ending with page numbers (dots + number pattern)
@@ -618,10 +640,11 @@ export default function GeneratorPage() {
         throw new Error('No readable text found in PDF.')
       }
 
+      const chunks = chunkText(removeTOC(fullText))
       setPdfStep(2)
-      setTotalChunks(1)
+      setTotalChunks(chunks.length)
       setCurrentChunkIdx(0)
-      processPdfChunks(removeTOC(fullText), file.name)
+      processPdfChunks(chunks, file.name)
 
     } catch (err) {
       console.error(err)
@@ -630,22 +653,25 @@ export default function GeneratorPage() {
     }
   }
 
-  const processPdfChunks = async (fullText: string, fileName: string) => {
+  const processPdfChunks = async (chunks: string[], fileName: string) => {
     try {
-      // Extract a focused 4,000-character sample from the document body.
-      // Skipping the first 300 chars avoids cover-page noise (title, TOC headers).
-      // This keeps the Groq request well within the free-tier 6,000 TPM limit.
-      const sample = fullText.trimStart().slice(300, 4300)
+      let allItems: any[] = []
+      let anyFallbackUsed = false
 
-      const chunkResult = await db.processTextChunk(sample, platform)
+      for (let i = 0; i < chunks.length; i++) {
+        setCurrentChunkIdx(i)
+        const chunkResult = await db.processTextChunk(chunks[i], platform)
+        allItems = allItems.concat(chunkResult.items || [])
+        if (!chunkResult._aiUsed) anyFallbackUsed = true
+      }
 
-      if (!chunkResult._aiUsed) {
-        setAiErrors((prev) => [...prev, 'AI Engine failed to connect to the LLM service — heuristic fallback was used. Results may be less accurate.'])
+      if (anyFallbackUsed) {
+        setAiErrors((prev) => [...prev, 'AI Engine failed to connect to the LLM service for one or more chunks — heuristic fallback was used. Results may be less accurate.'])
       }
 
       setPdfStep(3)
 
-      const mergeResult = await db.mergeChecklistItems(chunkResult.items, platform)
+      const mergeResult = await db.mergeChecklistItems(allItems, platform)
 
       const guidelineId = window.crypto.randomUUID()
       const cleanFileName = fileName.replace(/\.[^/.]+$/, "")
@@ -669,7 +695,9 @@ export default function GeneratorPage() {
         text: item.text,
         severity: item.severity || 'major',
         reference: item.reference || undefined,
-        feature: item.feature || undefined
+        feature: item.feature || undefined,
+        helpText: item.helpText || undefined,
+        verbatimClauseText: item.verbatimClauseText || undefined,
       }))
 
       setGeneratedGuideline(newGuideline)

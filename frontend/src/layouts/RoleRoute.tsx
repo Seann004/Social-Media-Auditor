@@ -15,7 +15,7 @@ export default function RoleRoute({ allowedRoles }: RoleRouteProps) {
   }
 
   // 2. Kick back to dashboard if they don't have the right role
-  if (user && !allowedRoles.includes(user.role)) {
+  if (!user || !allowedRoles.includes(user.role)) {
     return <Navigate to="/dashboard" replace />
   }
 
