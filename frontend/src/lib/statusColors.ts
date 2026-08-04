@@ -108,3 +108,18 @@ export function statusColor(kind: 'audit' | 'checklist' | 'submission', status: 
   if (kind === 'checklist') return CHECKLIST_STATUS_COLOR[status as ChecklistItemStatus]
   return SUBMISSION_STATUS_COLOR[status as SubmissionStatus]
 }
+
+export interface ReliabilityLabel {
+  label: string
+  badge: string
+}
+
+export function reliabilityLabel(kappa: number | null): ReliabilityLabel {
+  if (kappa === null) return { label: 'Not enough data', badge: 'bg-slate-100 text-slate-500' }
+  if (kappa < 0) return { label: 'Poor agreement', badge: 'bg-rose-50 text-rose-700 ring-1 ring-rose-200' }
+  if (kappa <= 0.20) return { label: 'Slight agreement', badge: 'bg-rose-50 text-rose-700 ring-1 ring-rose-200' }
+  if (kappa <= 0.40) return { label: 'Fair agreement', badge: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200' }
+  if (kappa <= 0.60) return { label: 'Moderate agreement', badge: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200' }
+  if (kappa <= 0.80) return { label: 'Substantial agreement', badge: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' }
+  return { label: 'Almost perfect agreement', badge: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' }
+}

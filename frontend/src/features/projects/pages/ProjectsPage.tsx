@@ -80,7 +80,6 @@ export default function ProjectsPage() {
   const isHeadAuditor = currentUser?.role === 'head_auditor'
   const location = useLocation()
 
-  // Re-fetch from DB on every navigation to this page so the list stays current
   useEffect(() => { initFromDb() }, [location.key])
 
   if (currentUser?.role === 'admin') {
@@ -97,7 +96,6 @@ export default function ProjectsPage() {
 
   const isAuditor = currentUser?.role === 'auditor'
 
-  // Auditors only see projects that are ready for or past auditing (no draft)
   const visibleProjects = isAuditor
     ? projects.filter((p) => p.status !== 'draft')
     : projects
@@ -105,14 +103,12 @@ export default function ProjectsPage() {
   const filtered = visibleProjects.filter((p) => filter === 'all' || p.status === filter)
   const sorted = [...filtered].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 
-  // Auditors don't see the Draft filter tab
   const visibleFilters = isAuditor
     ? FILTERS.filter((f) => f.value !== 'draft')
     : FILTERS
 
   return (
     <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-8">
-      {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -134,7 +130,6 @@ export default function ProjectsPage() {
         )}
       </motion.div>
 
-      {/* Filter tabs */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -169,7 +164,6 @@ export default function ProjectsPage() {
         })}
       </motion.div>
 
-      {/* Project list */}
       <AnimatePresence mode="wait">
         {loading && sorted.length === 0 ? (
           <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -238,7 +232,6 @@ export default function ProjectsPage() {
                     to={`/projects/${project.id}`}
                     className="flex items-center gap-5 px-6 py-5 hover:bg-slate-50 transition-colors group focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-600"
                   >
-                    {/* Platform icon */}
                     <div
                       className={`w-9 h-9 rounded-lg ${platformColor(project.platform)} flex items-center justify-center shrink-0`}
                     >
@@ -247,7 +240,6 @@ export default function ProjectsPage() {
                       </span>
                     </div>
 
-                    {/* Project name + platform + guidelines */}
                     <div className="flex-1 min-w-0">
                       <p className="text-base font-semibold text-slate-800 leading-tight truncate" title={project.name}>{project.name}</p>
                       <div className="flex flex-wrap gap-1 mt-1">
@@ -265,13 +257,11 @@ export default function ProjectsPage() {
                       </div>
                     </div>
 
-                    {/* Compliance */}
                     <div className="hidden sm:block w-40 shrink-0">
                       <p className="text-xs text-slate-400 mb-1">Compliance</p>
                       <ScoreBar pct={compliancePct} />
                     </div>
 
-                    {/* Progress */}
                     <div className="hidden sm:block w-24 shrink-0">
                       <p className="text-xs text-slate-400 mb-0.5">Progress</p>
                       <p className="text-xs text-slate-700 font-mono tabular-nums">
@@ -279,7 +269,6 @@ export default function ProjectsPage() {
                       </p>
                     </div>
 
-                    {/* Due date */}
                     <div className="hidden lg:block w-20 shrink-0 text-right">
                       {project.dueDate ? (
                         <>
@@ -293,7 +282,6 @@ export default function ProjectsPage() {
                       )}
                     </div>
 
-                    {/* Auditors */}
                     <div className="hidden lg:flex items-center gap-1 w-20 shrink-0">
                       {headAuditor && <AuditorAvatar user={headAuditor} size="sm" />}
                       {auditors
@@ -304,7 +292,6 @@ export default function ProjectsPage() {
                         ))}
                     </div>
 
-                    {/* Status + arrow */}
                     <div className="flex items-center gap-2 shrink-0">
                       <StatusBadge type="audit" status={project.status} />
                       <ArrowRight

@@ -20,14 +20,16 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
   .map((o) => o.trim())
   .filter(Boolean)
 
+class CorsRejectedError extends Error {}
+
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
-    callback(new Error('Not allowed by CORS'))
+    callback(new CorsRejectedError('Not allowed by CORS'))
   },
 }))
-app.use(express.json({ limit: '50mb' }))
-app.use(express.urlencoded({ limit: '50mb', extended: true }))
+app.use(express.json({ limit: '20mb' }))
+app.use(express.urlencoded({ limit: '20mb', extended: true }))
 
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -45,13 +47,17 @@ const loginLimiter = rateLimit({
   message: { error: 'Too many login attempts. Please try again later.' },
 })
 
-// Translates a known domain error (e.g. editing a locked/submitted audit) into its
-// proper HTTP status; anything else falls back to the existing generic 500 shape.
 function sendError(res: express.Response, error: unknown) {
   if (error instanceof db.EditLockedError) {
     return res.status(403).json({ error: error.message })
   }
   if (error instanceof db.IncompleteCoverageError) {
+    return res.status(409).json({ error: error.message })
+  }
+  if (error instanceof db.AlreadySubmittedError) {
+    return res.status(409).json({ error: error.message })
+  }
+  if (error instanceof db.GuidelineHasAnswersError) {
     return res.status(409).json({ error: error.message })
   }
   if (error instanceof db.ResultNotFoundError) {
@@ -61,12 +67,10 @@ function sendError(res: express.Response, error: unknown) {
   res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
 }
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() })
 })
 
-// Login: verifies credentials against the DB and issues an auth token.
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body
@@ -100,17 +104,21 @@ app.get('/api/users', requireAuth, async (req, res) => {
   }
 })
 
-// Registration is public, but only an already-authenticated admin may create another admin account.
 app.post('/api/users', optionalAuth, async (req, res) => {
   try {
     const { userId, userName, userEmail, role, userPassword } = req.body
+    if (!userId || !userName || !userEmail || !userPassword) {
+      return res.status(400).json({ error: 'userId, userName, userEmail and userPassword are required.' })
+    }
+    if (!['admin', 'head_auditor', 'auditor'].includes(role)) {
+      return res.status(400).json({ error: 'role must be one of admin, head_auditor, auditor.' })
+    }
     const isCallerAdmin = req.user?.role === 'admin'
-    const finalRole = (role === 'admin' || role === 'head_auditor') && !isCallerAdmin ? 'auditor' : role
-    if ((finalRole === 'admin' || finalRole === 'head_auditor') && !isCallerAdmin) {
+    if (role === 'admin' && !isCallerAdmin) {
       return res.status(403).json({ error: 'That role cannot be self-registered.' })
     }
-    await db.createUser({ userId, userName, userEmail, role: finalRole, userPassword })
-    const token = signToken({ userId, userName, role: finalRole })
+    await db.createUser({ userId, userName, userEmail, role, userPassword })
+    const token = signToken({ userId, userName, role })
     res.status(201).json({ success: true, token })
   } catch (error) {
     sendError(res, error)
@@ -119,8 +127,6 @@ app.post('/api/users', optionalAuth, async (req, res) => {
 
 app.get('/api/projects', requireAuth, async (req, res) => {
   try {
-    // Always scope to the authenticated caller — a client-supplied userId would let
-    // anyone read another user's project list just by changing a query param.
     const projects = await db.fetchUserProjects(req.user!.userId)
     res.json(projects)
   } catch (error) {
@@ -135,8 +141,6 @@ app.get('/api/projects/compliance-summary', requireAuth, async (req, res) => {
       return res.json({})
     }
     const requestedIds = idsString.split(',')
-    // Silently drop ids the caller isn't the head auditor or a member of, rather
-    // than leaking compliance data for arbitrary projects.
     const ids = await filterAccessibleProjectIds(req.user!.userId, requestedIds)
     const summary = await db.fetchProjectComplianceSummary(ids)
     res.json(summary)
@@ -156,6 +160,10 @@ app.get('/api/projects/:id', requireAuth, requireProjectAccess('id'), async (req
 
 app.post('/api/projects', requireAuth, requireRole('head_auditor'), async (req, res) => {
   try {
+    const { title, platform } = req.body
+    if (!title || typeof title !== 'string' || !platform || typeof platform !== 'string') {
+      return res.status(400).json({ error: 'title and platform are required.' })
+    }
     const projectId = await db.createProject({ ...req.body, headAuditorId: req.user!.userId })
     res.status(201).json({ projectId })
   } catch (error) {
@@ -163,9 +171,18 @@ app.post('/api/projects', requireAuth, requireRole('head_auditor'), async (req, 
   }
 })
 
-app.patch('/api/projects/:id', requireAuth, requireProjectAccess('id'), async (req, res) => {
+app.patch('/api/projects/:id', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
   try {
     await db.updateProject(req.params.id, req.body)
+    res.json({ success: true })
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.post('/api/projects/:id/activate', requireAuth, requireProjectAccess('id'), async (req, res) => {
+  try {
+    await db.activateProject(req.params.id)
     res.json({ success: true })
   } catch (error) {
     sendError(res, error)
@@ -181,23 +198,21 @@ app.delete('/api/projects/:id', requireAuth, requireRole('head_auditor'), requir
   }
 })
 
-// Members
-app.post('/api/projects/:id/members', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
+app.post('/api/projects/:id/members', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
   try {
     const projectId = req.params.id
-    const userIds = (req.body.userIds || []) as string[]
+    const userIds = req.body.userIds
+    if (!Array.isArray(userIds) || !userIds.every((u) => typeof u === 'string')) {
+      return res.status(400).json({ error: 'userIds must be an array of strings.' })
+    }
 
-    // 1. Fetch current details to see existing members
     const details = await db.fetchProjectDetails(projectId)
     const existingUserIds = (details?.members || []).map((m: any) => m.userId) as string[]
 
-    // 2. Perform sync
     await db.syncProjectMembers(projectId, userIds)
 
-    // 3. Find newly added userIds
     const newUserIds = userIds.filter((id: string) => !existingUserIds.includes(id))
 
-    // 4. Send emails asynchronously
     for (const userId of newUserIds) {
       db.sendAssignmentEmail(projectId, userId).catch((err) => {
         console.error('Error in sendAssignmentEmail async chain:', err)
@@ -210,15 +225,16 @@ app.post('/api/projects/:id/members', requireAuth, requireRole('head_auditor'), 
   }
 })
 
-app.post('/api/projects/:id/members/add', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
+app.post('/api/projects/:id/members/add', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
   try {
     const projectId = req.params.id
     const userId = req.body.userId as string
+    if (!userId || typeof userId !== 'string') {
+      return res.status(400).json({ error: 'userId is required.' })
+    }
 
-    // 1. Perform add
     await db.addProjectMember(projectId, userId)
 
-    // 2. Send email asynchronously
     db.sendAssignmentEmail(projectId, userId).catch((err) => {
       console.error('Error in sendAssignmentEmail async chain:', err)
     })
@@ -229,7 +245,7 @@ app.post('/api/projects/:id/members/add', requireAuth, requireRole('head_auditor
   }
 })
 
-app.delete('/api/projects/:id/members/:userId', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
+app.delete('/api/projects/:id/members/:userId', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
   try {
     await db.removeProjectMember(req.params.id, req.params.userId)
     res.json({ success: true })
@@ -238,33 +254,41 @@ app.delete('/api/projects/:id/members/:userId', requireAuth, requireRole('head_a
   }
 })
 
-// Guidelines
 app.post('/api/projects/:id/guidelines', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
-    await db.syncProjectGuidelines(req.params.id, req.body.guidelineIds)
+    const { guidelineIds } = req.body
+    if (!Array.isArray(guidelineIds) || !guidelineIds.every((g) => typeof g === 'string')) {
+      return res.status(400).json({ error: 'guidelineIds must be an array of strings.' })
+    }
+    await db.syncProjectGuidelines(req.params.id, guidelineIds)
     res.json({ success: true })
   } catch (error) {
     sendError(res, error)
   }
 })
 
-// Scope
 app.post('/api/projects/:id/scope', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
-    await db.syncProjectScope(req.params.id, req.body.features)
+    const { features } = req.body
+    if (!Array.isArray(features) || !features.every((f) => typeof f === 'string')) {
+      return res.status(400).json({ error: 'features must be an array of strings.' })
+    }
+    await db.syncProjectScope(req.params.id, features)
     res.json({ success: true })
   } catch (error) {
     sendError(res, error)
   }
 })
 
-// Create guideline template (admin)
 app.post('/api/guidelines', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { guideline, items } = req.body
-    console.log("--- POST /api/guidelines received ---");
-    console.log("Total items count:", items?.length);
-    console.log("Payload size (bytes):", JSON.stringify(req.body).length);
+    if (!guideline || typeof guideline !== 'object' || !guideline.guidelineId || !guideline.guidelineName) {
+      return res.status(400).json({ error: 'guideline (with guidelineId and guidelineName) is required.' })
+    }
+    if (!Array.isArray(items)) {
+      return res.status(400).json({ error: 'items must be an array.' })
+    }
     await db.createGuideline({ guideline, items })
     res.status(201).json({ success: true })
   } catch (error) {
@@ -290,7 +314,6 @@ app.delete('/api/guidelines/:id', requireAuth, requireRole('admin'), async (req,
   }
 })
 
-// Fetch global template items for a guideline (admin/guidelines view)
 app.get('/api/guidelines/:id/items', requireAuth, async (req, res) => {
   try {
     const items = await db.fetchGuidelineItems(req.params.id)
@@ -309,9 +332,17 @@ app.get('/api/projects/:id/checklist', requireAuth, requireProjectAccess('id'), 
   }
 })
 
+const VALID_SEVERITIES = ['critical', 'major', 'minor']
+
 app.post('/api/projects/:id/checklist/items', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
     const { category, text, severity, reference, guidelineId, itemName, itemCode, helpText, verbatimClauseText, answerOptions } = req.body
+    if (!category || !text || !guidelineId) {
+      return res.status(400).json({ error: 'category, text and guidelineId are required.' })
+    }
+    if (!VALID_SEVERITIES.includes(severity)) {
+      return res.status(400).json({ error: `severity must be one of ${VALID_SEVERITIES.join(', ')}.` })
+    }
     const projectId = req.params.id
     const itemId = await db.addProjectChecklistItem(projectId, guidelineId, {
       category, text, severity, reference, itemName, itemCode, helpText, verbatimClauseText, answerOptions,
@@ -325,6 +356,9 @@ app.post('/api/projects/:id/checklist/items', requireAuth, requireRole('head_aud
 app.patch('/api/projects/:projectId/results/:itemId/findings', requireAuth, requireProjectAccess('projectId'), async (req, res) => {
   try {
     const { findings } = req.body
+    if (findings !== undefined && typeof findings !== 'string') {
+      return res.status(400).json({ error: 'findings must be a string.' })
+    }
     await db.saveAuditFindings(req.params.projectId, req.params.itemId, req.user!.userId, findings ?? '')
     res.json({ success: true })
   } catch (error) {
@@ -335,6 +369,9 @@ app.patch('/api/projects/:projectId/results/:itemId/findings', requireAuth, requ
 app.patch('/api/projects/:projectId/results/:itemId/evidence', requireAuth, requireProjectAccess('projectId'), async (req, res) => {
   try {
     const { images } = req.body
+    if (images !== undefined && (!Array.isArray(images) || !images.every((i) => i && typeof i.url === 'string' && typeof i.name === 'string'))) {
+      return res.status(400).json({ error: 'images must be an array of { url, name }.' })
+    }
     await db.saveEvidenceImages(req.params.projectId, req.params.itemId, req.user!.userId, images ?? [])
     res.json({ success: true })
   } catch (error) {
@@ -345,6 +382,9 @@ app.patch('/api/projects/:projectId/results/:itemId/evidence', requireAuth, requ
 app.post('/api/projects/:id/checklist/categories/toggle', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
   try {
     const { category, enabled, guidelineId } = req.body
+    if (!category || typeof category !== 'string' || !guidelineId || typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'category, guidelineId and enabled (boolean) are required.' })
+    }
     const projectId = req.params.id
     await db.toggleProjectChecklistCategory(projectId, guidelineId, category, enabled)
     res.json({ success: true })
@@ -355,6 +395,10 @@ app.post('/api/projects/:id/checklist/categories/toggle', requireAuth, requireRo
 
 app.patch('/api/checklist/items/:id', requireAuth, requireRole('head_auditor'), requireChecklistItemProjectAccess('id'), async (req, res) => {
   try {
+    const { severity } = req.body
+    if (severity !== undefined && !VALID_SEVERITIES.includes(severity)) {
+      return res.status(400).json({ error: `severity must be one of ${VALID_SEVERITIES.join(', ')}.` })
+    }
     await db.updateChecklistItem(req.params.id, req.body)
     res.json({ success: true })
   } catch (error) {
@@ -380,18 +424,70 @@ app.get('/api/projects/:id/results', requireAuth, requireProjectAccess('id'), as
   }
 })
 
+app.get('/api/projects/:id/evidence', requireAuth, requireProjectAccess('id'), async (req, res) => {
+  try {
+    const itemIdsParam = req.query.itemIds
+    if (typeof itemIdsParam !== 'string' || !itemIdsParam) {
+      return res.status(400).json({ error: 'itemIds query parameter is required.' })
+    }
+    const itemIds = itemIdsParam.split(',').filter(Boolean)
+    const evidence = await db.fetchEvidenceForItems(req.params.id, itemIds)
+    res.json(evidence)
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.get('/api/projects/:id/reliability', requireAuth, requireProjectAccess('id'), async (req, res) => {
+  try {
+    const reliability = await db.computeInterRaterReliability(req.params.id)
+    res.json(reliability)
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.get('/api/projects/:id/resolutions', requireAuth, requireProjectAccess('id'), async (req, res) => {
+  try {
+    const resolutions = await db.fetchResolutions(req.params.id)
+    res.json(resolutions)
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+const VALID_RESOLUTION_STATUSES = ['compliant', 'non_compliant', 'partially', 'not_applicable']
+
+app.post('/api/projects/:id/results/:itemId/resolve', requireAuth, requireRole('head_auditor'), requireProjectAccess('id'), async (req, res) => {
+  try {
+    const { status, notes } = req.body
+    if (!VALID_RESOLUTION_STATUSES.includes(status)) {
+      return res.status(400).json({ error: `status must be one of ${VALID_RESOLUTION_STATUSES.join(', ')}.` })
+    }
+    await db.resolveDisagreement(req.params.id, req.params.itemId, req.user!.userId, status, notes ?? '')
+    res.json({ success: true })
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+const VALID_RESULT_STATUSES = ['compliant', 'non_compliant', 'partially', 'not_applicable', 'needs_review']
+
 app.post('/api/projects/:id/results', requireAuth, requireProjectAccess('id'), async (req, res) => {
   try {
-    const { itemId, userId, guidelineId, result, notes } = req.body
-    const scoreData = await db.upsertAuditResult(
+    const { itemId, guidelineId, result, notes } = req.body
+    if (!itemId || !guidelineId || !VALID_RESULT_STATUSES.includes(result)) {
+      return res.status(400).json({ error: `itemId, guidelineId are required and result must be one of ${VALID_RESULT_STATUSES.join(', ')}.` })
+    }
+    await db.upsertAuditResult(
       req.params.id,
       itemId,
-      userId,
+      req.user!.userId,
       guidelineId,
       result,
       notes
     )
-    res.json(scoreData)
+    res.json({ success: true })
   } catch (error) {
     sendError(res, error)
   }
@@ -427,7 +523,6 @@ app.get('/api/projects/:id/compliance-scores', requireAuth, requireProjectAccess
 
 app.get('/api/reports', requireAuth, async (req, res) => {
   try {
-    // Always scope to the authenticated caller — see the same fix on GET /api/projects.
     const filters = {
       projectStatusFilter: req.query.projectStatusFilter as any,
       search: req.query.search as string,
@@ -443,11 +538,11 @@ app.get('/api/reports', requireAuth, async (req, res) => {
 
 app.post('/api/reports', requireAuth, async (req, res) => {
   try {
-    const { projectId, userId } = req.body
+    const { projectId } = req.body
     if (!projectId || !(await isProjectMember(projectId, req.user!.userId))) {
       return res.status(403).json({ error: 'You do not have access to this project.' })
     }
-    const reportId = await db.createAuditReport(projectId, userId)
+    const reportId = await db.createAuditReport(projectId, req.user!.userId)
     res.status(201).json({ reportId })
   } catch (error) {
     sendError(res, error)
@@ -455,16 +550,23 @@ app.post('/api/reports', requireAuth, async (req, res) => {
 })
 
 
+const GROQ_TIMEOUT_MS = 30000
+
+function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer))
+}
+
 async function groqFetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
   for (let attempt = 0; attempt < retries; attempt++) {
-    const res = await fetch(url, options)
+    const res = await fetchWithTimeout(url, options, GROQ_TIMEOUT_MS)
     if (res.status !== 429) return res
     const retryAfter = Number(res.headers.get('retry-after') || 0) || 15
     console.warn(`[GROQ] 429 rate limit — waiting ${retryAfter}s before retry ${attempt + 1}/${retries}`)
     await new Promise((r) => setTimeout(r, retryAfter * 1000))
   }
-  // Final attempt — return whatever we get
-  return fetch(url, options)
+  return fetchWithTimeout(url, options, GROQ_TIMEOUT_MS)
 }
 
 app.post('/api/generator/process-chunk', requireAuth, requireRole('admin'), async (req, res) => {
@@ -562,7 +664,6 @@ You MUST return your output in JSON format matching this EXACT schema:
       fallback: 'heuristic_parser',
     })
 
-    // Heuristic Extractor Fallback
     const sentences = (req.body.textChunk || '').split(/[.!?\n]+/)
     const items: any[] = []
     let idx = 1
@@ -596,11 +697,11 @@ You MUST return your output in JSON format matching this EXACT schema:
         else if (/nudge|dark|pattern/i.test(s)) category = 'Dark Patterns'
 
         let reference = ''
-        const refMatch = s.match(/\\b(section|clause|paragraph|rule|std)\\s+\\d+[\\d.]*\\b/i)
+        const refMatch = s.match(/\b(section|clause|paragraph|rule|std)\s+\d+[\d.]*\b/i)
         if (refMatch) {
           reference = refMatch[0]
         } else {
-          const numMatch = s.match(/\\b\\d+\\.\\d+(\\.\\d+)?\\b/)
+          const numMatch = s.match(/\b\d+\.\d+(\.\d+)?\b/)
           if (numMatch) {
             reference = 'Clause ' + numMatch[0]
           }
@@ -639,8 +740,6 @@ app.post('/api/generator/merge-items', requireAuth, requireRole('admin'), async 
       return res.status(500).json({ error: 'GROQ_API_KEY is not configured on the backend server' })
     }
 
-    // Pre-deduplicate and cap before sending to Groq to stay within token limits.
-    // Strip helpText from input (Groq generates new ones) and limit to 60 unique items.
     const seenNorm = new Set<string>()
     const dedupedItems = items
       .filter((item: any) => {
@@ -719,7 +818,6 @@ You MUST return your output in JSON format matching this EXACT schema:
       fallback: 'local_deduplication',
     })
 
-    // Fallback merge
     const uniqueItems: any[] = []
     const seenTexts = new Set()
 
@@ -749,6 +847,15 @@ You MUST return your output in JSON format matching this EXACT schema:
       _fallbackReason: String(error),
     })
   }
+})
+
+app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) return next(err)
+  if (err instanceof CorsRejectedError) {
+    return res.status(403).json({ error: 'Not allowed by CORS' })
+  }
+  console.error(err)
+  res.status(500).json({ error: 'Internal server error' })
 })
 
 app.listen(port, () => {

@@ -37,14 +37,12 @@ function verifyFromHeader(req: Request): AuthUser | null {
   }
 }
 
-// Attaches req.user if a valid token is present; does not reject if absent.
 export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   const user = verifyFromHeader(req)
   if (user) req.user = user
   next()
 }
 
-// Rejects the request unless a valid token is present.
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const user = verifyFromHeader(req)
   if (!user) {
@@ -54,7 +52,6 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   next()
 }
 
-// Use after requireAuth. Rejects unless req.user.role is one of the allowed roles.
 export function requireRole(...roles: UserRole[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user || !roles.includes(req.user.role)) {

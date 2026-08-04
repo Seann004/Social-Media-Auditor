@@ -16,29 +16,23 @@ export default function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
-        {/* Public Routes */}
         <Route path="/" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         
-        {/* Base Protected Route (Just checks if logged in) */}
         <Route element={<ProtectedRoute />}>
           <Route element={<Layout />}>
-            {/* Everyone gets a Dashboard */}
             <Route path="/dashboard" element={<DashboardPage />} />
             
-            {/* Admin Only Routes */}
             <Route element={<RoleRoute allowedRoles={['admin']} />}>
               <Route path="/generator" element={<GeneratorPage />} />
             </Route>
             
-            {/* Head Auditor & Auditor Routes */}
             <Route element={<RoleRoute allowedRoles={['head_auditor', 'auditor']} />}>
               <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/projects/:id" element={<AuditPage />} />
               <Route path="/reports" element={<ReportsPage />} />
             </Route>
             
-            {/* Head Auditor ONLY Routes */}
             <Route element={<RoleRoute allowedRoles={['head_auditor']} />}>
               <Route path="/projects/new" element={<CreateProjectPage />} />
             </Route>
@@ -49,7 +43,6 @@ export default function App() {
           </Route>
         </Route>
         
-        {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

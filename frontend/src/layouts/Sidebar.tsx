@@ -63,7 +63,6 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
 
   return (
     <aside className="w-72 shrink-0 h-screen bg-sidebar-bg flex flex-col overflow-y-auto">
-      {/* Logo */}
       <div className="px-6 pt-7 pb-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -72,7 +71,6 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
             </div>
             <span className="text-on-dark font-bold tracking-tight text-lg">SafetyAudit</span>
           </div>
-          {/* Close button — mobile only */}
           {onClose && (
             <button
               type="button"
@@ -91,7 +89,6 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
 
       <div className="mx-5 border-t border-sidebar-border" />
 
-      {/* Nav */}
       <nav className="flex-1 px-4 py-5">
         <motion.ul variants={container} initial="hidden" animate="show" className="space-y-1 list-none m-0 p-0">
           {NAV.map(({ to, label, icon: Icon, exact }) => {
@@ -141,7 +138,6 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
         )}
       </nav>
 
-      {/* User profile */}
       <div className="px-4 pb-5 pt-3 border-t border-sidebar-border">
         <button
           type="button"
@@ -166,7 +162,6 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
         </button>
       </div>
 
-      {/* Sign Out Confirmation Modal */}
       <Modal
         open={showLogoutConfirm}
         onClose={() => setShowLogoutConfirm(false)}

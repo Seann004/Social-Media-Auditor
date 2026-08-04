@@ -17,12 +17,10 @@ export default function Layout() {
 
   useEffect(() => {
     initFromDb()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
     <div className="flex h-screen overflow-hidden bg-page-bg print:block print:h-auto print:overflow-visible">
-      {/* Mobile backdrop */}
       <AnimatePresence>
         {drawerOpen && (
           <motion.div
@@ -37,7 +35,6 @@ export default function Layout() {
         )}
       </AnimatePresence>
 
-      {/* Sidebar — fixed drawer on mobile, static on desktop */}
       <div
         className={[
           'fixed inset-y-0 left-0 z-30 transition-transform duration-300 ease-in-out print:hidden',
@@ -48,9 +45,7 @@ export default function Layout() {
         <Sidebar onClose={() => setDrawerOpen(false)} />
       </div>
 
-      {/* Main content column */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden print:block print:overflow-visible">
-        {/* Mobile-only top bar */}
         <div className="lg:hidden print:hidden flex items-center gap-3 px-4 h-14 bg-primary shrink-0 border-b border-primary-hover">
           <button
             type="button"

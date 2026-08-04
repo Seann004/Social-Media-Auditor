@@ -56,8 +56,18 @@ export interface DbAuditResult {
   result: ChecklistItemStatus
   notes: string | null
   findings: string | null
-  evidenceImages: { url: string; name: string }[] | null
   timeSubmitted: string
+}
+
+export interface ItemEvidence {
+  itemId: string
+  userId: string
+  images: { url: string; name: string }[]
+}
+
+export async function fetchEvidenceForItems(projectId: string, itemIds: string[]): Promise<ItemEvidence[]> {
+  if (itemIds.length === 0) return []
+  return request<ItemEvidence[]>(`/projects/${projectId}/evidence?itemIds=${itemIds.map(encodeURIComponent).join(',')}`)
 }
 
 export interface DbComplianceScore {
@@ -70,6 +80,7 @@ export interface DbComplianceScore {
   compliantItems: number
   nonCompliantItems: number
   notApplicableItems: number
+  weightedCompliant: number
   scorePercentage: number
   timeCalculated: string
 }
@@ -97,7 +108,6 @@ export interface DbUser {
   role: UserRole
 }
 
-// Helper for HTTP requests
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = useStore.getState().authToken
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -110,19 +120,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const errText = await res.text()
-    // Session thinks it's authenticated but the server disagrees (missing, expired,
-    // or invalid token) — force back to login instead of leaving the UI stuck on 401s.
     if (res.status === 401 && useStore.getState().isAuthenticated && path !== '/auth/login') {
       useStore.getState().logout()
     }
-    // API errors are shaped { error: "message" } — unwrap so callers get a readable
-    // message instead of the raw JSON body.
     let message = errText || res.statusText
     try {
       const parsed = JSON.parse(errText)
       if (parsed?.error) message = parsed.error
     } catch {
-      // errText wasn't JSON — use it as-is
     }
     throw new Error(message)
   }
@@ -180,18 +185,55 @@ export async function updateProject(projectId: string, updates: {
   })
 }
 
+export async function activateProject(projectId: string): Promise<void> {
+  await request(`/projects/${projectId}/activate`, { method: 'POST' })
+}
+
 export interface ProjectComplianceSummary {
   percentage: number
   answered: number
   total: number
 }
 
-// Returns compliance percentage + answered/total item counts per projectId
 export async function fetchProjectComplianceSummary(
   projectIds: string[]
 ): Promise<Record<string, ProjectComplianceSummary>> {
   if (projectIds.length === 0) return {}
   return request<Record<string, ProjectComplianceSummary>>(`/projects/compliance-summary?ids=${projectIds.join(',')}`)
+}
+
+export interface ProjectReliability {
+  kappa: number | null
+  sharedItems: number
+  raterPair: [string, string] | null
+}
+
+export async function fetchProjectReliability(projectId: string): Promise<ProjectReliability> {
+  return request<ProjectReliability>(`/projects/${projectId}/reliability`)
+}
+
+export interface DbResolution {
+  itemId: string
+  resolvedBy: string
+  resolvedStatus: ChecklistItemStatus
+  notes: string | null
+  resolvedAt: string
+}
+
+export async function fetchResolutions(projectId: string): Promise<DbResolution[]> {
+  return request<DbResolution[]>(`/projects/${projectId}/resolutions`)
+}
+
+export async function resolveDisagreement(
+  projectId: string,
+  itemId: string,
+  status: ChecklistItemStatus,
+  notes: string = ''
+): Promise<void> {
+  await request(`/projects/${projectId}/results/${itemId}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ status, notes }),
+  })
 }
 
 export async function deleteProject(projectId: string): Promise<void> {
@@ -351,14 +393,11 @@ export async function upsertAuditResult(
   guidelineId: string,
   result: ChecklistItemStatus,
   notes: string = ''
-): Promise<{ answered: number; compliant: number; nonCompliant: number; notApplicable: number; percentage: number; total: number }> {
-  return request<{ answered: number; compliant: number; nonCompliant: number; notApplicable: number; percentage: number; total: number }>(
-    `/projects/${projectId}/results`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ itemId, userId, guidelineId, result, notes }),
-    }
-  )
+): Promise<void> {
+  await request(`/projects/${projectId}/results`, {
+    method: 'POST',
+    body: JSON.stringify({ itemId, userId, guidelineId, result, notes }),
+  })
 }
 
 export async function submitForReview(projectId: string): Promise<void> {
@@ -395,10 +434,10 @@ export async function fetchAuditReports(
   return request<DbAuditReport[]>(`/reports?${query.replace(/^&/, '')}`)
 }
 
-export async function createAuditReport(projectId: string, userId: string): Promise<string> {
+export async function createAuditReport(projectId: string): Promise<string> {
   const res = await request<{ reportId: string }>('/reports', {
     method: 'POST',
-    body: JSON.stringify({ projectId, userId }),
+    body: JSON.stringify({ projectId }),
   })
   return res.reportId
 }
