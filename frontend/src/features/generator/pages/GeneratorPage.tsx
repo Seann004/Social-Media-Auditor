@@ -22,7 +22,6 @@ import SeverityBadge from '../../audits/components/SeverityBadge'
 import * as db from '../../../lib/db'
 import type { Guideline, ChecklistItem, Platform, Severity } from '../../../types'
 
-// Set worker source to CDN to avoid complex bundling in Vite
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker
 
 const PRESETS: Record<string, { category: string; text: string; severity: Severity }[]> = {
@@ -79,8 +78,6 @@ function chunkText(text: string, maxChars: number = CHUNK_SIZE): string[] {
 }
 
 function removeTOC(text: string): string {
-  // Strategy: find the TOC block and cut it out entirely
-  // TOC pages typically have lines ending with page numbers (dots + number pattern)
   
   const lines = text.split('\n');
   const tocStartPatterns = [
@@ -88,19 +85,17 @@ function removeTOC(text: string): string {
     /^contents$/i,
   ];
   
-  // Detect TOC lines: "Some heading .............. 32" or "1. Something .... 14"
   const isTOCLine = (line: string) =>
-    /\.{3,}\s*\d+\s*$/.test(line.trim()) ||   // "heading ........ 12"
-    /^.{1,80}\s{2,}\d{1,3}\s*$/.test(line.trim()); // "heading        12"
+    /\.{3,}\s*\d+\s*$/.test(line.trim()) ||
+    /^.{1,80}\s{2,}\d{1,3}\s*$/.test(line.trim());
 
   let inTOC = false;
-  let tocEndBuffer = 0; // grace lines after TOC ends
+  let tocEndBuffer = 0;
   const filtered: string[] = [];
 
   for (const line of lines) {
     const trimmed = line.trim();
 
-    // Detect TOC start
     if (!inTOC && tocStartPatterns.some(p => p.test(trimmed))) {
       inTOC = true;
       continue;
@@ -109,15 +104,13 @@ function removeTOC(text: string): string {
     if (inTOC) {
       if (isTOCLine(trimmed) || trimmed === '') {
         tocEndBuffer = 0;
-        continue; // skip TOC lines
+        continue;
       } else {
-        // Non-TOC line encountered — give it a few lines grace before declaring TOC ended
         tocEndBuffer++;
         if (tocEndBuffer >= 3) {
-          inTOC = false; // TOC is done
+          inTOC = false;
           filtered.push(line);
         }
-        // else skip — might be a TOC section header without page number
       }
     } else {
       filtered.push(line);
@@ -138,18 +131,15 @@ export default function GeneratorPage() {
 
   const [platform] = useState<Platform>('TikTok')
 
-  // Upload state
   const [excelFile, setExcelFile] = useState<File | null>(null)
   const [excelError, setExcelError] = useState('')
 
-  // Generation state
   const [generating, setGenerating] = useState(false)
   const [currentStep, setCurrentStep] = useState(0)
   const [generatedGuideline, setGeneratedGuideline] = useState<Guideline | null>(null)
   const [generatedItems, setGeneratedItems] = useState<ChecklistItem[]>([])
 
-  // PDF specific parsing progress state
-  const [pdfStep, setPdfStep] = useState(0) // 1: extracting, 2: processing chunks, 3: merging
+  const [pdfStep, setPdfStep] = useState(0)
   const [totalChunks, setTotalChunks] = useState(0)
   const [currentChunkIdx, setCurrentChunkIdx] = useState(0)
   const [selectedItemForModal, setSelectedItemForModal] = useState<ChecklistItem | null>(null)
@@ -165,7 +155,6 @@ export default function GeneratorPage() {
     'Compiling checklist items and mapping references...'
   ]
 
-  // Hierarchical Excel Parser
   const handleExcelParse = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -238,7 +227,6 @@ export default function GeneratorPage() {
       verbatimText: -1
     }
 
-    // Detect if this sheet has explicit Row Type and Item ID headers (e.g. in the first 10 rows)
     let hasRowTypeHeader = false
     for (let r = 0; r < Math.min(rows.length, 10); r++) {
       const row = rows[r]
@@ -260,7 +248,6 @@ export default function GeneratorPage() {
       }
     }
 
-    // Fallback detection for EDPB format if row type is not found
     let isEDPBFormat = false
     let clauseRefCol = -1
     let textCol = -1
@@ -315,7 +302,6 @@ export default function GeneratorPage() {
     }
 
     if (hasRowTypeHeader) {
-      // Prioritize explicit SECTION, SUBSECTION, and ITEM parsing
       let activeSubsections: { id: string; name: string }[] = []
       const startIdx = headerIdx + 1
 
@@ -353,14 +339,12 @@ export default function GeneratorPage() {
           const subId = id
           const subName = name
 
-          // Maintain nesting by checking if new subsection is a child of the last active subsection
           while (activeSubsections.length > 0 && !subId.startsWith(activeSubsections[activeSubsections.length - 1].id + '.')) {
             activeSubsections.pop()
           }
           activeSubsections.push({ id: subId, name: subName })
           currentSubsection = activeSubsections.map(s => s.name).join(' > ')
         } else if (type === 'ITEM') {
-          // Keep N/A placeholders to preserve structure
 
           let severity: Severity = 'major'
           const lowerDesc = desc.toLowerCase()
@@ -485,7 +469,6 @@ export default function GeneratorPage() {
         })
       })
     } else {
-      // Traditional rowType detection logic (fallback)
       for (let r = 0; r < rows.length; r++) {
         const row = rows[r]
         if (!row) continue
@@ -610,12 +593,11 @@ export default function GeneratorPage() {
     setGenerating(false)
   }
 
-  // PDF PARSER + LOOP CHUNKING WITH GROQ
   const handlePdfParse = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
-    setExcelFile(file) // Reuse file state for display
+    setExcelFile(file)
     setExcelError('')
     setGenerating(true)
     setPdfStep(1)
@@ -762,10 +744,8 @@ export default function GeneratorPage() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-        {/* Left Column: Generator Form */}
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-5">
-            {/* Tabs Selector */}
             <div className="flex bg-slate-100 p-1 rounded-xl">
               <button
                 type="button"
@@ -790,7 +770,6 @@ export default function GeneratorPage() {
                             </div>
 
             {activeTab === 'excel' ? (
-              // EXCEL FILE UPLOAD VIEW
               <div className="space-y-4">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-700 mb-2">Upload Excel Checklist</h3>
@@ -830,7 +809,6 @@ export default function GeneratorPage() {
                 )}
               </div>
             ) : (
-              // PDF AI GUIDELINES VIEW
               <div className="space-y-4">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-700 mb-2">Upload PDF Guidelines</h3>
@@ -874,12 +852,10 @@ export default function GeneratorPage() {
           </div>
         </div>
 
-        {/* Right Column: Loading / Results Preview */}
         <div className="lg:col-span-3">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 min-h-[460px] flex flex-col justify-between">
             <AnimatePresence mode="wait">
               {generating ? (
-                // Step-by-Step Generator Processing Animation
                 <motion.div
                   key="generating"
                   initial={{ opacity: 0 }}
@@ -911,7 +887,6 @@ export default function GeneratorPage() {
                   </div>
                   
                   {activeTab === 'pdf' ? (
-                    // RENDER CUSTOM STEP INDICATOR FOR PDF PARSING
                     <div className="w-full max-w-sm space-y-3 pt-4">
                       <div className={`flex items-center gap-3 px-4 py-2.5 rounded-lg border transition-all ${
                         pdfStep >= 1 ? 'border-emerald-100 bg-emerald-50/30 text-emerald-800' : 'border-blue-200 bg-blue-50/50 text-blue-800'
@@ -953,7 +928,6 @@ export default function GeneratorPage() {
                       </div>
                     </div>
                   ) : (
-                    // AI / EXCEL STANDARD STEPS
                     <div className="w-full max-w-sm space-y-3 pt-4">
                       {excelSteps.map((step, idx) => {
                         const active = currentStep === idx
@@ -986,7 +960,6 @@ export default function GeneratorPage() {
                   )}
                 </motion.div>
               ) : generatedGuideline ? (
-                // Framework Generated Results Preview
                 <motion.div
                   key="results"
                   initial={{ opacity: 0, y: 10 }}
@@ -1077,7 +1050,6 @@ export default function GeneratorPage() {
                             </div>
                 </motion.div>
               ) : (
-                // Empty State
                 <motion.div
                   key="empty"
                   initial={{ opacity: 0 }}
@@ -1101,7 +1073,6 @@ export default function GeneratorPage() {
         </div>
       </div>
 
-      {/* Reference & Help Text Modal */}
       <AnimatePresence>
         {selectedItemForModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

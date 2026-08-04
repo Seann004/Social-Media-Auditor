@@ -26,10 +26,10 @@ import {
   XCircleIcon as XCircleFill,
   PlusIcon as Plus,
 } from '@phosphor-icons/react'
-import { useStore } from '../../../store/useStore'
+import { useStore, calcScore } from '../../../store/useStore'
 import { useProjectData } from '../../../hooks/useProjectData'
-import { saveEvidenceImages } from '../../../lib/db'
-import type { ChecklistItemStatus, Severity, ChecklistItem, ProjectScore } from '../../../types'
+import { saveEvidenceImages, fetchEvidenceForItems, fetchProjectReliability, type ProjectReliability } from '../../../lib/db'
+import type { ChecklistItemStatus, Severity, ChecklistItem, ProjectScore, AuditResponse } from '../../../types'
 import StatusBadge from '../../audits/components/StatusBadge'
 import SeverityBadge from '../../audits/components/SeverityBadge'
 import AuditorAvatar from '../../../components/ui/AuditorAvatar'
@@ -38,6 +38,7 @@ import ChecklistItemDetailModal from '../../audits/components/ChecklistItemDetai
 import Button from '../../../components/ui/Button'
 import Modal from '../../../components/ui/Modal'
 import { formatPercent } from '../../../lib/scoreColor'
+import { reliabilityLabel } from '../../../lib/statusColors'
 
 const SEVERITY_OPTIONS: { value: Severity; label: string }[] = [
   { value: 'critical', label: 'Critical' },
@@ -64,6 +65,15 @@ const AUDITOR_RESPONSE_OPTIONS: {
     active: 'bg-slate-500 text-white ring-slate-500',
     inactive: 'bg-white text-slate-500 ring-slate-200 hover:ring-slate-400 hover:text-slate-600' },
 ]
+
+const STATUS_LABELS: Record<ChecklistItemStatus, string> = {
+  not_started: 'Not started',
+  compliant: 'Yes',
+  non_compliant: 'No',
+  partially: 'Partially',
+  not_applicable: 'N/A',
+  needs_review: 'Flagged',
+}
 
 function SaveIndicator({ state }: { state?: SaveState }) {
   if (!state) return null
@@ -95,7 +105,7 @@ export default function AuditPage() {
   const { id } = useParams<{ id: string }>()
   const {
     projects, guidelines, users, currentUserId,
-    setResponse, saveFindings,
+    setResponse, saveFindings, resolveDisagreement,
     submitForReview, reviewSubmission,
     addAuditorToProject, removeAuditorFromProject,
     updateChecklistItem, deleteChecklistItem,
@@ -105,34 +115,19 @@ export default function AuditPage() {
   } = useStore()
   const navigate = useNavigate()
 
-  const { checklistItems, loading, error: loadError, reload, evidenceMap } = useProjectData(id)
+  const { checklistItems, loading, error: loadError, reload } = useProjectData(id)
   const storeLoading = useStore((s) => s.loading)
-  // Read responses directly from the store so optimistic updates re-render immediately
   const responses = useStore((s) => s.responses)
+  const allResponses = useStore((s) => s.allResponses)
+  const resolutions = useStore((s) => s.resolutions)
 
 
   const project = projects.find((p) => p.id === id)
 
-  // Compute score from project-specific items (correct IDs) + store responses (incl. optimistic)
-  const score = useMemo(() => {
-    const total = checklistItems.length
-    let compliant = 0, nonCompliant = 0, notApplicable = 0, answered = 0, weightedCompliant = 0
-    for (const item of checklistItems) {
-      const resp = responses[`${id}__${item.id}`]
-      if (!resp || resp.status === 'not_started' || resp.status === 'needs_review') continue
-      answered++
-      if (resp.status === 'compliant') { compliant++; weightedCompliant += 1 }
-      else if (resp.status === 'partially') { nonCompliant++; weightedCompliant += 0.5 }
-      else if (resp.status === 'non_compliant') nonCompliant++
-      else if (resp.status === 'not_applicable') notApplicable++
-    }
-    const applicable = answered - notApplicable
-    const localPct = applicable > 0 ? Math.round((weightedCompliant / applicable) * 1000) / 10 : 0
-    // Use local computation — it's derived from project-specific item IDs and optimistic responses
-    const percentage = localPct
-    const progress = total > 0 ? Math.round((answered / total) * 100) : 0
-    return { total, compliant, nonCompliant, notApplicable, answered, applicable, percentage, progress }
-  }, [checklistItems, responses, id])
+  const score = useMemo(
+    () => calcScore(checklistItems, responses, id ?? ''),
+    [checklistItems, responses, id]
+  )
   const currentUser = users.find((u) => u.id === currentUserId)
   const isHeadAuditor = currentUser?.role === 'head_auditor'
   const isAuditor = currentUser?.role === 'auditor'
@@ -153,7 +148,6 @@ export default function AuditPage() {
     if (projectGuidelines.length > 0 && !projectGuidelines.find((g) => g.id === activeGuidelineTab)) {
       setActiveGuidelineTab(projectGuidelines[0].id)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectGuidelines.length])
 
   const allCategories = useMemo(() => {
@@ -212,27 +206,7 @@ export default function AuditPage() {
       const guidelineId = catConfig?.guidelineId ?? ''
 
       const catItems = checklistItems.filter((ci) => ci.category === cat && ci.guidelineId === guidelineId)
-      let c_comp = 0, c_nc = 0, c_na = 0, c_ans = 0, c_w = 0
-      for (const item of catItems) {
-        const resp = responses[`${id}__${item.id}`]
-        if (!resp || resp.status === 'not_started' || resp.status === 'needs_review') continue
-        c_ans++
-        if (resp.status === 'compliant') { c_comp++; c_w += 1 }
-        else if (resp.status === 'partially') { c_nc++; c_w += 0.5 }
-        else if (resp.status === 'non_compliant') c_nc++
-        else if (resp.status === 'not_applicable') c_na++
-      }
-      const c_app = c_ans - c_na
-      const catScore: ProjectScore = {
-        total: catItems.length,
-        compliant: c_comp,
-        nonCompliant: c_nc,
-        notApplicable: c_na,
-        answered: c_ans,
-        applicable: c_app,
-        percentage: c_app > 0 ? Math.round((c_w / c_app) * 1000) / 10 : 0,
-        progress: catItems.length > 0 ? Math.round((c_ans / catItems.length) * 100) : 0,
-      }
+      const catScore = calcScore(catItems, responses, id ?? '')
 
       if (!map[sectionName]) {
         map[sectionName] = { sectionName, subcategories: [], enabledCount: 0 }
@@ -271,6 +245,14 @@ export default function AuditPage() {
   const [newItemTrace, setNewItemTrace] = useState('')
   const [addingItem, setAddingItem] = useState(false)
   const [addItemError, setAddItemError] = useState<string | null>(null)
+  const [itemActionError, setItemActionError] = useState<string | null>(null)
+  const [manageAuditorsError, setManageAuditorsError] = useState<string | null>(null)
+  const [scopeError, setScopeError] = useState<string | null>(null)
+
+  function unwrapApiError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : String(err)
+    try { return (JSON.parse(msg) as { error: string }).error ?? msg } catch { return msg }
+  }
 
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
   const [noteValues, setNoteValues] = useState<Record<string, string>>({})
@@ -283,23 +265,46 @@ export default function AuditPage() {
   const [responseError, setResponseError] = useState<string | null>(null)
   const [categoryError, setCategoryError] = useState<string | null>(null)
 
+  const [resolveNotes, setResolveNotes] = useState<Record<string, string>>({})
+  const [resolvingItemId, setResolvingItemId] = useState<string | null>(null)
+  const [resolveError, setResolveError] = useState<{ itemId: string; message: string } | null>(null)
+  const [amendingResolutionId, setAmendingResolutionId] = useState<string | null>(null)
+
+  async function handleResolve(itemId: string, status: ChecklistItemStatus) {
+    setResolveError(null)
+    setResolvingItemId(itemId)
+    try {
+      await resolveDisagreement(id!, itemId, status, resolveNotes[itemId] ?? '')
+      setAmendingResolutionId(null)
+    } catch {
+      setResolveError({ itemId, message: 'Failed to save the resolution. Check your connection and try again.' })
+    } finally {
+      setResolvingItemId(null)
+    }
+  }
+
   const [lightbox, setLightbox] = useState<{ url: string; name: string } | null>(null)
 
-  // Review panel state
+  const [reliability, setReliability] = useState<ProjectReliability | null>(null)
+  useEffect(() => {
+    if (!id) return
+    let cancelled = false
+    fetchProjectReliability(id).then((r) => { if (!cancelled) setReliability(r) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [id, responses])
+
   const [showReviewPanel, setShowReviewPanel] = useState(false)
   const [reviewRemarks, setReviewRemarks] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const [reviewError, setReviewError] = useState<string | null>(null)
 
-  // Manage auditors
   const [showManageAuditors, setShowManageAuditors] = useState(false)
   const [auditorSearchQuery, setAuditorSearchQuery] = useState('')
 
-  // Delete project
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
-  // Edit checklist item
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
   const [selectedItemForModal, setSelectedItemForModal] = useState<ChecklistItem | null>(null)
   const [itemModalTab, setItemModalTab] = useState<'help' | 'traceability'>('help')
@@ -313,7 +318,6 @@ export default function AuditPage() {
   >(null)
   const [togglingCategory, setTogglingCategory] = useState(false)
 
-  // Manage Guidelines
   const [selectedGuidelineIds, setSelectedGuidelineIds] = useState<string[]>(() => {
     return (project?.guidelineIds ?? []).map(id => {
       const g = guidelines.find(x => x.id === id)
@@ -321,7 +325,6 @@ export default function AuditPage() {
     })
   })
 
-  // Sync selectedGuidelineIds when project loads/updates
   useEffect(() => {
     if (project?.guidelineIds) {
       setSelectedGuidelineIds(
@@ -346,9 +349,9 @@ export default function AuditPage() {
   }, [guidelines, project?.guidelineIds])
 
   const [savingGuidelines, setSavingGuidelines] = useState(false)
+  const [saveGuidelinesError, setSaveGuidelinesError] = useState<string | null>(null)
   const [showManageGuidelines, setShowManageGuidelines] = useState(false)
 
-  // Manage Scope (features)
   const [scopeInput, setScopeInput] = useState('')
   const [scopeFeatures, setScopeFeatures] = useState<string[]>(project?.scope ?? [])
 
@@ -362,7 +365,6 @@ export default function AuditPage() {
 
 
 
-  // Checklist items scoped to the active guideline tab
   const guidelineItems = useMemo(
     () => activeGuidelineTab
       ? checklistItems.filter((ci) => ci.guidelineId === activeGuidelineTab)
@@ -370,14 +372,11 @@ export default function AuditPage() {
     [checklistItems, activeGuidelineTab],
   )
 
-  // Reset selected category to first category of the new guideline tab
   useEffect(() => {
     const firstCat = sections[0]?.subcategories[0]?.originalCategory ?? ''
     setSelectedCategory(firstCat)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGuidelineTab])
 
-  // Flagged items (needs_review) — clickable navigation to the flagged checklist item
   const flaggedItems = useMemo(
     () => checklistItems.filter((ci) => responses[`${id}__${ci.id}`]?.status === 'needs_review'),
     [checklistItems, responses, id],
@@ -398,14 +397,12 @@ export default function AuditPage() {
     }
   }
 
-  // Step 1: once the active guideline tab matches the target, switch to its category
   useEffect(() => {
     if (flaggedNavTarget && activeGuidelineTab === flaggedNavTarget.guidelineId && selectedCategory !== flaggedNavTarget.category) {
       setSelectedCategory(flaggedNavTarget.category)
     }
   }, [flaggedNavTarget, activeGuidelineTab, selectedCategory])
 
-  // Step 2: once the category is showing the target item, scroll to it and highlight it
   useEffect(() => {
     if (!flaggedNavTarget || selectedCategory !== flaggedNavTarget.category) return
     const target = flaggedNavTarget
@@ -421,19 +418,30 @@ export default function AuditPage() {
     return () => clearTimeout(t)
   }, [flaggedNavTarget, selectedCategory])
 
-  // Evidence images: itemId → array of { url, name }
-  const [evidence, setEvidence] = useState<Record<string, { url: string; name: string }[]>>({})
+  const [evidence, setEvidence] = useState<Record<string, { auditorId: string; url: string; name: string }[]>>({})
   const [evidenceError, setEvidenceError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [pendingEvidenceItemId, setPendingEvidenceItemId] = useState<string | null>(null)
 
-  // Initialise evidence from DB on load
   useEffect(() => {
-    if (Object.keys(evidenceMap).length > 0) {
-      setEvidence((prev) => ({ ...evidenceMap, ...prev }))
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(evidenceMap)])
+    if (!id || !selectedCategory) return
+    const itemIds = checklistItems.filter((ci) => ci.category === selectedCategory).map((ci) => ci.id)
+    if (itemIds.length === 0) return
+    let cancelled = false
+    fetchEvidenceForItems(id, itemIds).then((rows) => {
+      if (cancelled) return
+      setEvidence((prev) => {
+        const next = { ...prev }
+        for (const itemId of itemIds) next[itemId] = []
+        for (const row of rows) {
+          const entries = row.images.map((img) => ({ auditorId: row.userId, ...img }))
+          next[row.itemId] = [...(next[row.itemId] ?? []), ...entries]
+        }
+        return next
+      })
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [id, selectedCategory, checklistItems])
 
   function handleImageClick(itemId: string) {
     if (answersLocked) return
@@ -444,9 +452,18 @@ export default function AuditPage() {
     }
   }
 
-  const MAX_EVIDENCE_SIZE = 5 * 1024 * 1024 // 5 MB
+  const MAX_EVIDENCE_SIZE = 5 * 1024 * 1024
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function readFileAsDataURL(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = (ev) => resolve(ev.target?.result as string)
+      reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? [])
     if (!files.length || !pendingEvidenceItemId) return
     const itemId = pendingEvidenceItemId
@@ -464,31 +481,37 @@ export default function AuditPage() {
     }
     setEvidenceError(null)
 
-    files.forEach((file) => {
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        const url = ev.target?.result as string
-        setEvidence((prev) => {
-          const updated = { ...prev, [itemId]: [...(prev[itemId] ?? []), { url, name: file.name }] }
-          if (currentUserId) {
-            saveEvidenceImages(id!, itemId, currentUserId, updated[itemId]).catch(() => {})
-          }
-          return updated
-        })
+    const previousForItem = evidence[itemId] ?? []
+    const previousMine = previousForItem.filter((img) => img.auditorId === currentUserId)
+    const others = previousForItem.filter((img) => img.auditorId !== currentUserId)
+    try {
+      const newEntries = await Promise.all(
+        files.map(async (file) => ({ auditorId: currentUserId, url: await readFileAsDataURL(file), name: file.name }))
+      )
+      const myUpdated = [...previousMine, ...newEntries]
+      setEvidence((prev) => ({ ...prev, [itemId]: [...others, ...myUpdated] }))
+      if (currentUserId) {
+        await saveEvidenceImages(id!, itemId, currentUserId, myUpdated.map(({ url, name }) => ({ url, name })))
       }
-      reader.readAsDataURL(file)
-    })
+    } catch (err) {
+      setEvidence((prev) => ({ ...prev, [itemId]: previousForItem }))
+      setEvidenceError(unwrapApiError(err))
+    }
   }
 
-  function removeEvidence(itemId: string, index: number) {
-    if (answersLocked) return
-    setEvidence((prev) => {
-      const updated = { ...prev, [itemId]: (prev[itemId] ?? []).filter((_, i) => i !== index) }
-      if (currentUserId) {
-        saveEvidenceImages(id!, itemId, currentUserId, updated[itemId] ?? []).catch(() => {})
-      }
-      return updated
-    })
+  async function removeEvidence(itemId: string, img: { auditorId: string; url: string; name: string }) {
+    if (answersLocked || img.auditorId !== currentUserId) return
+    const previous = evidence[itemId] ?? []
+    const updated = previous.filter((i) => i !== img)
+    setEvidence((prev) => ({ ...prev, [itemId]: updated }))
+    if (!currentUserId) return
+    const myRemaining = updated.filter((i) => i.auditorId === currentUserId).map(({ url, name }) => ({ url, name }))
+    try {
+      await saveEvidenceImages(id!, itemId, currentUserId, myRemaining)
+    } catch (err) {
+      setEvidence((prev) => ({ ...prev, [itemId]: previous }))
+      setEvidenceError(unwrapApiError(err))
+    }
   }
 
   if (isAdmin) {
@@ -528,7 +551,6 @@ export default function AuditPage() {
   const auditors = project.auditorIds.map((uid) => users.find((u) => u.id === uid)).filter(Boolean) as typeof users
   const categoryItems = guidelineItems.filter((ci) => ci.category === selectedCategory)
 
-  // Map project cloned guidelineIds back to original IDs for comparison
   const projectOriginalGuidelineIds = (project.guidelineIds ?? []).map((gid) => {
     const g = guidelines.find((x) => x.id === gid)
     return g?.originalGuidelineId || gid
@@ -537,7 +559,6 @@ export default function AuditPage() {
     selectedGuidelineIds.length !== projectOriginalGuidelineIds.length ||
     selectedGuidelineIds.some((gid) => !projectOriginalGuidelineIds.includes(gid))
 
-  // Auditors only see enabled categories — only check those items for submission readiness
   const enabledCategoryKeys = new Set(
     allCategories.filter((c) => c.enabled).map((c) => `${c.guidelineId}__${c.category}`)
   )
@@ -553,15 +574,15 @@ export default function AuditPage() {
     && (project.submissionStatus === 'not_submitted' || project.submissionStatus === 'rejected')
     && project.status === 'in_progress'
 
-  // Once a project is awaiting review or already approved, answers are frozen —
-  // editing them after submission would silently invalidate the head auditor's decision.
   const answersLocked = project.submissionStatus === 'pending_review' || project.submissionStatus === 'approved'
 
   function getResponse(itemId: string) { return responses[`${id}__${itemId}`] }
+  function getAllResponses(itemId: string): AuditResponse[] { return allResponses[`${id}__${itemId}`] ?? [] }
+  function getMyResponse(itemId: string) { return getAllResponses(itemId).find((r) => r.auditorId === currentUserId) }
 
   async function handleResponseClick(itemId: string, guidelineId: string, status: ChecklistItemStatus) {
     if (answersLocked) return
-    const current = getResponse(itemId)
+    const current = getMyResponse(itemId)
     const notes = noteValues[itemId] ?? current?.notes ?? ''
     setResponseError(null)
     try {
@@ -589,7 +610,7 @@ export default function AuditPage() {
 
   async function handleNotesBlur(itemId: string, guidelineId: string) {
     if (answersLocked) return
-    const current = getResponse(itemId)
+    const current = getMyResponse(itemId)
     const notes = noteValues[itemId] ?? ''
     if (!current || current.status === 'not_started') return
     const key = `${itemId}__notes`
@@ -677,7 +698,14 @@ helpText: newItemHelp.trim() || undefined,
 
   async function handleSubmitForReview() {
     setSubmitting(true)
-    try { await submitForReview(id!) } finally { setSubmitting(false) }
+    setSubmitError(null)
+    try {
+      await submitForReview(id!)
+    } catch (err) {
+      setSubmitError(unwrapApiError(err))
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   async function handleApprove() {
@@ -710,30 +738,68 @@ helpText: newItemHelp.trim() || undefined,
     setEditingItemId(itemId); setEditText(text); setEditSeverity(severity)
   }
 
+  async function handleAddAuditor(userId: string) {
+    setManageAuditorsError(null)
+    try {
+      await addAuditorToProject(id!, userId)
+    } catch (err) {
+      setManageAuditorsError(unwrapApiError(err))
+    }
+  }
+
+  async function handleRemoveAuditor(userId: string) {
+    setManageAuditorsError(null)
+    try {
+      await removeAuditorFromProject(id!, userId)
+    } catch (err) {
+      setManageAuditorsError(unwrapApiError(err))
+    }
+  }
+
   async function saveEditItem() {
     if (!editingItemId) return
-    await updateChecklistItem(editingItemId, { text: editText, severity: editSeverity })
-    setEditingItemId(null)
-    reload()
+    setItemActionError(null)
+    try {
+      await updateChecklistItem(editingItemId, { text: editText, severity: editSeverity })
+      setEditingItemId(null)
+      reload()
+    } catch (err) {
+      setItemActionError(unwrapApiError(err))
+    }
   }
 
   async function handleDeleteItem(itemId: string) {
-    await deleteChecklistItem(itemId)
-    setConfirmDeleteItemId(null)
-    reload()
+    setItemActionError(null)
+    try {
+      await deleteChecklistItem(itemId)
+      setConfirmDeleteItemId(null)
+      reload()
+    } catch (err) {
+      setItemActionError(unwrapApiError(err))
+    }
   }
 
   async function handleSaveGuidelines() {
     setSavingGuidelines(true)
+    setSaveGuidelinesError(null)
     try {
       await syncProjectGuidelines(id!, selectedGuidelineIds)
       reload()
+    } catch (err) {
+      setSaveGuidelinesError(unwrapApiError(err))
     } finally { setSavingGuidelines(false) }
   }
 
   async function handleSaveScope() {
     setSavingScope(true)
-    try { await syncProjectScope(id!, scopeFeatures) } finally { setSavingScope(false) }
+    setScopeError(null)
+    try {
+      await syncProjectScope(id!, scopeFeatures)
+    } catch (err) {
+      setScopeError(unwrapApiError(err))
+    } finally {
+      setSavingScope(false)
+    }
   }
 
   async function handleDeleteProject() {
@@ -755,7 +821,6 @@ helpText: newItemHelp.trim() || undefined,
 
   return (
     <div className="flex flex-col min-h-full">
-      {/* Top header */}
       <div className="border-b border-slate-200 bg-white px-4 md:px-8 pt-4 pb-4">
         <Link to="/projects" className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 transition-colors mb-3 group">
           <ArrowLeft size={12} className="group-hover:-translate-x-0.5 transition-transform" />
@@ -815,9 +880,13 @@ helpText: newItemHelp.trim() || undefined,
           </div>
         </div>
 
+        {submitError && (
+          <p role="alert" className="flex items-center gap-1.5 text-xs text-rose-600 mt-2">
+            <WarningCircle size={13} weight="fill" className="shrink-0" /> {submitError}
+          </p>
+        )}
         {project.notes && <p className="text-xs text-slate-400 mt-2 mb-2 max-w-xl leading-relaxed">{project.notes}</p>}
 
-        {/* Metrics strip */}
         <div className="flex items-center gap-5 mt-3 flex-wrap">
           <div className="grid grid-cols-2 gap-x-5 gap-y-3 sm:flex sm:items-center sm:gap-5">
             <div className="flex items-center gap-2">
@@ -838,6 +907,20 @@ helpText: newItemHelp.trim() || undefined,
                 <p className="text-2xs text-slate-400 mt-0.5">{label}</p>
               </div>
             ))}
+            {reliability && reliability.kappa !== null && reliability.sharedItems >= 5 && (() => {
+              const rel = reliabilityLabel(reliability.kappa)
+              return (
+                <div
+                  className="text-left sm:text-center"
+                  title={`Cohen's weighted κ = ${reliability.kappa.toFixed(2)}, based on ${reliability.sharedItems} items answered by both overlapping auditors`}
+                >
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-2xs font-medium ${rel.badge}`}>
+                    {rel.label}
+                  </span>
+                  <p className="text-2xs text-slate-400 mt-0.5">Auditor agreement</p>
+                </div>
+              )
+            })()}
             {isAuditor
               && (project.submissionStatus === 'not_submitted' || project.submissionStatus === 'rejected')
               && !canSubmit && incompleteItems.length > 0 && (
@@ -934,7 +1017,6 @@ helpText: newItemHelp.trim() || undefined,
         )}
       </div>
 
-      {/* Review Submission Panel (head auditor) */}
       <AnimatePresence>
         {isHeadAuditor && project.submissionStatus === 'pending_review' && (
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
@@ -979,7 +1061,6 @@ helpText: newItemHelp.trim() || undefined,
         )}
       </AnimatePresence>
 
-      {/* Approved/Rejected banners */}
       {project.submissionStatus === 'approved' && (
         <div className="bg-emerald-50 border-b border-emerald-200 px-6 md:px-8 py-3 flex items-center gap-3">
           <CheckCircle size={16} className="text-emerald-600 shrink-0" weight="fill" />
@@ -995,14 +1076,17 @@ helpText: newItemHelp.trim() || undefined,
         </div>
       )}
 
-      {/* Manage Auditors Panel */}
       <AnimatePresence>
         {isHeadAuditor && showManageAuditors && (
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden bg-slate-50 border-b border-slate-200 px-6 md:px-8 py-5">
             <p className="text-sm font-semibold text-slate-700 mb-4">Manage Auditors</p>
+            {manageAuditorsError && (
+              <p role="alert" className="flex items-center gap-1.5 text-xs text-rose-600 mb-4">
+                <WarningCircle size={13} weight="fill" className="shrink-0" /> {manageAuditorsError}
+              </p>
+            )}
 
-            {/* Search to add */}
             <div className="relative mb-4">
               <div className="flex items-center gap-2 px-3 py-2.5 bg-white border border-slate-200 rounded-lg">
                 <MagnifyingGlass size={14} className="text-slate-400 shrink-0" />
@@ -1033,7 +1117,7 @@ helpText: newItemHelp.trim() || undefined,
                         .map((u) => (
                           <li key={u.id}>
                             <button type="button"
-                              onClick={() => { addAuditorToProject(id!, u.id); setAuditorSearchQuery('') }}
+                              onClick={() => { handleAddAuditor(u.id); setAuditorSearchQuery('') }}
                               className="w-full flex items-center gap-3 px-4 py-3 hover:bg-blue-50 transition-colors text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-600">
                               <AuditorAvatar user={u} size="sm" />
                               <div className="flex-1 min-w-0">
@@ -1049,7 +1133,6 @@ helpText: newItemHelp.trim() || undefined,
               )}
             </div>
 
-            {/* Assigned auditors */}
             <div className="space-y-2">
               {auditors.map((u) => (
                 <div key={u.id} className="flex items-center gap-3 px-3 py-2.5 bg-white border border-slate-200 rounded-lg">
@@ -1062,7 +1145,7 @@ helpText: newItemHelp.trim() || undefined,
                     </p>
                   </div>
                   {u.id !== project.headAuditorId && (
-                    <button type="button" onClick={() => removeAuditorFromProject(id!, u.id)}
+                    <button type="button" onClick={() => handleRemoveAuditor(u.id)}
                       className="text-slate-400 hover:text-rose-500 transition-colors rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"
                       title="Remove" aria-label={`Remove ${u.name} from this project`}>
                       <Trash size={14} />
@@ -1075,7 +1158,6 @@ helpText: newItemHelp.trim() || undefined,
         )}
       </AnimatePresence>
 
-      {/* Tab bar (head auditor: Checklist / Guidelines / Scope) */}
       {isHeadAuditor && (
         <div className="flex items-center gap-0 border-b border-slate-200 bg-white px-3 md:px-8 overflow-x-auto scrollbar-none">
           {[
@@ -1099,11 +1181,9 @@ helpText: newItemHelp.trim() || undefined,
         </div>
       )}
 
-      {/* Manage Guidelines tab */}
       {isHeadAuditor && activeTab === 'guidelines' && (
         <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
           <div className="px-8 py-8 w-full max-w-5xl">
-            {/* Header */}
             <div className="flex items-start justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-base font-semibold text-slate-800 mb-1">Guidelines in Use</h2>
@@ -1121,8 +1201,12 @@ helpText: newItemHelp.trim() || undefined,
                 </Button>
               </div>
             </div>
+            {saveGuidelinesError && (
+              <p role="alert" className="flex items-center gap-1.5 text-xs text-rose-600 mb-4">
+                <WarningCircle size={13} weight="fill" className="shrink-0" /> {saveGuidelinesError}
+              </p>
+            )}
 
-            {/* Currently selected guidelines */}
             {selectedGuidelineIds.length === 0 ? (
               <p className="text-sm text-slate-400 py-10 text-center border border-dashed border-slate-200 rounded-xl mb-6">
                 No guidelines selected. Click "Manage Guidelines" to add some.
@@ -1156,7 +1240,6 @@ helpText: newItemHelp.trim() || undefined,
               </div>
             )}
 
-            {/* Add guidelines panel */}
             <AnimatePresence>
               {showManageGuidelines && (
                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}
@@ -1208,11 +1291,15 @@ helpText: newItemHelp.trim() || undefined,
         </div>
       )}
 
-      {/* Manage Scope tab */}
       {isHeadAuditor && activeTab === 'scope' && (
         <div className="px-8 py-8 max-w-2xl">
           <h2 className="text-base font-semibold text-slate-800 mb-1">Manage Audit Features / Scope</h2>
           <p className="text-sm text-slate-500 mb-5">Define which features or functions of the social media app are in scope for this audit.</p>
+          {scopeError && (
+            <p role="alert" className="flex items-center gap-1.5 text-xs text-rose-600 mb-4">
+              <WarningCircle size={13} weight="fill" className="shrink-0" /> {scopeError}
+            </p>
+          )}
           <div className="flex gap-2 mb-4">
             <label htmlFor="scope-input" className="sr-only">Add a feature to the audit scope</label>
             <input id="scope-input" value={scopeInput} onChange={(e) => setScopeInput(e.target.value)}
@@ -1244,10 +1331,8 @@ helpText: newItemHelp.trim() || undefined,
         </div>
       )}
 
-      {/* Checklist view */}
       {(!isHeadAuditor || activeTab === 'checklist') && (
         <div className="flex flex-col flex-1 min-h-0">
-          {/* Guideline tabs — one per selected guideline, visible to all roles */}
           {projectGuidelines.length > 1 && (
             <div className="border-b border-slate-200 bg-white px-4 md:px-8 py-2.5 flex items-center gap-3 overflow-x-auto scrollbar-none shrink-0">
               <span className="text-2xs font-semibold text-slate-400 uppercase tracking-widest shrink-0">Guideline</span>
@@ -1269,7 +1354,6 @@ helpText: newItemHelp.trim() || undefined,
               </div>
             </div>
           )}
-          {/* Mobile: category select dropdown */}
           <div className="md:hidden px-4 py-3 bg-white border-b border-slate-200 shrink-0">
             <label htmlFor="mobile-category-select" className="sr-only">Checklist category</label>
             <select
@@ -1294,7 +1378,6 @@ helpText: newItemHelp.trim() || undefined,
           </div>
 
         <div className="flex flex-1 min-h-0">
-          {/* Desktop: Left category nav */}
           <nav className="hidden md:block w-64 shrink-0 border-r border-slate-200 bg-slate-50/50 overflow-y-auto py-5 px-3">
             <p className="text-xs text-slate-400 font-mono tracking-widest uppercase px-2 mb-3">Sections</p>
             {loading ? (
@@ -1308,7 +1391,6 @@ helpText: newItemHelp.trim() || undefined,
 
                   return (
                     <li key={section.sectionName} className="space-y-1">
-                      {/* Section Header Button */}
                       <button
                         type="button"
                         onClick={() => {
@@ -1332,7 +1414,6 @@ helpText: newItemHelp.trim() || undefined,
                         />
                       </button>
 
-                      {/* Subcategories (Only visible if expanded) */}
                       {isExpanded && (
                         <ul className="pl-2 space-y-1 border-l border-slate-200 ml-1.5 list-none">
                           {section.subcategories.map((sub, subIdx) => {
@@ -1409,7 +1490,6 @@ helpText: newItemHelp.trim() || undefined,
             )}
           </nav>
 
-          {/* Right: items */}
           <div className="flex-1 overflow-y-auto">
             <AnimatePresence mode="wait">
               <motion.div key={selectedCategory} variants={container} initial="hidden" animate="show" className="px-8 py-8 max-w-4xl">
@@ -1439,7 +1519,6 @@ helpText: newItemHelp.trim() || undefined,
                   </p>
                 )}
 
-                {/* Hidden file input for evidence images (shared across all items) */}
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1491,9 +1570,13 @@ helpText: newItemHelp.trim() || undefined,
                   <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl bg-white overflow-hidden">
                     {categoryItems.map((ci, itemIdx) => {
                       const resp = getResponse(ci.id)
-                      const currentStatus = resp?.status ?? 'not_started'
+                      const groupStatus = resp?.status ?? 'not_started'
+                      const myResp = getMyResponse(ci.id)
+                      const currentStatus = myResp?.status ?? 'not_started'
+                      const raters = getAllResponses(ci.id)
+                      const resolution = resolutions[`${id}__${ci.id}`]
                       const notesOpen = expandedNotes.has(ci.id)
-                      const currentNotes = noteValues[ci.id] ?? resp?.notes ?? ''
+                      const currentNotes = noteValues[ci.id] ?? myResp?.notes ?? ''
                       const isEditing = editingItemId === ci.id
                       const isConfirmingDelete = confirmDeleteItemId === ci.id
 
@@ -1538,6 +1621,11 @@ helpText: newItemHelp.trim() || undefined,
                                   ))}
                                 </div>
                               </fieldset>
+                              {itemActionError && (
+                                <p role="alert" className="flex items-center gap-1.5 text-2xs text-rose-600">
+                                  <WarningCircle size={12} weight="fill" className="shrink-0" /> {itemActionError}
+                                </p>
+                              )}
                               <div className="flex items-center gap-3">
                                 <Button variant="primary" size="sm" onClick={saveEditItem}>
                                   <CheckIcon size={12} weight="bold" /> Save
@@ -1562,9 +1650,9 @@ helpText: newItemHelp.trim() || undefined,
                                     {ci.reference || 'N/A'}
                                   </button>
                                   <SeverityBadge severity={ci.severity} />
-                                  {currentStatus === 'needs_review' && (
+                                  {groupStatus === 'needs_review' && (
                                     <span className="flex items-center gap-1 text-2xs text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md font-medium">
-                                      <Flag size={9} weight="fill" /> Flagged
+                                      <Flag size={9} weight="fill" /> {raters.length > 1 ? 'Auditors disagree' : 'Flagged'}
                                     </span>
                                   )}
                                 </div>
@@ -1574,6 +1662,36 @@ helpText: newItemHelp.trim() || undefined,
                                 <p className="text-sm text-slate-600 leading-relaxed">
                                   {ci.itemCode ? '' : `${itemIdx + 1}. `}{ci.text}
                                 </p>
+                                {raters.length > 1 && (
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                                    {raters.map((r) => {
+                                      const rUser = users.find((u) => u.id === r.auditorId)
+                                      const isMe = r.auditorId === currentUserId
+                                      return (
+                                        <span
+                                          key={r.auditorId}
+                                          className={`text-2xs ${isMe ? 'font-semibold text-slate-600' : 'text-slate-400'}`}
+                                        >
+                                          {isMe ? 'You' : rUser?.name ?? 'Auditor'}: {STATUS_LABELS[r.status]}
+                                        </span>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+                                {resolution && (
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                                    <p className="inline-flex items-center gap-1 text-2xs text-violet-700 bg-violet-50 border border-violet-200 px-2 py-0.5 rounded-md">
+                                      Resolved by {users.find((u) => u.id === resolution.resolvedBy)?.name ?? 'Head auditor'}: {STATUS_LABELS[resolution.status]}
+                                      {resolution.notes ? ` — ${resolution.notes}` : ''}
+                                    </p>
+                                    {isHeadAuditor && amendingResolutionId !== ci.id && (
+                                      <button type="button" onClick={() => setAmendingResolutionId(ci.id)}
+                                        className="text-2xs font-medium text-violet-600 hover:text-violet-800 transition-colors">
+                                        Change
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 <button
@@ -1612,14 +1730,18 @@ helpText: newItemHelp.trim() || undefined,
                                   <p className="text-xs text-rose-500 mb-3">This action cannot be undone.</p>
                                 )
                               })()}
+                              {itemActionError && (
+                                <p role="alert" className="flex items-center gap-1.5 text-2xs text-rose-700 mb-3">
+                                  <WarningCircle size={12} weight="fill" className="shrink-0" /> {itemActionError}
+                                </p>
+                              )}
                               <div className="flex items-center gap-2">
                                 <Button variant="danger" size="xs" onClick={() => handleDeleteItem(ci.id)}>Delete</Button>
-                                <Button variant="secondary" size="xs" onClick={() => setConfirmDeleteItemId(null)}>Cancel</Button>
+                                <Button variant="secondary" size="xs" onClick={() => { setConfirmDeleteItemId(null); setItemActionError(null) }}>Cancel</Button>
                               </div>
                             </div>
                           )}
 
-                          {/* Auditor response controls (14.2, 14.3) */}
                           {isAuditor && !isEditing && (
                             <div className="mt-3 space-y-1">
                               <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
@@ -1639,7 +1761,6 @@ helpText: newItemHelp.trim() || undefined,
                                 })}
                               </div>
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                {/* Flag for Review */}
                                 <motion.button type="button" whileTap={{ scale: 0.97 }}
                                   disabled={answersLocked}
                                   aria-pressed={currentStatus === 'needs_review'}
@@ -1653,7 +1774,6 @@ helpText: newItemHelp.trim() || undefined,
                                   ].join(' ')}>
                                   <Flag size={13} weight={currentStatus === 'needs_review' ? 'fill' : 'regular'} /> Flag
                                 </motion.button>
-                                {/* Notes + Evidence buttons */}
                                 <button type="button" onClick={() => toggleNotes(ci.id)}
                                   aria-expanded={notesOpen}
                                   className={['flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors',
@@ -1678,32 +1798,65 @@ helpText: newItemHelp.trim() || undefined,
                             </div>
                           )}
 
-                          {/* Head auditor: read-only result badge */}
-                          {isHeadAuditor && !isEditing && currentStatus !== 'not_started' && (
+                          {isHeadAuditor && !isEditing && ((groupStatus === 'needs_review' && !resolution) || amendingResolutionId === ci.id) && (
+                            <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 space-y-2">
+                              <p className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
+                                <Flag size={12} weight="fill" />
+                                {raters.length > 1 ? 'Auditors disagree — resolve this item' : resolution ? 'Change resolution' : 'Flagged for review — resolve this item'}
+                              </p>
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                                {AUDITOR_RESPONSE_OPTIONS.map(({ value, label, icon: Icon }) => (
+                                  <button key={value} type="button"
+                                    disabled={resolvingItemId === ci.id}
+                                    onClick={() => handleResolve(ci.id, value)}
+                                    className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold ring-1 bg-white text-slate-600 ring-amber-300 hover:bg-amber-100 hover:text-amber-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-600">
+                                    <Icon size={15} /> {label}
+                                  </button>
+                                ))}
+                              </div>
+                              <textarea
+                                value={resolveNotes[ci.id] ?? ''}
+                                onChange={(e) => setResolveNotes((prev) => ({ ...prev, [ci.id]: e.target.value }))}
+                                placeholder="Optional note explaining the resolution…"
+                                rows={2}
+                                className="w-full text-xs text-slate-700 placeholder:text-slate-400 bg-white border border-amber-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-transparent"
+                              />
+                              {resolveError?.itemId === ci.id && (
+                                <p role="alert" className="flex items-center gap-1.5 text-2xs text-rose-700">
+                                  <WarningCircle size={12} weight="fill" className="shrink-0" />
+                                  {resolveError.message}
+                                </p>
+                              )}
+                              {resolution && amendingResolutionId === ci.id && (
+                                <button type="button" onClick={() => setAmendingResolutionId(null)}
+                                  className="text-2xs font-medium text-slate-500 hover:text-slate-700 transition-colors">
+                                  Cancel
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                          {isHeadAuditor && !isEditing && groupStatus !== 'not_started'
+                            && !((groupStatus === 'needs_review' && !resolution) || amendingResolutionId === ci.id) && (
                             <div className="mt-3 flex items-center gap-2">
                               <span className={['flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ring-1',
-                                currentStatus === 'compliant' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-                                : currentStatus === 'non_compliant' ? 'bg-rose-50 text-rose-700 ring-rose-200'
-                                : currentStatus === 'partially' ? 'bg-amber-50 text-amber-700 ring-amber-200'
-                                : currentStatus === 'not_applicable' ? 'bg-slate-100 text-slate-600 ring-slate-200'
+                                groupStatus === 'compliant' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                                : groupStatus === 'non_compliant' ? 'bg-rose-50 text-rose-700 ring-rose-200'
+                                : groupStatus === 'partially' ? 'bg-amber-50 text-amber-700 ring-amber-200'
+                                : groupStatus === 'not_applicable' ? 'bg-slate-100 text-slate-600 ring-slate-200'
                                 : 'bg-violet-50 text-violet-700 ring-violet-200',
                               ].join(' ')}>
-                                {currentStatus === 'compliant' && <CheckCircle size={12} weight="fill" />}
-                                {currentStatus === 'non_compliant' && <XCircle size={12} weight="fill" />}
-                                {currentStatus === 'partially' && <CircleHalf size={12} weight="fill" />}
-                                {currentStatus === 'not_applicable' && <MinusCircle size={12} weight="fill" />}
-                                {currentStatus === 'needs_review' && <Flag size={12} weight="fill" />}
-                                {currentStatus === 'compliant' ? 'Yes'
-                                  : currentStatus === 'non_compliant' ? 'No'
-                                  : currentStatus === 'partially' ? 'Partially'
-                                  : currentStatus === 'not_applicable' ? 'N/A'
-                                  : 'Flagged'}
+                                {groupStatus === 'compliant' && <CheckCircle size={12} weight="fill" />}
+                                {groupStatus === 'non_compliant' && <XCircle size={12} weight="fill" />}
+                                {groupStatus === 'partially' && <CircleHalf size={12} weight="fill" />}
+                                {groupStatus === 'not_applicable' && <MinusCircle size={12} weight="fill" />}
+                                {groupStatus === 'needs_review' && <Flag size={12} weight="fill" />}
+                                {STATUS_LABELS[groupStatus]}
                               </span>
                             </div>
                           )}
 
-                          {/* Findings input — always visible when auditor has responded */}
-                          {(isAuditor || isHeadAuditor) && currentStatus !== 'not_started' && (
+                          {(isAuditor || isHeadAuditor) && groupStatus !== 'not_started' && (
                             <div className="mt-5">
                               <div className="flex items-center justify-between gap-2 mb-1">
                                 <label htmlFor={`findings-${ci.id}`} className="block text-2xs font-semibold text-slate-400 uppercase tracking-widest">
@@ -1730,7 +1883,6 @@ helpText: newItemHelp.trim() || undefined,
                             </div>
                           )}
 
-                          {/* Notes input */}
                           {isAuditor && (
                             <AnimatePresence>
                               {notesOpen && (
@@ -1761,7 +1913,6 @@ helpText: newItemHelp.trim() || undefined,
                             <p className="mt-2 text-xs text-slate-500 bg-slate-50 rounded-md px-3 py-2 border border-slate-100 leading-relaxed max-w-[65ch]">{currentNotes}</p>
                           )}
 
-                          {/* Evidence image previews */}
                           {(evidence[ci.id]?.length ?? 0) > 0 && (
                             <div className="mt-3">
                               {!isAuditor && (
@@ -1769,7 +1920,7 @@ helpText: newItemHelp.trim() || undefined,
                               )}
                               <div className="flex flex-wrap gap-2">
                                 {evidence[ci.id].map((img, idx) => (
-                                  <div key={idx} className="relative group w-20 h-20 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 shrink-0">
+                                  <div key={`${img.auditorId}_${idx}`} className="relative group w-20 h-20 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 shrink-0">
                                     <button
                                       type="button"
                                       onClick={() => setLightbox(img)}
@@ -1778,10 +1929,10 @@ helpText: newItemHelp.trim() || undefined,
                                     >
                                       <img src={img.url} alt={img.name} className="w-full h-full object-cover" />
                                     </button>
-                                    {isAuditor && (
+                                    {isAuditor && img.auditorId === currentUserId && (
                                       <button
                                         type="button"
-                                        onClick={() => removeEvidence(ci.id, idx)}
+                                        onClick={() => removeEvidence(ci.id, img)}
                                         className="absolute top-0.5 right-0.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity bg-white rounded-full shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"
                                         title="Remove"
                                         aria-label={`Remove evidence ${img.name}`}
@@ -1818,7 +1969,6 @@ helpText: newItemHelp.trim() || undefined,
       )}
 
 
-      {/* Help & Traceability Details Modal */}
       <ChecklistItemDetailModal
         item={selectedItemForModal}
         tab={itemModalTab}
@@ -1880,7 +2030,6 @@ helpText: newItemHelp.trim() || undefined,
         </div>
       </Modal>
 
-      {/* Add Checklist Item Modal */}
       <Modal
         open={showAddItemModal}
         onClose={() => setShowAddItemModal(false)}
@@ -2003,7 +2152,6 @@ helpText: newItemHelp.trim() || undefined,
         </div>
       </Modal>
 
-      {/* Delete Project Confirmation Modal */}
       <Modal
         open={showDeleteConfirm}
         onClose={() => setShowDeleteConfirm(false)}

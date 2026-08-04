@@ -1,27 +1,21 @@
 import https from 'https'
 import crypto from 'crypto'
 
-
-
-function generateSequentialUUID(baseTs: number, offset: number) {
-
-  const ts = (baseTs + offset).toString(16).padStart(12, '0');
-
-  const r = crypto.randomUUID().replace(/-/g, '');
-
-  return `${ts.substring(0,8)}-${ts.substring(8,12)}-7${r.substring(13,16)}-8${r.substring(17,20)}-${r.substring(20,32)}`;
-
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
-
-
-import { supabase, getSupabaseClient } from '../config/supabase.js'
+import { supabase } from '../config/supabase.js'
 
 import type { AuditStatus, ChecklistItemStatus, Platform, Severity, SubmissionStatus, UserRole } from '../types/index.js'
 
 
 
-// DB row types 
 
 export interface DbProject {
 
@@ -155,8 +149,6 @@ export interface DbAuditResult {
 
   findings: string | null
 
-  evidenceImages: { url: string; name: string }[] | null
-
   timeSubmitted: string
 
 }
@@ -182,6 +174,8 @@ export interface DbComplianceScore {
   nonCompliantItems: number
 
   notApplicableItems: number
+
+  weightedCompliant: number
 
   scorePercentage: number
 
@@ -241,7 +235,6 @@ export interface DbUser {
 
 
 export async function fetchUserProjects(userId: string): Promise<DbProject[]> {
-  // 1. Get member project IDs
   const { data: memberRows, error: memberError } = await supabase
     .from('Project_Member')
     .select('projectId')
@@ -250,7 +243,6 @@ export async function fetchUserProjects(userId: string): Promise<DbProject[]> {
   
   const memberProjectIds = (memberRows ?? []).map(r => r.projectId)
   
-  // 2. Fetch projects
   let query = supabase.from('Audit_Project').select('*')
   if (memberProjectIds.length > 0) {
     query = query.or(`headAuditorId.eq.${userId},projectId.in.(${memberProjectIds.join(',')})`)
@@ -264,21 +256,18 @@ export async function fetchUserProjects(userId: string): Promise<DbProject[]> {
   
   const projectIds = projects.map(p => p.projectId)
   
-  // Fetch all members for these projects
   const { data: allMembers, error: membersError } = await supabase
     .from('Project_Member')
     .select('projectId, userId')
     .in('projectId', projectIds)
   if (membersError) throw membersError
   
-  // Fetch all cloned guidelines for these projects
   const { data: allGuidelines, error: guidelinesError } = await supabase
     .from('Guideline')
     .select('projectId, guidelineId')
     .in('projectId', projectIds)
   if (guidelinesError) throw guidelinesError
   
-  // Map them
   const membersMap = new Map()
   for (const m of (allMembers ?? [])) {
     const list = membersMap.get(m.projectId) || []
@@ -314,7 +303,6 @@ export async function fetchUserProjects(userId: string): Promise<DbProject[]> {
 
 export async function fetchProjectDetails(projectId: string) {
 
-  // 1. Fetch project
 
   const { data: project, error: pError } = await supabase
 
@@ -330,7 +318,6 @@ export async function fetchProjectDetails(projectId: string) {
 
 
 
-  // 2. Fetch members
 
   const { data: membersData, error: mError } = await supabase
 
@@ -362,7 +349,6 @@ export async function fetchProjectDetails(projectId: string) {
 
 
 
-  // 3. Fetch guidelines (project cloned guidelines)
   const { data: gData, error: gError } = await supabase
     .from('Guideline')
     .select('guidelineId, guidelineName, shortName, version, description, source, categories, lastUpdated, originalGuidelineId')
@@ -381,7 +367,6 @@ export async function fetchProjectDetails(projectId: string) {
     originalGuidelineId: row.originalGuidelineId || null,
   }))
   
-  // 4. Fetch scope
 
   const { data: scopeData, error: sError } = await supabase
 
@@ -480,6 +465,7 @@ export async function updateProject(projectId: string, updates: {
   dueDate?: string | null
 
 }): Promise<void> {
+  await assertProjectEditable(projectId)
 
   const allowed: Record<string, unknown> = {}
   if (updates.projectTitle !== undefined) allowed.projectTitle = updates.projectTitle
@@ -500,17 +486,21 @@ export async function updateProject(projectId: string, updates: {
 
 }
 
+export async function activateProject(projectId: string): Promise<void> {
+  const { error } = await supabase
+    .from('Audit_Project')
+    .update({ projectStatus: 'in_progress', updatedAt: new Date().toISOString() })
+    .eq('projectId', projectId)
+    .eq('projectStatus', 'draft')
+  if (error) throw error
+}
+
 export interface ProjectComplianceSummary {
   percentage: number
   answered: number
   total: number
 }
 
-// Compute live compliance percentage + answered/total item counts per project directly
-// from Audit_Result rows (compliant / applicable) where applicable = compliant + non_compliant + partially.
-// This bulk-computes for a whole list of projects in one pass — used by ProjectsPage/Dashboard
-// so per-project progress doesn't depend on whichever single project's checklist happens to be
-// loaded in the client-side store (see: "Progress 0/0 items" bug).
 export async function fetchProjectComplianceSummary(
   projectIds: string[]
 ): Promise<Record<string, ProjectComplianceSummary>> {
@@ -552,26 +542,40 @@ export async function fetchProjectComplianceSummary(
 
   if (error) throw error
 
-  const buckets: Record<string, { weightedCompliant: number; applicable: number; answered: number }> = {}
+  const byProjectItem = new Map<string, Map<string, string[]>>()
   for (const row of (data ?? []) as { projectId: string; result: string; itemId: string }[]) {
     if (!activeItemToProject.has(row.itemId)) continue
+    if (!byProjectItem.has(row.projectId)) byProjectItem.set(row.projectId, new Map())
+    const itemMap = byProjectItem.get(row.projectId)!
+    if (!itemMap.has(row.itemId)) itemMap.set(row.itemId, [])
+    itemMap.get(row.itemId)!.push(row.result)
+  }
 
-    if (!buckets[row.projectId]) buckets[row.projectId] = { weightedCompliant: 0, applicable: 0, answered: 0 }
-    // Matches AuditPage's own score calc: everything except 'needs_review' (flagged) counts as answered.
-    if (row.result !== 'needs_review') buckets[row.projectId].answered++
-    if (['compliant', 'non_compliant', 'partially'].includes(row.result)) {
-      buckets[row.projectId].applicable++
-      if (row.result === 'compliant') buckets[row.projectId].weightedCompliant += 1
-      else if (row.result === 'partially') buckets[row.projectId].weightedCompliant += 0.5
-    }
+  const { data: resolutionRows, error: resError } = await supabase
+    .from('Checklist_Resolution')
+    .select('projectId, itemId, resolvedStatus')
+    .in('projectId', projectIds)
+  if (resError) throw resError
+  const resolutionsByProjectItem = new Map<string, string>()
+  for (const r of (resolutionRows ?? []) as { projectId: string; itemId: string; resolvedStatus: string }[]) {
+    resolutionsByProjectItem.set(`${r.projectId}__${r.itemId}`, r.resolvedStatus)
+  }
+
+  const countsByProject = new Map<string, EffectiveScoreCounts>()
+  for (const [projectId, itemMap] of byProjectItem) {
+    const effectiveStatuses = Array.from(itemMap, ([itemId, statuses]) =>
+      reconcileEffectiveStatus(statuses, resolutionsByProjectItem.get(`${projectId}__${itemId}`))
+    )
+    countsByProject.set(projectId, bucketEffectiveStatuses(effectiveStatuses))
   }
 
   const result: Record<string, ProjectComplianceSummary> = {}
   for (const pid of projectIds) {
-    const b = buckets[pid]
+    const c = countsByProject.get(pid)
+    const applicable = c ? c.answered - c.notApplicable : 0
     result[pid] = {
-      percentage: b && b.applicable > 0 ? Math.round((b.weightedCompliant / b.applicable) * 1000) / 10 : 0,
-      answered: b?.answered ?? 0,
+      percentage: c && applicable > 0 ? Math.round((c.weightedCompliant / applicable) * 1000) / 10 : 0,
+      answered: c?.answered ?? 0,
       total: totalByProject[pid] ?? 0,
     }
   }
@@ -622,6 +626,7 @@ export async function removeProjectMember(projectId: string, userId: string): Pr
 
 
 export async function syncProjectMembers(projectId: string, userIds: string[]): Promise<void> {
+  await assertProjectEditable(projectId)
 
   if (userIds.length > 0) {
     const { data: validUsers, error: userError } = await supabase
@@ -636,16 +641,31 @@ export async function syncProjectMembers(projectId: string, userIds: string[]): 
     }
   }
 
-  await supabase.from('Project_Member').delete().eq('projectId', projectId)
+  const { data: existing, error: existingError } = await supabase
+    .from('Project_Member')
+    .select('userId')
+    .eq('projectId', projectId)
+  if (existingError) throw existingError
+  const existingIds = new Set((existing ?? []).map((m: any) => m.userId))
+  const nextIds = new Set(userIds)
 
-  if (userIds.length === 0) return
+  const toRemove = [...existingIds].filter((uid) => !nextIds.has(uid))
+  const toAdd = [...nextIds].filter((uid) => !existingIds.has(uid))
 
-  const rows = userIds.map((userId) => ({ projectId, userId }))
-
-  const { error } = await supabase.from('Project_Member').insert(rows)
-
-  if (error) throw error
-
+  if (toRemove.length > 0) {
+    const { error } = await supabase
+      .from('Project_Member')
+      .delete()
+      .eq('projectId', projectId)
+      .in('userId', toRemove)
+    if (error) throw error
+  }
+  if (toAdd.length > 0) {
+    const { error } = await supabase
+      .from('Project_Member')
+      .insert(toAdd.map((userId) => ({ projectId, userId })))
+    if (error) throw error
+  }
 }
 
 
@@ -653,20 +673,23 @@ export async function syncProjectMembers(projectId: string, userIds: string[]): 
 
 
 
+export class GuidelineHasAnswersError extends Error {
+  constructor(message = 'This guideline cannot be removed — it already has recorded answers under it.') {
+    super(message)
+    this.name = 'GuidelineHasAnswersError'
+  }
+}
+
 export async function syncProjectGuidelines(projectId: string, globalGuidelineIds: string[]): Promise<void> {
-  // Without this, a head auditor could attach a brand-new, entirely unaudited guideline
-  // to a project that's already pending review or approved — the project would keep
-  // showing as "Completed" while silently carrying 0% coverage on the new framework.
   await assertProjectEditable(projectId)
 
-  // 1. Fetch existing cloned guidelines for this project
   const { data: existingClones, error: fetchError } = await supabase
     .from('Guideline')
     .select('guidelineId, originalGuidelineId')
     .eq('projectId', projectId)
   if (fetchError) throw fetchError
 
-  const existingClonesMap = new Map<string, string>() // originalGuidelineId -> clonedGuidelineId
+  const existingClonesMap = new Map<string, string>()
   const keptClonedIds: string[] = []
 
   for (const clone of (existingClones ?? [])) {
@@ -675,11 +698,18 @@ export async function syncProjectGuidelines(projectId: string, globalGuidelineId
     
     if (origId) {
       if (globalGuidelineIds.includes(origId)) {
-        // This guideline is still selected, keep it
         existingClonesMap.set(origId, clonedId)
         keptClonedIds.push(clonedId)
       } else {
-        // This guideline was deselected, delete its clone
+        const { count: answeredCount, error: countError } = await supabase
+          .from('Audit_Result')
+          .select('resultId', { count: 'exact', head: true })
+          .eq('projectId', projectId)
+          .eq('guidelineId', clonedId)
+        if (countError) throw countError
+        if ((answeredCount ?? 0) > 0) {
+          throw new GuidelineHasAnswersError()
+        }
         const { error: delError } = await supabase
           .from('Guideline')
           .delete()
@@ -689,10 +719,8 @@ export async function syncProjectGuidelines(projectId: string, globalGuidelineId
     }
   }
 
-  // 2. Clone selected guidelines that haven't been cloned yet
   for (const globalGuidelineId of globalGuidelineIds) {
     if (!existingClonesMap.has(globalGuidelineId)) {
-      // Fetch global guideline metadata
       const { data: globalGuideline, error: gError } = await supabase
         .from('Guideline')
         .select('*')
@@ -723,22 +751,33 @@ export async function syncProjectGuidelines(projectId: string, globalGuidelineId
     }
   }
 
-  // 3. Initialize project-specific checklists
   await initializeProjectChecklists(projectId)
 }
 
 export async function syncProjectScope(projectId: string, features: string[]): Promise<void> {
+  await assertProjectEditable(projectId)
 
-  await supabase.from('Project_Scope').delete().eq('projectId', projectId)
+  const { data: existing, error: existingError } = await supabase
+    .from('Project_Scope')
+    .select('id, feature')
+    .eq('projectId', projectId)
+  if (existingError) throw existingError
 
-  if (features.length === 0) return
+  const existingFeatures = (existing ?? []) as { id: string; feature: string }[]
+  const nextFeatures = new Set(features)
 
-  const rows = features.map((feature) => ({ projectId, feature }))
+  const toRemoveIds = existingFeatures.filter((f) => !nextFeatures.has(f.feature)).map((f) => f.id)
+  const existingFeatureSet = new Set(existingFeatures.map((f) => f.feature))
+  const toAdd = features.filter((f) => !existingFeatureSet.has(f))
 
-  const { error } = await supabase.from('Project_Scope').insert(rows)
-
-  if (error) throw error
-
+  if (toRemoveIds.length > 0) {
+    const { error } = await supabase.from('Project_Scope').delete().in('id', toRemoveIds)
+    if (error) throw error
+  }
+  if (toAdd.length > 0) {
+    const { error } = await supabase.from('Project_Scope').insert(toAdd.map((feature) => ({ projectId, feature })))
+    if (error) throw error
+  }
 }
 
 
@@ -803,15 +842,11 @@ isDeleted: !checklists.some((c) => c.projectId === null),
 
 export async function deleteGuideline(guidelineId: string): Promise<void> {
 
-  // Soft Delete: We only remove the global template checklist to hide it from admins and prevent new uses.
 
-  // We DO NOT delete the Guideline row, Audit_Result, or project-specific Checklists,
 
-  // preserving all Auditor and Head Auditor progress.
 
   
 
-  // 1. Find the global Checklist for this guideline
 
   const { data: globalChecklist, error: clError } = await supabase
 
@@ -829,7 +864,7 @@ export async function deleteGuideline(guidelineId: string): Promise<void> {
 
   if (clError) {
 
-    if (clError.code === 'PGRST116') return // Already deleted/doesn't exist
+    if (clError.code === 'PGRST116') return
 
     throw clError
 
@@ -841,7 +876,6 @@ export async function deleteGuideline(guidelineId: string): Promise<void> {
 
 
 
-  // 2. Fetch item IDs so we can delete dependent Audit_Result rows first
 
   const { data: items, error: itemFetchError } = await supabase
 
@@ -865,7 +899,6 @@ export async function deleteGuideline(guidelineId: string): Promise<void> {
 
 
 
-  // 3. Delete Checklist_Item rows linked to the global checklist
 
   const { error: ciError } = await supabase.from('Checklist_Item').delete().eq('checklistId', checklistId)
 
@@ -873,7 +906,6 @@ export async function deleteGuideline(guidelineId: string): Promise<void> {
 
 
 
-  // 4. Delete the global Checklist itself
 
   const { error: cdError } = await supabase.from('Checklist').delete().eq('checklistId', checklistId)
 
@@ -883,10 +915,8 @@ export async function deleteGuideline(guidelineId: string): Promise<void> {
 
 
 
-// Fetch global (template) checklist items for a guideline - used by admin view
 
 export async function fetchGuidelineItems(guidelineId: string): Promise<DbChecklistItem[]> {
-  // Find the global checklist (projectId IS NULL) for this guideline
   const { data: clData, error: clError } = await supabase
     .from('Checklist')
     .select('checklistId')
@@ -896,7 +926,6 @@ export async function fetchGuidelineItems(guidelineId: string): Promise<DbCheckl
     .single()
 
   if (clError) {
-    // No checklist yet - return empty
     if (clError.code === 'PGRST116') return []
     throw clError
   }
@@ -951,7 +980,6 @@ export async function initializeProjectChecklists(projectId: string): Promise<vo
     if (exError) throw exError
 
     if (!existing || existing.length === 0) {
-      // Find originalGuidelineId for this cloned guideline
       const { data: cloneInfo, error: cloneError } = await supabase
         .from('Guideline')
         .select('originalGuidelineId')
@@ -961,7 +989,6 @@ export async function initializeProjectChecklists(projectId: string): Promise<vo
 
       const originalGuidelineId = (cloneInfo as any)?.originalGuidelineId
       if (originalGuidelineId) {
-        // Find the global checklist (projectId IS NULL) for the original template guideline
         const { data: globalCL, error: gclError } = await supabase
           .from('Checklist')
           .select('checklistId')
@@ -979,11 +1006,14 @@ export async function initializeProjectChecklists(projectId: string): Promise<vo
             .insert({
               checklistId: newChecklistId,
               projectId,
-              guidelineId, // associate with clonedGuidelineId
+              guidelineId,
               checklistSource: 'generator',
               timeCreated: new Date().toISOString()
             })
-          if (insClError) throw insClError
+          if (insClError) {
+            if ((insClError as any).code === '23505') continue
+            throw insClError
+          }
 
           const { data: globalItems, error: itemsError } = await supabase
             .from('Checklist_Item')
@@ -1079,6 +1109,7 @@ export async function addProjectChecklistItem(projectId: string, guidelineId: st
   answerOptions?: string
 
 }): Promise<string> {
+  await assertProjectEditable(projectId)
 
   const { data: checklist, error: clError } = await supabase
 
@@ -1142,8 +1173,6 @@ export class EditLockedError extends Error {
   }
 }
 
-// Once a project is awaiting review or already approved, its answers/findings/evidence
-// are frozen — editing them after submission would silently invalidate the head auditor's decision.
 async function assertProjectEditable(projectId: string): Promise<void> {
   const { data, error } = await supabase
     .from('Audit_Project')
@@ -1155,6 +1184,23 @@ async function assertProjectEditable(projectId: string): Promise<void> {
   if (status === 'pending_review' || status === 'approved') {
     throw new EditLockedError()
   }
+}
+
+async function resolveProjectIdForItem(itemId: string): Promise<string | null> {
+  const { data: item, error } = await supabase
+    .from('Checklist_Item')
+    .select('checklistId')
+    .eq('itemId', itemId)
+    .maybeSingle()
+  if (error) throw error
+  if (!item) return null
+  const { data: checklist, error: clError } = await supabase
+    .from('Checklist')
+    .select('projectId')
+    .eq('checklistId', (item as any).checklistId)
+    .maybeSingle()
+  if (clError) throw clError
+  return (checklist as any)?.projectId ?? null
 }
 
 export class ResultNotFoundError extends Error {
@@ -1192,6 +1238,7 @@ export async function saveEvidenceImages(projectId: string, itemId: string, user
 
 
 export async function toggleProjectChecklistCategory(projectId: string, guidelineId: string, category: string, enabled: boolean): Promise<void> {
+  await assertProjectEditable(projectId)
   const { data: checklist, error: clError } = await supabase
     .from('Checklist')
     .select('checklistId')
@@ -1205,7 +1252,6 @@ export async function toggleProjectChecklistCategory(projectId: string, guidelin
   const checklistId = (checklist as any).checklistId
 
   if (!enabled) {
-    // Soft-deactivate: prefix the category with "__deactivated__" so they are ignored in active calculations
     const { error: updError } = await supabase
       .from('Checklist_Item')
       .update({ category: `__deactivated__${category}` })
@@ -1214,7 +1260,6 @@ export async function toggleProjectChecklistCategory(projectId: string, guidelin
 
     if (updError) throw updError
   } else {
-    // Check if we have previously deactivated items for this project/category
     const { data: deactivatedItems, error: deacError } = await supabase
       .from('Checklist_Item')
       .select('itemId')
@@ -1223,7 +1268,6 @@ export async function toggleProjectChecklistCategory(projectId: string, guidelin
     if (deacError) throw deacError
 
     if (deactivatedItems && deactivatedItems.length > 0) {
-      // Restore the items by removing the "__deactivated__" prefix from their category
       const { error: restoreError } = await supabase
         .from('Checklist_Item')
         .update({ category: category })
@@ -1231,7 +1275,6 @@ export async function toggleProjectChecklistCategory(projectId: string, guidelin
         .eq('category', `__deactivated__${category}`)
       if (restoreError) throw restoreError
     } else {
-      // First-time enablement: clone from the global template
       const { data: guidelineInfo, error: giError } = await supabase
         .from('Guideline')
         .select('originalGuidelineId')
@@ -1300,6 +1343,9 @@ export async function updateChecklistItem(itemId: string, updates: {
 
 }): Promise<void> {
 
+  const projectId = await resolveProjectIdForItem(itemId)
+  if (projectId) await assertProjectEditable(projectId)
+
   const { error } = await supabase.from('Checklist_Item').update(updates).eq('itemId', itemId)
 
   if (error) throw error
@@ -1310,13 +1356,14 @@ export async function updateChecklistItem(itemId: string, updates: {
 
 export async function deleteChecklistItem(itemId: string): Promise<void> {
 
-  // First delete any audit results referencing this item (FK constraint)
+  const projectId = await resolveProjectIdForItem(itemId)
+  if (projectId) await assertProjectEditable(projectId)
+
 
   const { error: arError } = await supabase.from('Audit_Result').delete().eq('itemId', itemId)
 
   if (arError) throw arError
 
-  // Now delete the checklist item itself
 
   const { error } = await supabase.from('Checklist_Item').delete().eq('itemId', itemId)
 
@@ -1335,7 +1382,7 @@ export async function fetchAuditResults(projectId: string): Promise<DbAuditResul
 
     .from('Audit_Result')
 
-    .select('resultId,projectId,itemId,userId,guidelineId,result,notes,findings,evidenceImages,timeSubmitted')
+    .select('resultId,projectId,itemId,userId,guidelineId,result,notes,findings,timeSubmitted')
 
     .eq('projectId', projectId)
 
@@ -1343,6 +1390,25 @@ export async function fetchAuditResults(projectId: string): Promise<DbAuditResul
 
   return (data as DbAuditResult[]) ?? []
 
+}
+
+export interface ItemEvidence {
+  itemId: string
+  userId: string
+  images: { url: string; name: string }[]
+}
+
+export async function fetchEvidenceForItems(projectId: string, itemIds: string[]): Promise<ItemEvidence[]> {
+  if (itemIds.length === 0) return []
+  const { data, error } = await supabase
+    .from('Audit_Result')
+    .select('itemId, userId, evidenceImages')
+    .eq('projectId', projectId)
+    .in('itemId', itemIds)
+  if (error) throw error
+  return ((data ?? []) as { itemId: string; userId: string; evidenceImages: { url: string; name: string }[] | null }[])
+    .filter((r) => r.evidenceImages && r.evidenceImages.length > 0)
+    .map((r) => ({ itemId: r.itemId, userId: r.userId, images: r.evidenceImages! }))
 }
 
 
@@ -1354,23 +1420,22 @@ export async function upsertAuditResult(
   guidelineId: string,
   result: ChecklistItemStatus,
   notes: string = ''
-): Promise<{ answered: number; compliant: number; nonCompliant: number; notApplicable: number; percentage: number; total: number }> {
+): Promise<void> {
 
   await assertProjectEditable(projectId)
 
-  // The old upsert_audit_result RPC referenced the dropped Project_Guideline table.
-  // Use direct Supabase operations instead.
   const { data: existing } = await supabase
     .from('Audit_Result')
     .select('resultId')
     .eq('projectId', projectId)
     .eq('itemId', itemId)
+    .eq('userId', userId)
     .maybeSingle()
 
   if (existing) {
     const { error } = await supabase
       .from('Audit_Result')
-      .update({ result, notes: notes || null, guidelineId, userId, timeSubmitted: new Date().toISOString() })
+      .update({ result, notes: notes || null, guidelineId, timeSubmitted: new Date().toISOString() })
       .eq('resultId', (existing as any).resultId)
     if (error) throw error
   } else {
@@ -1379,57 +1444,194 @@ export async function upsertAuditResult(
       .insert({ projectId, itemId, userId, guidelineId, result, notes: notes || null, timeSubmitted: new Date().toISOString() })
     if (error) throw error
   }
+}
 
-  // Compute and return score summary for this project
-  const { data: allResults } = await supabase
+function reconcileEffectiveStatus(statuses: string[], resolvedStatus?: string): string {
+  if (resolvedStatus) return resolvedStatus
+  const distinct = new Set(statuses)
+  return distinct.size === 1 ? statuses[0] : 'needs_review'
+}
+
+interface EffectiveScoreCounts {
+  answered: number
+  compliant: number
+  nonCompliant: number
+  notApplicable: number
+  weightedCompliant: number
+}
+
+function bucketEffectiveStatuses(effectiveStatuses: Iterable<string>): EffectiveScoreCounts {
+  const counts: EffectiveScoreCounts = { answered: 0, compliant: 0, nonCompliant: 0, notApplicable: 0, weightedCompliant: 0 }
+  for (const effective of effectiveStatuses) {
+    if (effective === 'needs_review') continue
+    counts.answered++
+    if (effective === 'not_applicable') counts.notApplicable++
+    else if (effective === 'compliant') { counts.compliant++; counts.weightedCompliant += 1 }
+    else if (effective === 'partially') { counts.nonCompliant++; counts.weightedCompliant += 0.5 }
+    else if (effective === 'non_compliant') counts.nonCompliant++
+  }
+  return counts
+}
+
+async function fetchResolutionMap(projectId: string): Promise<Map<string, string>> {
+  const { data, error } = await supabase
+    .from('Checklist_Resolution')
+    .select('itemId, resolvedStatus')
+    .eq('projectId', projectId)
+  if (error) throw error
+  const map = new Map<string, string>()
+  for (const r of (data ?? []) as { itemId: string; resolvedStatus: string }[]) {
+    map.set(r.itemId, r.resolvedStatus)
+  }
+  return map
+}
+
+export async function resolveDisagreement(
+  projectId: string,
+  itemId: string,
+  resolvedBy: string,
+  resolvedStatus: ChecklistItemStatus,
+  notes: string = ''
+): Promise<void> {
+  if (resolvedStatus === 'needs_review' || resolvedStatus === 'not_started') {
+    throw new Error('A resolution must be a definitive status.')
+  }
+  const { data: existing } = await supabase
+    .from('Checklist_Resolution')
+    .select('resolutionId')
+    .eq('projectId', projectId)
+    .eq('itemId', itemId)
+    .maybeSingle()
+
+  if (existing) {
+    const { error } = await supabase
+      .from('Checklist_Resolution')
+      .update({ resolvedBy, resolvedStatus, notes: notes || null, resolvedAt: new Date().toISOString() })
+      .eq('resolutionId', (existing as any).resolutionId)
+    if (error) throw error
+  } else {
+    const { error } = await supabase
+      .from('Checklist_Resolution')
+      .insert({ projectId, itemId, resolvedBy, resolvedStatus, notes: notes || null })
+    if (error) throw error
+  }
+}
+
+export interface DbResolution {
+  itemId: string
+  resolvedBy: string
+  resolvedStatus: ChecklistItemStatus
+  notes: string | null
+  resolvedAt: string
+}
+
+export async function fetchResolutions(projectId: string): Promise<DbResolution[]> {
+  const { data, error } = await supabase
+    .from('Checklist_Resolution')
+    .select('itemId, resolvedBy, resolvedStatus, notes, resolvedAt')
+    .eq('projectId', projectId)
+  if (error) throw error
+  return (data ?? []) as DbResolution[]
+}
+
+
+const RELIABILITY_ORDER: Record<string, number> = { non_compliant: 0, partially: 1, compliant: 2 }
+const RELIABILITY_CATEGORIES = 3
+
+export interface InterRaterReliability {
+  kappa: number | null
+  sharedItems: number
+  raterPair: [string, string] | null
+}
+
+export async function computeInterRaterReliability(projectId: string): Promise<InterRaterReliability> {
+  const { data, error } = await supabase
     .from('Audit_Result')
-    .select('result')
+    .select('itemId, userId, result')
     .eq('projectId', projectId)
+  if (error) throw error
 
-  const results = (allResults ?? []) as { result: string }[]
-  const answered = results.length
-  const notApplicable = results.filter(r => r.result === 'not_applicable').length
-  const compliant = results.filter(r => r.result === 'compliant').length
-  const nonCompliant = results.filter(r => r.result === 'non_compliant' || r.result === 'partially').length
-  const applicable = answered - notApplicable
-  const weightedCompliant = results.reduce((sum, r) => {
-    if (r.result === 'compliant') return sum + 1
-    if (r.result === 'partially') return sum + 0.5
-    return sum
-  }, 0)
-  const percentage = applicable > 0 ? Math.round((weightedCompliant / applicable) * 1000) / 10 : 0
+  const rows = (data ?? []) as { itemId: string; userId: string; result: string }[]
 
-  const { data: checklists } = await supabase
-    .from('Checklist')
-    .select('checklistId')
-    .eq('projectId', projectId)
-  const checklistIds = ((checklists ?? []) as any[]).map(c => c.checklistId)
-  let total = 0
-  if (checklistIds.length > 0) {
-    const { count } = await supabase
-      .from('Checklist_Item')
-      .select('*', { count: 'exact', head: true })
-      .in('checklistId', checklistIds)
-    total = count ?? 0
+  const byItem = new Map<string, { userId: string; result: string }[]>()
+  for (const r of rows) {
+    if (!byItem.has(r.itemId)) byItem.set(r.itemId, [])
+    byItem.get(r.itemId)!.push({ userId: r.userId, result: r.result })
   }
 
-  return { answered, compliant, nonCompliant, notApplicable, percentage, total }
+  const pairCounts = new Map<string, number>()
+  for (const raters of byItem.values()) {
+    const substantive = raters.filter((r) => r.result in RELIABILITY_ORDER)
+    for (let i = 0; i < substantive.length; i++) {
+      for (let j = i + 1; j < substantive.length; j++) {
+        const pairKey = [substantive[i].userId, substantive[j].userId].sort().join('|')
+        pairCounts.set(pairKey, (pairCounts.get(pairKey) ?? 0) + 1)
+      }
+    }
+  }
+  if (pairCounts.size === 0) return { kappa: null, sharedItems: 0, raterPair: null }
+
+  const [bestPairKey] = [...pairCounts.entries()].sort((a, b) => b[1] - a[1])[0]
+  const [userA, userB] = bestPairKey.split('|')
+
+  const k = RELIABILITY_CATEGORIES
+  const matrix: number[][] = Array.from({ length: k }, () => Array(k).fill(0))
+  let n = 0
+  for (const raters of byItem.values()) {
+    const a = raters.find((r) => r.userId === userA && r.result in RELIABILITY_ORDER)
+    const b = raters.find((r) => r.userId === userB && r.result in RELIABILITY_ORDER)
+    if (!a || !b) continue
+    matrix[RELIABILITY_ORDER[a.result]][RELIABILITY_ORDER[b.result]]++
+    n++
+  }
+  if (n === 0) return { kappa: null, sharedItems: 0, raterPair: [userA, userB] }
+
+  const rowTotal = matrix.map((row) => row.reduce((s, v) => s + v, 0))
+  const colTotal = Array.from({ length: k }, (_, j) => matrix.reduce((s, row) => s + row[j], 0))
+
+  let weightedObserved = 0
+  let weightedExpected = 0
+  for (let i = 0; i < k; i++) {
+    for (let j = 0; j < k; j++) {
+      const w = Math.pow((i - j) / (k - 1), 2)
+      weightedObserved += w * matrix[i][j]
+      weightedExpected += w * (rowTotal[i] * colTotal[j]) / n
+    }
+  }
+  const kappa = weightedExpected > 0 ? 1 - weightedObserved / weightedExpected : 1
+
+  return { kappa: Math.round(kappa * 1000) / 1000, sharedItems: n, raterPair: [userA, userB] }
 }
 
 
 
 
-
+export class AlreadySubmittedError extends Error {
+  constructor(message = 'This audit has already been submitted for review.') {
+    super(message)
+    this.name = 'AlreadySubmittedError'
+  }
+}
 
 export async function submitForReview(projectId: string): Promise<void> {
 
-  // Look up headAuditorId to use as the report creator
   const { data: proj, error: projError } = await supabase
     .from('Audit_Project')
-    .select('headAuditorId')
+    .select('headAuditorId, submissionStatus')
     .eq('projectId', projectId)
     .single()
   if (projError) throw projError
+
+  const submissionStatus = (proj as any)?.submissionStatus
+  if (submissionStatus !== 'not_submitted' && submissionStatus !== 'rejected') {
+    throw new AlreadySubmittedError()
+  }
+
+  const summary = await fetchProjectComplianceSummary([projectId])
+  const coverage = summary[projectId]
+  if (!coverage || coverage.total === 0 || coverage.answered < coverage.total) {
+    throw new IncompleteCoverageError()
+  }
 
   const { error } = await supabase
 
@@ -1449,17 +1651,10 @@ export async function submitForReview(projectId: string): Promise<void> {
 
   if (error) throw error
 
-  // Auto-create Audit_Report row if one doesn't exist yet
-  const { data: existing } = await supabase
+  const { error: reportError } = await supabase
     .from('Audit_Report')
-    .select('reportId')
-    .eq('projectId', projectId)
-    .maybeSingle()
-  if (!existing) {
-    await supabase
-      .from('Audit_Report')
-      .insert({ projectId, userId: (proj as any).headAuditorId })
-  }
+    .upsert({ projectId, userId: (proj as any).headAuditorId }, { onConflict: 'projectId', ignoreDuplicates: true })
+  if (reportError) throw reportError
 
 }
 
@@ -1474,9 +1669,6 @@ export class IncompleteCoverageError extends Error {
 
 export async function reviewSubmission(projectId: string, approved: boolean, remarks: string): Promise<void> {
 
-  // A project can have multiple guidelines attached; approving it should mean every
-  // active item across all of them has been answered, not just the ones a guideline
-  // that happened to get audited first. Rejections are always allowed regardless.
   if (approved) {
     const summary = await fetchProjectComplianceSummary([projectId])
     const coverage = summary[projectId]
@@ -1485,7 +1677,6 @@ export async function reviewSubmission(projectId: string, approved: boolean, rem
     }
   }
 
-  // Look up headAuditorId to use as report creator if needed
   const { data: proj } = await supabase
     .from('Audit_Project')
     .select('headAuditorId')
@@ -1512,18 +1703,11 @@ export async function reviewSubmission(projectId: string, approved: boolean, rem
 
   if (error) throw error
 
-  // Ensure Audit_Report row exists (may have been skipped if project was submitted before this fix)
   if (proj) {
-    const { data: existing } = await supabase
+    const { error: reportError } = await supabase
       .from('Audit_Report')
-      .select('reportId')
-      .eq('projectId', projectId)
-      .maybeSingle()
-    if (!existing) {
-      await supabase
-        .from('Audit_Report')
-        .insert({ projectId, userId: (proj as any).headAuditorId })
-    }
+      .upsert({ projectId, userId: (proj as any).headAuditorId }, { onConflict: 'projectId', ignoreDuplicates: true })
+    if (reportError) throw reportError
   }
 
 }
@@ -1534,7 +1718,6 @@ export async function reviewSubmission(projectId: string, approved: boolean, rem
 
 
 export async function fetchComplianceScores(projectId: string): Promise<DbComplianceScore[]> {
-  // 1. Fetch project guidelines
   const { data: projectGuidelines, error: pgError } = await supabase
     .from('Guideline')
     .select('guidelineId')
@@ -1544,21 +1727,18 @@ export async function fetchComplianceScores(projectId: string): Promise<DbCompli
   const guidelineIds = (projectGuidelines ?? []).map((row: any) => row.guidelineId)
   if (guidelineIds.length === 0) return []
 
-  // 2. Fetch checklists for the project
   const { data: checklists, error: clError } = await supabase
     .from('Checklist')
     .select('checklistId,guidelineId')
     .eq('projectId', projectId)
   if (clError) throw clError
 
-  // 3. Fetch guideline details (names, shortNames, etc.)
   const { data: guidelines, error: gError } = await supabase
     .from('Guideline')
     .select('guidelineId,guidelineName,shortName')
     .in('guidelineId', guidelineIds)
   if (gError) throw gError
 
-  // 4. Fetch checklist items
   const checklistIds = (checklists ?? []).map((c: any) => c.checklistId)
   let items: any[] = []
   if (checklistIds.length > 0) {
@@ -1571,17 +1751,18 @@ export async function fetchComplianceScores(projectId: string): Promise<DbCompli
     items = itemsData ?? []
   }
 
-  // 5. Fetch audit results
   const { data: auditResults, error: arError } = await supabase
     .from('Audit_Result')
     .select('itemId,result')
     .eq('projectId', projectId)
   if (arError) throw arError
 
-  const resultsMap = new Map<string, string>()
-  for (const r of (auditResults ?? [])) {
-    resultsMap.set(r.itemId, r.result)
+  const byItem = new Map<string, string[]>()
+  for (const r of (auditResults ?? []) as { itemId: string; result: string }[]) {
+    if (!byItem.has(r.itemId)) byItem.set(r.itemId, [])
+    byItem.get(r.itemId)!.push(r.result)
   }
+  const resolutions = await fetchResolutionMap(projectId)
 
   const scores: DbComplianceScore[] = []
   for (const guidelineId of guidelineIds) {
@@ -1590,44 +1771,25 @@ export async function fetchComplianceScores(projectId: string): Promise<DbCompli
     const clId = cl?.checklistId
 
     const clItems = items.filter((i) => i.checklistId === clId)
-    let total = clItems.length
-    let answered = 0
-    let compliant = 0
-    let nonCompliant = 0
-    let notApplicable = 0
-    let weightedCompliant = 0
-
-    for (const item of clItems) {
-      const res = resultsMap.get(item.itemId)
-      if (res && res !== 'not_started' && res !== 'needs_review') {
-        answered++
-        if (res === 'compliant') {
-          compliant++
-          weightedCompliant += 1
-        } else if (res === 'partially') {
-          nonCompliant++
-          weightedCompliant += 0.5
-        } else if (res === 'non_compliant') {
-          nonCompliant++
-        } else if (res === 'not_applicable') {
-          notApplicable++
-        }
-      }
-    }
-
-    const applicable = answered - notApplicable
-    const scorePercentage = applicable > 0 ? Math.round((weightedCompliant / applicable) * 1000) / 10 : 0
+    const effectiveStatuses = clItems
+      .map((item) => ({ itemId: item.itemId, statuses: byItem.get(item.itemId) }))
+      .filter((x): x is { itemId: string; statuses: string[] } => !!x.statuses && x.statuses.length > 0)
+      .map((x) => reconcileEffectiveStatus(x.statuses, resolutions.get(x.itemId)))
+    const counts = bucketEffectiveStatuses(effectiveStatuses)
+    const applicable = counts.answered - counts.notApplicable
+    const scorePercentage = applicable > 0 ? Math.round((counts.weightedCompliant / applicable) * 1000) / 10 : 0
 
     scores.push({
       scoreId: crypto.randomUUID(),
       guidelineId,
       guidelineName: g?.guidelineName || 'Guideline',
       shortName: g?.shortName || 'Guideline',
-      totalItems: total,
-      answeredItems: answered,
-      compliantItems: compliant,
-      nonCompliantItems: nonCompliant,
-      notApplicableItems: notApplicable,
+      totalItems: clItems.length,
+      answeredItems: counts.answered,
+      compliantItems: counts.compliant,
+      nonCompliantItems: counts.nonCompliant,
+      notApplicableItems: counts.notApplicable,
+      weightedCompliant: counts.weightedCompliant,
       scorePercentage,
       timeCalculated: new Date().toISOString()
     })
@@ -1650,7 +1812,6 @@ export async function fetchAuditReports(
     dateTo?: string
   }
 ): Promise<DbAuditReport[]> {
-  // 1. Get member project IDs
   const { data: memberRows, error: memberError } = await supabase
     .from('Project_Member')
     .select('projectId')
@@ -1658,7 +1819,6 @@ export async function fetchAuditReports(
   if (memberError) throw memberError
   const memberProjectIds = (memberRows ?? []).map(r => r.projectId)
   
-  // 2. Fetch projects
   let pQuery = supabase.from('Audit_Project').select('projectId, projectTitle, smPlatform, projectStatus, submissionStatus, submissionRemarks, headAuditorId, dueDate, timeCreated, updatedAt')
   if (memberProjectIds.length > 0) {
     pQuery = pQuery.or(`headAuditorId.eq.${userId},projectId.in.(${memberProjectIds.join(',')})`)
@@ -1670,7 +1830,6 @@ export async function fetchAuditReports(
   if (!projects || projects.length === 0) return []
   const projectIds = projects.map(p => p.projectId)
   
-  // 3. Fetch reports
   const { data: reportsRaw, error: reportsError } = await supabase
     .from('Audit_Report')
     .select('reportId, projectId, userId, timeGenerated')
@@ -1679,16 +1838,17 @@ export async function fetchAuditReports(
 
   const allReports: any[] = [...(reportsRaw ?? [])]
 
-  // Backfill: auto-create Audit_Report rows for submitted/completed projects that don't have one yet
   const reportedProjectIds = new Set(allReports.map(r => r.projectId))
   const submittedStatuses = ['pending_review', 'approved', 'rejected']
   const needsBackfill = projects.filter(
     p => submittedStatuses.includes(p.submissionStatus) && !reportedProjectIds.has(p.projectId)
   )
   if (needsBackfill.length > 0) {
-    await supabase.from('Audit_Report').insert(
-      needsBackfill.map(p => ({ projectId: p.projectId, userId: p.headAuditorId }))
+    const { error: backfillError } = await supabase.from('Audit_Report').upsert(
+      needsBackfill.map(p => ({ projectId: p.projectId, userId: p.headAuditorId })),
+      { onConflict: 'projectId', ignoreDuplicates: true }
     )
+    if (backfillError) console.error('Audit_Report backfill failed:', backfillError)
     const { data: refreshed } = await supabase
       .from('Audit_Report')
       .select('reportId, projectId, userId, timeGenerated')
@@ -1701,7 +1861,6 @@ export async function fetchAuditReports(
   const reportProjectIds = Array.from(new Set(allReports.map(r => r.projectId)))
   const filteredProjects = projects.filter(p => reportProjectIds.includes(p.projectId))
   
-  // Fetch head auditor names
   const headAuditorIds = Array.from(new Set(filteredProjects.map(p => p.headAuditorId)))
   const { data: users, error: usersError } = await supabase
     .from('User')
@@ -1713,7 +1872,6 @@ export async function fetchAuditReports(
     userNamesMap.set(u.userId, u.userName)
   }
   
-  // Fetch guideline IDs
   const { data: allGuidelines, error: guidelinesError } = await supabase
     .from('Guideline')
     .select('projectId, guidelineId')
@@ -1729,7 +1887,6 @@ export async function fetchAuditReports(
     }
   }
   
-  // Fetch compliance summaries
   const complianceSummary = await fetchProjectComplianceSummary(reportProjectIds)
   
   const results = []
@@ -1876,13 +2033,12 @@ export async function createGuideline(input: {
 
   if (userId) {
 
-    // Validate if the userId exists
 
     const { data: validUser } = await supabase.from('User').select('userId').eq('userId', userId).single()
 
     if (!validUser) {
 
-      userId = '' // Force fallback if invalid
+      userId = ''
 
     }
 
@@ -1904,13 +2060,6 @@ export async function createGuideline(input: {
 
 
 
-  console.log("createGuideline started. Number of items:", items.length);
-
-
-
-  // 1. Insert Guideline row
-
-  console.log("Inserting Guideline row...");
 
   const { error: gError } = await supabase
 
@@ -1942,84 +2091,68 @@ export async function createGuideline(input: {
 
   if (gError) throw gError
 
+  try {
+    const checklistId = crypto.randomUUID()
 
+    const { error: clError } = await supabase
 
-  // 2. Insert Checklist row
+      .from('Checklist')
 
-  console.log("Inserting Checklist row...");
+      .insert({
 
-  const checklistId = crypto.randomUUID()
+        checklistId,
 
-  const { error: clError } = await supabase
+        guidelineId: guideline.guidelineId,
 
-    .from('Checklist')
+        checklistSource: 'generator',
 
-    .insert({
+        timeCreated: new Date().toISOString()
+
+      })
+
+    if (clError) throw clError
+
+    const dbItems = items.map((item) => ({
+
+      itemId: item.id,
 
       checklistId,
 
-      guidelineId: guideline.guidelineId,
+      itemDescription: item.text,
 
-      checklistSource: 'generator',
+      category: item.category,
 
-      timeCreated: new Date().toISOString()
+      severity: item.severity,
 
-    })
+      reference: item.reference || null,
 
-  if (clError) throw clError
+      itemName: item.itemName || null,
+      itemCode: item.itemCode || null,
+      helpText: item.helpText || null,
+      verbatimClauseText: item.verbatimClauseText || null,
+      answerOptions: item.answerOptions || null,
 
+    }))
 
+    const CHUNK_SIZE = 50;
 
-  // 3. Insert Checklist_Item rows
+    for (let i = 0; i < dbItems.length; i += CHUNK_SIZE) {
 
-  console.log("Preparing Checklist_Item rows...");
+      const chunk = dbItems.slice(i, i + CHUNK_SIZE);
 
-  const dbItems = items.map((item) => ({
+      const { error: itemError } = await supabase
 
-    itemId: item.id,
+        .from('Checklist_Item')
 
-    checklistId,
+        .insert(chunk);
 
-    itemDescription: item.text,
+      if (itemError) throw itemError;
 
-    category: item.category,
-
-    severity: item.severity,
-
-    reference: item.reference || null,
-
-    itemName: item.itemName || null,
-    itemCode: item.itemCode || null,
-    helpText: item.helpText || null,
-    verbatimClauseText: item.verbatimClauseText || null,
-    answerOptions: item.answerOptions || null,
-
-  }))
-
-
-
-  // Chunk the items to avoid Supabase connection timeouts and payload limits
-
-  const CHUNK_SIZE = 50;
-
-  console.log("Starting to insert chunks...");
-
-  for (let i = 0; i < dbItems.length; i += CHUNK_SIZE) {
-
-    console.log(`Inserting chunk ${i / CHUNK_SIZE + 1} / ${Math.ceil(dbItems.length / CHUNK_SIZE)}`);
-
-    const chunk = dbItems.slice(i, i + CHUNK_SIZE);
-
-    const { error: itemError } = await supabase
-
-      .from('Checklist_Item')
-
-      .insert(chunk);
-
-    if (itemError) throw itemError;
-
+    }
+  } catch (err) {
+    await supabase.from('Guideline').delete().eq('guidelineId', guideline.guidelineId)
+    throw err
   }
-
 }
 
 
@@ -2044,7 +2177,7 @@ export async function createUser(input: {
 
     userName: input.userName,
 
-    userEmail: input.userEmail,
+    userEmail: input.userEmail.trim().toLowerCase(),
 
     role: input.role,
 
@@ -2102,8 +2235,9 @@ export async function sendAssignmentEmail(projectId: string, userId: string) {
       return
     }
 
-    // For testing/mocking, route dummy emails to den519000@gmail.com so they actually deliver!
-    const toEmail = user.userEmail.includes('@example.com') ? 'den519000@gmail.com' : user.userEmail
+    const safeUserName = escapeHtml(user.userName)
+    const safeProjectTitle = escapeHtml(projectTitle)
+    const safeHeadAuditorName = escapeHtml(headAuditorName)
 
     const emailData = {
       sender: {
@@ -2112,7 +2246,7 @@ export async function sendAssignmentEmail(projectId: string, userId: string) {
       },
       to: [
         {
-          email: toEmail,
+          email: user.userEmail,
           name: user.userName
         }
       ],
@@ -2120,13 +2254,8 @@ export async function sendAssignmentEmail(projectId: string, userId: string) {
       htmlContent: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
           <h2 style="color: #1e3a8a; margin-top: 0; margin-bottom: 16px;">New Project Assignment</h2>
-          <p>Hello <strong>${user.userName}</strong>,</p>
-          ${toEmail !== user.userEmail ? `
-          <p style="font-size: 13px; color: #475569; background-color: #f8fafc; padding: 8px 12px; border-radius: 6px; border: 1px solid #e2e8f0; margin-bottom: 16px;">
-            <strong>[Sandbox Notification Redirect]</strong> This email was originally intended for: <em>${user.userEmail}</em>
-          </p>
-          ` : ''}
-          <p>You have been assigned to the audit project <strong>"${projectTitle}"</strong> by <strong>${headAuditorName}</strong>.</p>
+          <p>Hello <strong>${safeUserName}</strong>,</p>
+          <p>You have been assigned to the audit project <strong>"${safeProjectTitle}"</strong> by <strong>${safeHeadAuditorName}</strong>.</p>
           <p>Please log in to the SafetyAudit platform to begin your audit tasks.</p>
           <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
           <p style="font-size: 12px; color: #64748b; margin-bottom: 0;">This is an automated notification from SafetyAudit. Please do not reply directly to this email.</p>
@@ -2154,7 +2283,7 @@ export async function sendAssignmentEmail(projectId: string, userId: string) {
       res.on('data', (chunk) => { body += chunk })
       res.on('end', () => {
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-          console.log(`[Email] Notification sent successfully via Brevo to ${toEmail} (original recipient: ${user.userEmail}) for project ${projectTitle}`)
+          console.log(`[Email] Assignment notification sent for project ${projectTitle}`)
         } else {
           console.error(`[Email] Brevo API returned status ${res.statusCode}:`, body)
         }

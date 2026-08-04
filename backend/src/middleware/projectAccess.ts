@@ -5,15 +5,6 @@ type AccessResult = 'not_found' | 'allowed' | 'denied'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-// A caller has access to a project if they're its head auditor or an assigned member.
-// Role checks (requireRole) establish WHAT kind of action a user can perform;
-// this establishes WHICH project(s) they're allowed to perform it on.
-// Distinguishes a nonexistent project (404) from one the caller just can't access (403) —
-// collapsing those into a single "denied" would tell a user "you don't have access" to a
-// project ID that doesn't even exist, and would mean a mistyped/deleted project ID
-// surfaces as an authorization error instead of a not-found one. A non-UUID-shaped id is
-// treated the same as not-found rather than reaching Postgres, which would otherwise throw
-// a type-cast error on the column and surface as an unrelated 500.
 async function checkProjectAccess(projectId: string, userId: string): Promise<AccessResult> {
   if (!UUID_RE.test(projectId)) return 'not_found'
   const { data: project, error } = await supabase
@@ -51,8 +42,6 @@ async function checkProjectOwner(projectId: string, userId: string): Promise<Acc
   return (project as any).headAuditorId === userId ? 'allowed' : 'denied'
 }
 
-// Given a list of project ids, returns only the ones the user is the head auditor
-// or an assigned member of. Used by bulk/list endpoints instead of a single-project gate.
 export async function filterAccessibleProjectIds(userId: string, projectIds: string[]): Promise<string[]> {
   if (projectIds.length === 0) return []
   const { data: owned, error: ownedError } = await supabase
@@ -75,8 +64,6 @@ export async function filterAccessibleProjectIds(userId: string, projectIds: str
   return projectIds.filter((id) => accessible.has(id))
 }
 
-// Rejects unless the caller is the project's head auditor or an assigned member.
-// paramName is the route param holding the project id (defaults to 'id').
 export function requireProjectAccess(paramName: string = 'id') {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -97,8 +84,6 @@ export function requireProjectAccess(paramName: string = 'id') {
   }
 }
 
-// Stricter than requireProjectAccess — only the project's head auditor (not other
-// members) may pass. Used for irreversible/decision actions: delete, approve/reject.
 export function requireProjectOwner(paramName: string = 'id') {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -119,9 +104,6 @@ export function requireProjectOwner(paramName: string = 'id') {
   }
 }
 
-// For routes keyed by a checklist item id rather than a project id (e.g.
-// PATCH/DELETE /api/checklist/items/:id) — resolves item → checklist → project,
-// then applies the same owner-or-member check.
 export function requireChecklistItemProjectAccess(paramName: string = 'id') {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {

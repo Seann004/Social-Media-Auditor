@@ -15,7 +15,7 @@ import {
 } from '@phosphor-icons/react'
 import { useStore } from '../../../store/useStore'
 import * as db from '../../../lib/db'
-import type { DbAuditReport, DbComplianceScore, DbAuditResult, DbChecklistItem } from '../../../lib/db'
+import type { DbAuditReport, DbComplianceScore, DbAuditResult, DbChecklistItem, DbResolution } from '../../../lib/db'
 import ScoreRing from '../../audits/components/ScoreRing'
 import StatusBadge from '../../audits/components/StatusBadge'
 import Button from '../../../components/ui/Button'
@@ -66,22 +66,23 @@ export default function ReportsPage() {
   const { currentUserId, users } = useStore()
   const currentUser = users.find((u) => u.id === currentUserId)
 
-  // Audit Submission Reports
   const [reports, setReports] = useState<DbAuditReport[]>([])
   const [loadingReports, setLoadingReports] = useState(true)
+  const [reportsError, setReportsError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [showFilters, setShowFilters] = useState(false)
 
-  // Selected report for detailed view
   const [selectedReport, setSelectedReport] = useState<DbAuditReport | null>(null)
   const [complianceScores, setComplianceScores] = useState<DbComplianceScore[]>([])
   const [loadingScores, setLoadingScores] = useState(false)
   const [auditResults, setAuditResults] = useState<DbAuditResult[]>([])
+  const [resolutions, setResolutions] = useState<DbResolution[]>([])
   const [reportChecklistItems, setReportChecklistItems] = useState<DbChecklistItem[]>([])
   const [showPrintWarning, setShowPrintWarning] = useState(false)
+  const [scoresError, setScoresError] = useState<string | null>(null)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300)
@@ -91,6 +92,7 @@ export default function ReportsPage() {
   const loadReports = useCallback(async () => {
     if (!currentUserId) return
     setLoadingReports(true)
+    setReportsError(null)
     try {
       const data = await db.fetchAuditReports(currentUserId, {
         search: debouncedSearch || undefined,
@@ -98,8 +100,9 @@ export default function ReportsPage() {
         dateTo: dateTo || undefined,
       })
       setReports(data)
-    } catch {
+    } catch (err) {
       setReports([])
+      setReportsError(err instanceof Error ? err.message : 'Failed to load reports.')
     } finally {
       setLoadingReports(false)
     }
@@ -110,19 +113,24 @@ export default function ReportsPage() {
   async function handleSelectReport(report: DbAuditReport) {
     setSelectedReport(report)
     setLoadingScores(true)
+    setScoresError(null)
     try {
-      const [scores, results, items] = await Promise.all([
+      const [scores, results, items, reportResolutions] = await Promise.all([
         db.fetchComplianceScores(report.projectId),
         db.fetchAuditResults(report.projectId),
         db.fetchProjectChecklistItems(report.projectId),
+        db.fetchResolutions(report.projectId),
       ])
       setComplianceScores(scores ?? [])
       setAuditResults(results ?? [])
       setReportChecklistItems(items ?? [])
-    } catch {
+      setResolutions(reportResolutions ?? [])
+    } catch (err) {
       setComplianceScores([])
       setAuditResults([])
       setReportChecklistItems([])
+      setResolutions([])
+      setScoresError(err instanceof Error ? err.message : 'Failed to load this report’s data.')
     } finally {
       setLoadingScores(false)
     }
@@ -132,30 +140,55 @@ export default function ReportsPage() {
     () => new Map(reportChecklistItems.map((ci) => [ci.itemId, ci])),
     [reportChecklistItems],
   )
+
+  const reconciledResults = useMemo(() => {
+    const byItem = new Map<string, DbAuditResult[]>()
+    for (const r of auditResults) {
+      if (!byItem.has(r.itemId)) byItem.set(r.itemId, [])
+      byItem.get(r.itemId)!.push(r)
+    }
+    const resolutionByItem = new Map(resolutions.map((r) => [r.itemId, r]))
+
+    const out: { resultId: string; itemId: string; result: DbAuditResult['result']; findings: string | null; notes: string | null }[] = []
+    for (const [itemId, rows] of byItem) {
+      const resolution = resolutionByItem.get(itemId)
+      const distinct = new Set(rows.map((r) => r.result))
+      const effective = resolution?.resolvedStatus ?? (distinct.size === 1 ? rows[0].result : 'needs_review')
+      if (effective === 'needs_review' || effective === 'not_started') continue
+      const latest = rows.reduce((a, b) => (a.timeSubmitted >= b.timeSubmitted ? a : b))
+      out.push({
+        resultId: latest.resultId,
+        itemId,
+        result: effective,
+        findings: resolution?.notes ?? latest.findings,
+        notes: latest.notes,
+      })
+    }
+    return out
+  }, [auditResults, resolutions])
+
   const passResults = useMemo(
-    () => auditResults.filter((r) => r.result === 'compliant'),
-    [auditResults],
+    () => reconciledResults.filter((r) => r.result === 'compliant'),
+    [reconciledResults],
   )
   const failingResults = useMemo(
-    () => auditResults.filter((r) => r.result === 'non_compliant' || r.result === 'partially'),
-    [auditResults],
+    () => reconciledResults.filter((r) => r.result === 'non_compliant' || r.result === 'partially'),
+    [reconciledResults],
   )
   const naResults = useMemo(
-    () => auditResults.filter((r) => r.result === 'not_applicable'),
-    [auditResults],
+    () => reconciledResults.filter((r) => r.result === 'not_applicable'),
+    [reconciledResults],
   )
 
-  // Uses the browser's native print dialog — there's no server-generated PDF here,
-  // so the user needs to pick "Save as PDF" themselves. Printing freezes the tab while
-  // Chrome lays out the print view, which can take a noticeable moment on a large report,
-  // so we confirm first rather than triggering it the instant the button is clicked.
   function handlePrint() {
     setShowPrintWarning(false)
     window.print()
   }
 
-  const overallScore = complianceScores.length > 0
-    ? complianceScores.reduce((sum, s) => sum + (s.scorePercentage ?? 0), 0) / complianceScores.length
+  const totalApplicableForScore = complianceScores.reduce((s, c) => s + (c.answeredItems - c.notApplicableItems), 0)
+  const totalWeightedCompliant = complianceScores.reduce((s, c) => s + c.weightedCompliant, 0)
+  const overallScore = totalApplicableForScore > 0
+    ? Math.round((totalWeightedCompliant / totalApplicableForScore) * 1000) / 10
     : (selectedReport?.scorePercentage ?? 0)
 
   const totalItems = complianceScores.reduce((s, c) => s + c.totalItems, 0)
@@ -178,7 +211,6 @@ export default function ReportsPage() {
 
   return (
     <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-8 print:px-0 print:py-0">
-      {/* Print-only header */}
       <div className="hidden print:block mb-6 border-b border-slate-200 pb-4">
         <h1 className="text-2xl font-bold">SafetyAudit — Audit Report</h1>
         {selectedReport && (
@@ -189,7 +221,6 @@ export default function ReportsPage() {
       </div>
 
       <div className="print:hidden">
-        {/* ── Audit Submission Reports ── */}
         <div className="flex items-start justify-between mb-6">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Reports</h1>
@@ -208,10 +239,8 @@ export default function ReportsPage() {
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-5 gap-4 xl:gap-6">
-          {/* Left: Reports list */}
           <div className="xl:col-span-2">
             <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-              {/* Search + filter */}
               <div className="p-4 border-b border-slate-100">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="flex-1 relative">
@@ -256,8 +285,15 @@ export default function ReportsPage() {
                 </AnimatePresence>
               </div>
 
-              {/* Report list */}
-              {loadingReports ? (
+              {reportsError ? (
+                <div className="py-12 text-center px-6">
+                  <p className="text-slate-600 text-sm font-medium">Couldn't load reports.</p>
+                  <p className="text-slate-400 text-xs mt-1">{reportsError}</p>
+                  <Button variant="secondary" size="sm" className="mt-3 mx-auto" onClick={() => loadReports()}>
+                    Retry
+                  </Button>
+                </div>
+              ) : loadingReports ? (
                 <div className="divide-y divide-slate-50">
                   {Array.from({ length: 4 }).map((_, i) => (
                     <div key={i} className="flex items-start gap-3 px-4 py-4">
@@ -305,7 +341,6 @@ export default function ReportsPage() {
             </div>
           </div>
 
-          {/* Right: Detailed report (View Compliance Score + Generate Report) */}
           <div className="xl:col-span-3">
             {!selectedReport ? (
               <div className="bg-white border border-slate-200 rounded-xl flex items-center justify-center min-h-[400px]">
@@ -317,7 +352,6 @@ export default function ReportsPage() {
               </div>
             ) : (
               <div className="space-y-5">
-                {/* Header card */}
                 <div className="bg-white border border-slate-200 rounded-xl p-6">
                   <div className="flex items-start gap-4 mb-5">
                     <div className={`w-12 h-12 rounded-xl ${platformColor(selectedReport.smPlatform)} flex items-center justify-center shrink-0`}>
@@ -346,7 +380,6 @@ export default function ReportsPage() {
                     </div>
                   )}
 
-                  {/* View Compliance Score — summary row */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 border border-slate-100 rounded-xl overflow-hidden">
                     {[
                       { label: 'Compliant', value: totalCompliant, icon: CheckCircle, color: 'text-emerald-600' },
@@ -367,20 +400,27 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                {/* Overall compliance score */}
+                {scoresError && !loadingScores && (
+                  <div className="bg-white border border-rose-200 rounded-xl py-8 text-center">
+                    <p className="text-slate-600 text-sm font-medium">Couldn't load this report's data.</p>
+                    <p className="text-slate-400 text-xs mt-1">{scoresError}</p>
+                    <Button variant="secondary" size="sm" className="mt-3 mx-auto" onClick={() => handleSelectReport(selectedReport)}>
+                      Retry
+                    </Button>
+                  </div>
+                )}
+
                 <div className="bg-white border border-slate-200 rounded-xl p-6 flex items-center gap-6">
                   <ScoreRing percentage={overallScore} size={96} strokeWidth={8} showLabel />
                   <div>
                     <p className="text-base font-semibold text-slate-800">Overall Compliance Score</p>
                     <p className="text-sm text-slate-500 mt-0.5">Based on {totalAnswered} of {totalItems} items answered</p>
                     <p className="text-xs text-slate-400 mt-2">
-                      Lead: {selectedReport.headAuditorName}
-                      {selectedReport.dueDate && ` · Due ${new Date(selectedReport.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`}
+                      Completed {new Date(selectedReport.updatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
                     </p>
                   </div>
                 </div>
 
-                {/* Quick summary — failing & not applicable items */}
                 {!loadingScores && (failingResults.length > 0 || naResults.length > 0) && (
                   <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                     <div className="px-5 py-3 bg-slate-50 border-b border-slate-100">
@@ -438,7 +478,6 @@ export default function ReportsPage() {
                   </div>
                 )}
 
-                {/* Per-guideline breakdown (category breakdown) */}
                 {loadingScores ? (
                   <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                     <div className="px-5 py-3 bg-slate-50 border-b border-slate-100">
@@ -489,7 +528,6 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {/* ── Print view (Export) ── */}
       {selectedReport && (
         <div className="hidden print:block">
           <div className="grid grid-cols-2 gap-8 mb-8">
@@ -522,7 +560,6 @@ export default function ReportsPage() {
                 <SummaryBarChart pass={passResults.length} fail={failingResults.length} na={naResults.length} />
               </div>
 
-              {/* Stacked (not side-by-side) so each section can flow and paginate naturally across PDF pages */}
               {failingResults.length > 0 && (
                 <div className="mb-5" style={{ breakInside: 'avoid' }}>
                   <p className="text-xs font-semibold text-rose-600 uppercase tracking-wide mb-2">Failing ({failingResults.length})</p>
@@ -595,7 +632,6 @@ export default function ReportsPage() {
         </div>
       )}
 
-      {/* Print Confirmation Modal */}
       <Modal
         open={showPrintWarning}
         onClose={() => setShowPrintWarning(false)}

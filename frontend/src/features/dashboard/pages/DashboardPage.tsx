@@ -11,7 +11,6 @@ import { platformColor, platformInitial } from '../../../lib/platformColors'
 import { scoreColor, formatPercent } from '../../../lib/scoreColor'
 import { AUDIT_STATUS_COLOR } from '../../../lib/statusColors'
 
-// ── Mini SVG donut chart ────────────────────────────────────────────────────
 function DonutChart({ segments, size = 72, stroke = 9, center }: {
   segments: { value: number; color: string }[]
   size?: number; stroke?: number; center?: React.ReactNode
@@ -111,7 +110,6 @@ export default function DashboardPage() {
   const currentUser = users.find((u) => u.id === currentUserId) ?? users[0]
   const location = useLocation()
 
-  // Re-fetch from DB every time the user navigates to this page so counts stay current
   useEffect(() => { initFromDb() }, [location.key])
 
   const [hour, setHour] = useState(() => new Date().getHours())
@@ -126,7 +124,6 @@ export default function DashboardPage() {
   const isAdmin = currentUser?.role === 'admin'
   const isAuditor = currentUser?.role === 'auditor'
 
-  // Auditors don't see draft projects — drafts aren't set up for audit work yet
   const visibleProjects = isAuditor ? projects.filter((p) => p.status !== 'draft') : projects
   const recentProjects = [...visibleProjects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 
@@ -144,7 +141,6 @@ export default function DashboardPage() {
     .filter((p) => p.status === 'in_progress' && p.dueDate)
     .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))
     .slice(0, 3)
-  // Only auditors and head auditors appear in the team panel — admins are excluded
   const auditTeam = users.filter((u) => u.role !== 'admin')
 
   const todayIso = new Date().toISOString().split('T')[0]
@@ -153,7 +149,6 @@ export default function DashboardPage() {
   ).length
   const awaitingReviewCount = statusCounts.under_review
 
-  // Admin sees combined dashboard and guidelines
   if (isAdmin) {
     return <GuidelinesPage />
   }
@@ -169,7 +164,6 @@ export default function DashboardPage() {
       animate="show"
       className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-10"
     >
-      {/* Header */}
       <motion.div variants={item} className="mb-8 flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
@@ -188,10 +182,8 @@ export default function DashboardPage() {
         )}
       </motion.div>
 
-      {/* Stats strip — chart cards */}
       <motion.div variants={item} className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
 
-        {/* Card 1: Total Audits — status donut */}
         <div className="bg-white border border-slate-200 rounded-xl px-5 py-5 flex items-center gap-4">
           <DonutChart
             size={72} stroke={9}
@@ -239,7 +231,6 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Card 2: In Progress — progress donut */}
         <div className="bg-white border border-slate-200 rounded-xl px-5 py-5 flex items-center gap-4">
           <DonutChart
             size={72} stroke={9}
@@ -286,9 +277,7 @@ export default function DashboardPage() {
 
       </motion.div>
 
-      {/* Main 2-col grid: recent audits + team panel */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* Recent audits — 2/3 width */}
         <motion.div variants={item} className="md:col-span-2">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-base font-semibold text-slate-800 tracking-tight">Recent Audits</h2>
@@ -324,7 +313,6 @@ export default function DashboardPage() {
                     to={`/projects/${project.id}`}
                     className="flex items-center gap-4 px-5 py-5 hover:bg-slate-50 transition-colors group focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-600"
                   >
-                    {/* Platform dot */}
                     <div
                       className={`w-8 h-8 rounded-lg ${platformColor(project.platform)} flex items-center justify-center shrink-0`}
                     >
@@ -333,7 +321,6 @@ export default function DashboardPage() {
                       </span>
                     </div>
 
-                    {/* Project name + platform + guidelines */}
                     <div className="flex-1 min-w-0">
                       <p className="text-base font-medium text-slate-800 truncate">{project.name}</p>
                       <div className="flex items-center gap-1.5 mt-0.5">
@@ -351,7 +338,6 @@ export default function DashboardPage() {
                       </div>
                     </div>
 
-                    {/* Score bar */}
                     <div className="hidden sm:flex flex-col items-end gap-1">
                       <ScoreBar pct={scorePct} color={barColor} />
                       <span className="font-mono text-2xs text-slate-500 tabular-nums">
@@ -359,14 +345,12 @@ export default function DashboardPage() {
                       </span>
                     </div>
 
-                    {/* Auditors */}
                     <div className="hidden md:flex items-center gap-1 shrink-0">
                       {auditors.slice(0, 3).map((u) => (
                         <AuditorAvatar key={u.id} user={u} size="xs" />
                       ))}
                     </div>
 
-                    {/* Status + arrow */}
                     <div className="flex items-center gap-2 shrink-0">
                       <StatusBadge type="audit" status={project.status} />
                       <ArrowRight
@@ -381,9 +365,7 @@ export default function DashboardPage() {
           </div>
         </motion.div>
 
-        {/* Right panel — team + deadlines */}
         <motion.div variants={item} className="space-y-5">
-          {/* Team — only shown to head auditors */}
           {isHeadAuditor && (
             <div>
               <h2 className="text-base font-semibold text-slate-800 tracking-tight mb-3">Team</h2>
@@ -413,7 +395,6 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Upcoming deadlines */}
           <div>
             <h2 className="text-base font-semibold text-slate-800 tracking-tight mb-3">Upcoming Deadlines</h2>
             <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden">

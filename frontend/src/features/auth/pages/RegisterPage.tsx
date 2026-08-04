@@ -22,8 +22,6 @@ function passwordValid(p: string) {
   return PASSWORD_RULES.every((r) => r.test(p))
 }
 
-// Administrator is intentionally excluded — admin accounts are not self-serve.
-// The backend also rejects role: 'admin' on unauthenticated registration as defense in depth.
 const ROLE_OPTIONS: { value: UserRole; label: string; description: string }[] = [
   { value: 'head_auditor', label: 'Head Auditor', description: 'Manage projects, assign auditors, review submissions' },
   { value: 'auditor', label: 'Auditor', description: 'Conduct audits, record findings, submit for review' },
@@ -31,7 +29,7 @@ const ROLE_OPTIONS: { value: UserRole; label: string; description: string }[] = 
 
 export default function RegisterPage() {
   const navigate = useNavigate()
-  const { register, users } = useStore()
+  const { register } = useStore()
 
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -55,12 +53,6 @@ export default function RegisterPage() {
     if (!passwordValid(password)) { setError('Password does not meet the requirements below.'); return }
     if (password !== confirmPassword) { setError('Passwords do not match.'); return }
 
-    const emailLower = email.trim().toLowerCase()
-    if (users.some((u) => (u as any).email?.toLowerCase() === emailLower)) {
-      setError('An account with this email already exists.')
-      return
-    }
-
     setLoading(true)
     register(email, name.trim(), role, password)
       .then(() => {
@@ -71,9 +63,8 @@ export default function RegisterPage() {
       .catch((err) => {
         setLoading(false)
         const rawMsg = err instanceof Error ? err.message : (err as any)?.message || ''
-        // Backend wraps errors as JSON: {"error":"..."} — unwrap for display
         let msg = rawMsg
-        try { msg = (JSON.parse(rawMsg) as { error: string }).error ?? rawMsg } catch { /* not JSON */ }
+        try { msg = (JSON.parse(rawMsg) as { error: string }).error ?? rawMsg } catch {}
         if (msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('already exists')) {
           setError('An account with this email already exists.')
         } else if (msg.toLowerCase().includes('fetch failed') || msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network')) {
@@ -120,7 +111,6 @@ export default function RegisterPage() {
           </div>
 
           <form onSubmit={handleSubmit} noValidate className="px-9 py-7 space-y-5">
-            {/* Full name */}
             <div>
               <label htmlFor="name" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Full Name
@@ -136,7 +126,6 @@ export default function RegisterPage() {
               />
             </div>
 
-            {/* Email */}
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Email
@@ -152,7 +141,6 @@ export default function RegisterPage() {
               />
             </div>
 
-            {/* Role */}
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">Role</label>
               <div className="space-y-2">
@@ -189,7 +177,6 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            {/* Password */}
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Password
@@ -239,7 +226,6 @@ export default function RegisterPage() {
               </AnimatePresence>
             </div>
 
-            {/* Confirm password */}
             <div>
               <label htmlFor="confirm-password" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Confirm Password

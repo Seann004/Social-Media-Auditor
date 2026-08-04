@@ -19,6 +19,13 @@ import { hashPassword } from '../lib/crypto'
 
 type ResponseMap = Record<string, AuditResponse>
 
+export interface ResolutionInfo {
+  status: ChecklistItemStatus
+  resolvedBy: string
+  notes?: string
+  resolvedAt: string
+}
+
 
 const ROLE_COLORS: Record<string, string> = {
   admin: 'bg-blue-600',
@@ -30,11 +37,31 @@ function rkey(projectId: string, itemId: string) {
   return `${projectId}__${itemId}`
 }
 
+const pendingWritesByKey = new Map<string, Promise<unknown>>()
+function serializeByKey<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const prior = pendingWritesByKey.get(key) ?? Promise.resolve()
+  const next = prior.then(work, work)
+  pendingWritesByKey.set(key, next.catch(() => {}))
+  return next
+}
+
+const complianceRequestGen: Record<string, number> = {}
+
+const guidelineItemsCache = new Map<string, ChecklistItem[]>()
+
+export function reconcileResponse(rows: AuditResponse[], resolvedStatus?: ChecklistItemStatus): AuditResponse | undefined {
+  if (rows.length === 0) return undefined
+  const distinctStatuses = new Set(rows.map((r) => r.status))
+  const status = resolvedStatus ?? (distinctStatuses.size === 1 ? rows[0].status : 'needs_review')
+  const latest = rows.reduce((a, b) => (a.updatedAt >= b.updatedAt ? a : b))
+  return { ...latest, status }
+}
+
 function emptyScore(): ProjectScore {
   return { total: 0, compliant: 0, nonCompliant: 0, notApplicable: 0, answered: 0, applicable: 0, percentage: 0, progress: 0 }
 }
 
-function calcScore(items: ChecklistItem[], responses: ResponseMap, projectId: string): ProjectScore {
+export function calcScore(items: ChecklistItem[], responses: ResponseMap, projectId: string): ProjectScore {
   const total = items.length
   let compliant = 0, nonCompliant = 0, notApplicable = 0, answered = 0, weightedCompliant = 0
   for (const item of items) {
@@ -52,7 +79,6 @@ function calcScore(items: ChecklistItem[], responses: ResponseMap, projectId: st
   return { total, compliant, nonCompliant, notApplicable, answered, applicable, percentage, progress }
 }
 
-// Map DB row → frontend AuditProject
 function mapDbProject(p: db.DbProject): AuditProject {
   return {
     id: p.projectId,
@@ -72,7 +98,6 @@ function mapDbProject(p: db.DbProject): AuditProject {
   }
 }
 
-// Map DB row → frontend Guideline
 function mapDbGuideline(g: db.DbGuideline): Guideline {
   return {
     id: g.guidelineId,
@@ -88,7 +113,6 @@ function mapDbGuideline(g: db.DbGuideline): Guideline {
   }
 }
 
-// Map DB row → frontend ChecklistItem
 function mapDbItem(i: db.DbChecklistItem): ChecklistItem {
   return {
     id: i.itemId,
@@ -115,8 +139,10 @@ interface StoreState {
   checklistItems: ChecklistItem[]
   projects: AuditProject[]
   responses: ResponseMap
-  complianceMap: Record<string, number>  // projectId → avg score % from DB
-  projectItemCounts: Record<string, { answered: number; total: number }>  // projectId → checklist progress from DB
+  allResponses: Record<string, AuditResponse[]>
+  resolutions: Record<string, ResolutionInfo>
+  complianceMap: Record<string, number>
+  projectItemCounts: Record<string, { answered: number; total: number }>
   loading: boolean
   dbError: string | null
 
@@ -125,7 +151,6 @@ interface StoreState {
   register: (email: string, name: string, role: UserRole, password?: string) => Promise<void>
   initFromDb: () => Promise<void>
 
-  // Audit Management
   createProject: (input: {
     name: string; platform: Platform; guidelineIds: string[]
     auditorIds: string[]; dueDate?: string; notes?: string
@@ -133,17 +158,13 @@ interface StoreState {
   updateProject: (projectId: string, updates: Partial<Pick<AuditProject, 'name' | 'platform' | 'status' | 'notes' | 'dueDate' | 'scope'>>) => Promise<void>
   deleteProject: (projectId: string) => Promise<void>
 
-  // Manage Guideline Used
   syncProjectGuidelines: (projectId: string, guidelineIds: string[]) => Promise<void>
 
-  // Manage Audit Feature (scope)
   syncProjectScope: (projectId: string, features: string[]) => Promise<void>
 
-  // Manage Auditors
   addAuditorToProject: (projectId: string, userId: string) => Promise<void>
   removeAuditorFromProject: (projectId: string, userId: string) => Promise<void>
 
-  // Checklist Item management
   updateChecklistItem: (itemId: string, updates: Partial<Pick<ChecklistItem, 'text' | 'severity' | 'category'>>) => Promise<void>
   deleteChecklistItem: (itemId: string) => Promise<void>
   addChecklistItem: (projectId: string, input: {
@@ -164,21 +185,18 @@ interface StoreState {
     guidelineId: string
   }) => Promise<void>
 
-  // Submission workflow
   submitForReview: (projectId: string) => Promise<void>
   reviewSubmission: (projectId: string, approved: boolean, remarks: string) => Promise<void>
 
-  // Guideline management (admin)
   deleteGuideline: (guidelineId: string) => Promise<void>
   addSyntheticGuideline: (guideline: Guideline, items: ChecklistItem[]) => Promise<void>
   addGuidelineFromRealtime: (dbGuideline: db.DbGuideline, dbItems: db.DbChecklistItem[]) => void
 
 
-  // Audit responses
   setResponse: (projectId: string, itemId: string, guidelineId: string, status: ChecklistItemStatus, notes?: string, findings?: string) => Promise<void>
   saveFindings: (projectId: string, itemId: string, findings: string) => Promise<void>
+  resolveDisagreement: (projectId: string, itemId: string, status: ChecklistItemStatus, notes?: string) => Promise<void>
 
-  // Score helpers
   getProjectScore: (projectId: string) => ProjectScore
   getCategoryScore: (projectId: string, category: string) => ProjectScore
 }
@@ -194,6 +212,8 @@ export const useStore = create<StoreState>()(
   checklistItems: [],
   projects: [],
   responses: {},
+  allResponses: {},
+  resolutions: {},
   complianceMap: {},
   projectItemCounts: {},
   loading: false,
@@ -213,7 +233,7 @@ export const useStore = create<StoreState>()(
     }))
   },
 
-  logout: () => set({ isAuthenticated: false, authToken: null, currentUserId: '', projects: [], responses: {}, checklistItems: [] }),
+  logout: () => set({ isAuthenticated: false, authToken: null, currentUserId: '', projects: [], responses: {}, allResponses: {}, resolutions: {}, checklistItems: [] }),
 
   register: async (email, name, role, password) => {
     const id = window.crypto.randomUUID()
@@ -249,14 +269,11 @@ export const useStore = create<StoreState>()(
     if (!currentUserId) return
     set({ loading: true, dbError: null })
     try {
-      // Load users, guidelines, projects in parallel
       const [dbUsers, dbGuidelines, dbProjects] = await Promise.all([
         db.fetchAllUsers(),
         db.fetchGuidelines(),
         db.fetchUserProjects(currentUserId),
       ])
-      // Fetch compliance scores + item progress for all projects from DB in one bulk call
-      // (avoids depending on whichever single project's checklist happens to be loaded locally)
       const projectIds = (dbProjects ?? []).map((p) => p.projectId)
       const complianceSummary = await db.fetchProjectComplianceSummary(projectIds)
       const complianceMap: Record<string, number> = {}
@@ -277,25 +294,20 @@ export const useStore = create<StoreState>()(
       const guidelines = dbGuidelines.map(mapDbGuideline)
       const projects = (dbProjects ?? []).map(mapDbProject)
 
-      // Ensure current user is in users list
       const currentUser = get().users.find((u) => u.id === currentUserId)
       if (currentUser && !users.some((u) => u.id === currentUserId)) {
         users.push(currentUser)
       }
 
-      // Load global checklist items for all guidelines (for admin/guidelines view)
-      const allGuidelineItems = await Promise.all(
-        dbGuidelines.map(g => db.fetchGuidelineItems(g.guidelineId).catch(() => []))
+      const guidelinesNeedingFetch = dbGuidelines.filter((g) => !guidelineItemsCache.has(g.guidelineId))
+      await Promise.all(
+        guidelinesNeedingFetch.map(async (g) => {
+          const items = await db.fetchGuidelineItems(g.guidelineId).catch(() => [])
+          guidelineItemsCache.set(g.guidelineId, items.map(mapDbItem))
+        })
       )
-      const globalChecklistItems = allGuidelineItems.flat().map(mapDbItem)
+      const globalChecklistItems = dbGuidelines.flatMap((g) => guidelineItemsCache.get(g.guidelineId) ?? [])
 
-      // Merge rather than replace guidelines/checklistItems: Layout mounts on every
-      // protected page (including a direct URL nav / refresh straight into a project
-      // page) and calls initFromDb() unconditionally, racing against that project's own
-      // useProjectData() fetch. This only loads GLOBAL guideline templates — if it
-      // resolves after useProjectData, a blind replace would wipe out the project-specific
-      // cloned guideline/items useProjectData just wrote, leaving the audit page's
-      // category list empty even though the project itself loaded fine.
       set((state) => {
         const projectSpecificGuidelines = state.guidelines.filter((g) => g.projectId)
         const projectSpecificItems = state.checklistItems.filter(
@@ -323,13 +335,11 @@ export const useStore = create<StoreState>()(
       dueDate,
       status: 'in_progress',
     })
-    // Add head auditor as member + selected auditors
     const allMembers = Array.from(new Set([currentUserId, ...auditorIds]))
     await Promise.all([
       db.syncProjectMembers(projectId, allMembers),
       db.syncProjectGuidelines(projectId, guidelineIds),
     ])
-    // Refresh projects
     const dbProjects = await db.fetchUserProjects(currentUserId)
     set({ projects: (dbProjects ?? []).map(mapDbProject) })
     return projectId
@@ -465,6 +475,7 @@ export const useStore = create<StoreState>()(
 
   deleteGuideline: async (guidelineId) => {
     await db.deleteGuideline(guidelineId)
+    guidelineItemsCache.delete(guidelineId)
     set((state) => ({
       guidelines: state.guidelines.filter((g) => g.id !== guidelineId),
       checklistItems: state.checklistItems.filter((ci) => ci.guidelineId !== guidelineId),
@@ -474,6 +485,7 @@ export const useStore = create<StoreState>()(
   addGuidelineFromRealtime: (dbGuideline, dbItems) => {
     const mapped = mapDbGuideline({ ...dbGuideline, itemCount: dbItems.length })
     const mappedItems = dbItems.map(mapDbItem)
+    guidelineItemsCache.set(mapped.id, mappedItems)
     set((state) => {
       if (state.guidelines.some((g) => g.id === mapped.id)) return state
       return {
@@ -511,6 +523,7 @@ export const useStore = create<StoreState>()(
       }))
     })
 
+    guidelineItemsCache.set(guideline.id, items)
     set((state) => ({
       guidelines: [guideline, ...state.guidelines],
       checklistItems: [...items, ...state.checklistItems],
@@ -528,35 +541,63 @@ export const useStore = create<StoreState>()(
     })
   },
 
-  setResponse: async (projectId, itemId, guidelineId, status, notes = '', findings) => {
+  resolveDisagreement: async (projectId, itemId, status, notes = '') => {
     const { currentUserId } = get()
-    // Optimistic update
+    await db.resolveDisagreement(projectId, itemId, status, notes)
     set((state) => {
       const key = rkey(projectId, itemId)
-      const existing = state.responses[key]
+      const resolution: ResolutionInfo = {
+        status, resolvedBy: currentUserId, notes,
+        resolvedAt: new Date().toISOString().split('T')[0],
+      }
+      const rows = state.allResponses[key] ?? []
+      const reconciled = reconcileResponse(rows, status)
       return {
-        responses: {
-          ...state.responses,
-          [key]: {
-            id: existing?.id ?? `r_${Date.now()}`,
-            projectId, checklistItemId: itemId,
-            status, notes,
-            findings: findings ?? existing?.findings,
-            auditorId: currentUserId,
-            updatedAt: new Date().toISOString().split('T')[0],
-          },
-        },
+        resolutions: { ...state.resolutions, [key]: resolution },
+        responses: reconciled ? { ...state.responses, [key]: reconciled } : state.responses,
       }
     })
-    // Persist to DB + auto-transition draft → in_progress + update complianceMap
-    try {
-      await db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes)
+    const updated = await db.fetchProjectComplianceSummary([projectId])
+    if (updated[projectId] !== undefined) {
+      set((state) => ({
+        complianceMap: { ...state.complianceMap, [projectId]: updated[projectId].percentage },
+        projectItemCounts: {
+          ...state.projectItemCounts,
+          [projectId]: { answered: updated[projectId].answered, total: updated[projectId].total },
+        },
+      }))
+    }
+  },
 
-      // Refresh complianceMap + projectItemCounts from DB (fetchProjectComplianceSummary reads
-      // result values directly and is not affected by the global-vs-project item ID mismatch
-      // in the RPC count query)
+  setResponse: async (projectId, itemId, guidelineId, status, notes = '', findings) => {
+    const { currentUserId } = get()
+    set((state) => {
+      const key = rkey(projectId, itemId)
+      const existingRows = state.allResponses[key] ?? []
+      const myExisting = existingRows.find((r) => r.auditorId === currentUserId)
+      const myRow: AuditResponse = {
+        id: myExisting?.id ?? `r_${Date.now()}`,
+        projectId, checklistItemId: itemId,
+        status, notes,
+        findings: findings ?? myExisting?.findings,
+        auditorId: currentUserId,
+        updatedAt: new Date().toISOString().split('T')[0],
+      }
+      const updatedRows = [...existingRows.filter((r) => r.auditorId !== currentUserId), myRow]
+      const reconciled = reconcileResponse(updatedRows, state.resolutions[key]?.status)
+      return {
+        allResponses: { ...state.allResponses, [key]: updatedRows },
+        responses: reconciled ? { ...state.responses, [key]: reconciled } : state.responses,
+      }
+    })
+    try {
+      const key = rkey(projectId, itemId)
+      await serializeByKey(key, () => db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes))
+
+      const myGen = (complianceRequestGen[projectId] ?? 0) + 1
+      complianceRequestGen[projectId] = myGen
       const updated = await db.fetchProjectComplianceSummary([projectId])
-      if (updated[projectId] !== undefined) {
+      if (updated[projectId] !== undefined && complianceRequestGen[projectId] === myGen) {
         set((state) => ({
           complianceMap: { ...state.complianceMap, [projectId]: updated[projectId].percentage },
           projectItemCounts: {
@@ -566,11 +607,10 @@ export const useStore = create<StoreState>()(
         }))
       }
 
-      // Auto-advance project from draft → in_progress the moment the first response is saved
       const { projects } = get()
       const proj = projects.find((p) => p.id === projectId)
       if (proj?.status === 'draft') {
-        await db.updateProject(projectId, { projectStatus: 'in_progress' })
+        await db.activateProject(projectId)
         set((state) => ({
           projects: state.projects.map((p) =>
             p.id === projectId ? { ...p, status: 'in_progress' as AuditStatus } : p
@@ -603,7 +643,6 @@ export const useStore = create<StoreState>()(
     }),
     {
       name: 'safetyaudit-session',
-      // Only persist auth — all other data is re-fetched from DB on login
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
         authToken: state.authToken,

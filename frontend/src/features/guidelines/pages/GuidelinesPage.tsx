@@ -156,7 +156,6 @@ export default function GuidelinesPage() {
 
   return (
     <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-8">
-      {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -182,7 +181,6 @@ export default function GuidelinesPage() {
           )}
         </div>
 
-        {/* Upload button — admin only */}
         {isAdmin && (
           <Button variant="primary" size="md" onClick={() => navigate('/generator')}>
             <UploadSimple size={14} weight="bold" />
@@ -191,7 +189,6 @@ export default function GuidelinesPage() {
         )}
       </motion.div>
 
-      {/* Admin cards */}
       {isAdmin && (
         <motion.div
           initial={{ opacity: 0, y: 12 }}
@@ -245,7 +242,6 @@ export default function GuidelinesPage() {
         )}
       </div>
 
-      {/* Guidelines list */}
       {loading && activeGuidelines.length === 0 ? (
         <GuidelinesSkeleton />
       ) : (
@@ -282,7 +278,6 @@ export default function GuidelinesPage() {
                 variants={cardVar}
                 className="bg-white border border-slate-200 rounded-xl overflow-hidden"
               >
-                {/* Guideline header */}
                 <div className="flex items-center">
                   <button
                     type="button"
@@ -330,7 +325,6 @@ export default function GuidelinesPage() {
                     </motion.div>
                   </button>
 
-                  {/* Admin delete button */}
                   {isAdmin && (
                     <div className="px-4 border-l border-slate-100 shrink-0">
                       <button
@@ -346,7 +340,6 @@ export default function GuidelinesPage() {
                   )}
                 </div>
 
-                {/* Delete confirmation */}
                 <AnimatePresence>
                   {isConfirmingDelete && (
                     <motion.div
@@ -370,7 +363,6 @@ export default function GuidelinesPage() {
                   )}
                 </AnimatePresence>
 
-                {/* Expanded content */}
                 <AnimatePresence>
                   {isOpen && (
                     <motion.div
@@ -486,7 +478,6 @@ export default function GuidelinesPage() {
         </motion.div>
       )}
 
-      {/* Reference & Help Text Modal */}
       <ChecklistItemDetailModal
         item={selectedItemForModal}
         tab={itemModalTab}

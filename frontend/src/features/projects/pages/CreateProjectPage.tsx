@@ -55,17 +55,14 @@ export default function CreateProjectPage() {
 
   const otherAuditors = users.filter((u) => u.id !== currentUserId && u.role === 'auditor')
 
-  // Team member search state
   const [memberSearchQuery, setMemberSearchQuery] = useState('')
 
-  // Auditors not yet added, filtered by search
   const searchableAuditors = otherAuditors.filter(
     (u) =>
       !selectedAuditors.includes(u.id) &&
       u.name.toLowerCase().includes(memberSearchQuery.toLowerCase()),
   )
 
-  // Already selected auditor objects
   const selectedAuditorUsers = otherAuditors.filter((u) => selectedAuditors.includes(u.id))
 
   if (currentUser?.role !== 'head_auditor') {
@@ -166,7 +163,6 @@ export default function CreateProjectPage() {
 
   return (
     <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-10">
-      {/* Back link */}
       <Link
         to="/projects"
         className="inline-flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-600 transition-colors mb-6 group"
@@ -176,7 +172,6 @@ export default function CreateProjectPage() {
       </Link>
 
       <motion.div variants={container} initial="hidden" animate="show">
-        {/* Page header */}
         <motion.div variants={item} className="mb-8">
           <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
             Create New Audit
@@ -188,10 +183,8 @@ export default function CreateProjectPage() {
 
         <form onSubmit={handleSubmit} noValidate>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-7">
-            {/* Left — main fields */}
             <div className="lg:col-span-2 space-y-7">
 
-              {/* Project Name */}
               <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6">
                 <label htmlFor="project-name" className="block text-base font-semibold text-slate-800 mb-1.5">
                   Project Name <span className="text-rose-400">*</span>
@@ -216,7 +209,6 @@ export default function CreateProjectPage() {
                 />
               </motion.div>
 
-              {/* Platform selection */}
               <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6 ">
                 <fieldset ref={platformRef} className="border-0 p-0 m-0">
                   <div className="flex items-center justify-between mb-4">
@@ -275,7 +267,6 @@ export default function CreateProjectPage() {
                       )
                     })}
 
-                    {/* Other — custom platform */}
                     <motion.button
                       type="button"
                       aria-pressed={isOther}
@@ -306,7 +297,6 @@ export default function CreateProjectPage() {
                     </motion.button>
                   </div>
 
-                  {/* Custom platform name input */}
                   {isOther && (
                     <div className="mt-3">
                       <label htmlFor="custom-platform" className="sr-only">Custom platform name</label>
@@ -327,7 +317,6 @@ export default function CreateProjectPage() {
                 </fieldset>
               </motion.div>
 
-              {/* Guidelines */}
               <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6">
                 <fieldset ref={guidelinesRef} className="border-0 p-0 m-0">
                 <div className="flex items-center justify-between mb-1.5">
@@ -379,7 +368,6 @@ export default function CreateProjectPage() {
                         ].join(' ')}
                       >
                         <div className="flex items-start gap-4">
-                          {/* Icon */}
                           <div className={[
                             'w-10 h-10 rounded-lg flex items-center justify-center shrink-0 mt-0.5',
                             checked ? 'bg-blue-600' : 'bg-slate-100',
@@ -387,7 +375,6 @@ export default function CreateProjectPage() {
                             <BookOpen size={18} className={checked ? 'text-white' : 'text-slate-500'} />
                           </div>
 
-                          {/* Info */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap mb-0.5">
                               <p className={`text-sm font-bold leading-tight ${checked ? 'text-blue-800' : 'text-slate-800'}`}>
@@ -404,7 +391,6 @@ export default function CreateProjectPage() {
                               </span>
                             </div>
                             <p className="text-xs text-slate-500 leading-relaxed mb-2">{g.description}</p>
-                            {/* Category chips */}
                             {g.categories.length > 0 && (
                               <div className="flex flex-wrap gap-1.5">
                                 {Array.from(new Set(g.categories.map((cat) => cat.split(' > ')[0]))).map((section) => (
@@ -419,7 +405,6 @@ export default function CreateProjectPage() {
                             )}
                           </div>
 
-                          {/* Right: item count + checkbox */}
                           <div className="shrink-0 flex flex-col items-end gap-2">
                             <div className="text-right">
                               <p className={`font-mono text-base font-bold tabular-nums ${checked ? 'text-blue-700' : 'text-slate-700'}`}>
@@ -442,7 +427,6 @@ export default function CreateProjectPage() {
                 </fieldset>
               </motion.div>
 
-              {/* Notes */}
               <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6 ">
                 <label htmlFor="project-notes" className="block text-base font-semibold text-slate-800 mb-1.5">
                   Notes
@@ -462,9 +446,7 @@ export default function CreateProjectPage() {
               </motion.div>
             </div>
 
-            {/* Right — team + due date + summary */}
             <div className="space-y-5">
-              {/* Team */}
               <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6">
                 <div className="flex items-center justify-between mb-1">
                   <h2 className="text-base font-semibold text-slate-800">Team Members</h2>
@@ -476,7 +458,6 @@ export default function CreateProjectPage() {
                   You are the head auditor. Search and add auditors to collaborate on this project.
                 </p>
 
-                {/* Current user — always included */}
                 <div className="flex items-center gap-3 px-3 py-3 bg-blue-50 border border-blue-100 rounded-xl mb-3">
                   <AuditorAvatar user={currentUser} size="md" />
                   <div className="flex-1 min-w-0">
@@ -488,7 +469,6 @@ export default function CreateProjectPage() {
                   </div>
                 </div>
 
-                {/* Added auditors list */}
                 {selectedAuditorUsers.length > 0 && (
                   <div className="space-y-2 mb-3">
                     {selectedAuditorUsers.map((u) => (
@@ -512,9 +492,7 @@ export default function CreateProjectPage() {
                   </div>
                 )}
 
-                {/* Add Member search — always visible */}
                 <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-                  {/* Search input */}
                   <div className="flex items-center gap-2 px-3 py-2.5 border-b border-slate-100">
                     <MagnifyingGlass size={15} className="text-slate-400 shrink-0" />
                     <label htmlFor="member-search" className="sr-only">Search auditors to add</label>
@@ -538,7 +516,6 @@ export default function CreateProjectPage() {
                     )}
                   </div>
 
-                  {/* Results */}
                   {searchableAuditors.length === 0 ? (
                     <p className="px-4 py-4 text-sm text-slate-400 text-center">
                       {memberSearchQuery ? 'No auditors match that name.' : 'All auditors have been added.'}
@@ -570,7 +547,6 @@ export default function CreateProjectPage() {
               </motion.div>
 
 
-              {/* Due date */}
               <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6">
                 <label htmlFor="due-date" className="block text-base font-semibold text-slate-800 mb-1">
                   Due Date
@@ -587,7 +563,6 @@ export default function CreateProjectPage() {
                 />
               </motion.div>
 
-              {/* Summary card */}
               <motion.div variants={item} className="bg-white border border-slate-200 rounded-xl p-6">
                 <p className="text-xs text-slate-400 font-mono tracking-widest uppercase mb-4">Summary</p>
                 <div className="space-y-3 divide-y divide-slate-100">
@@ -636,7 +611,6 @@ export default function CreateProjectPage() {
                 </div>
               </motion.div>
 
-              {/* Actions */}
               <motion.div variants={item} className="flex flex-col gap-2.5">
                 {errorList.length > 0 && (
                   <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
