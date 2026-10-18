@@ -101,7 +101,13 @@ function SaveIndicator({ state }: { state?: SaveState }) {
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.05, delayChildren: 0.05 } } }
 const rowVar = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 100, damping: 22 } } }
 
+// Remount per project so local drafts (notes, findings, evidence, edits) never leak across :id changes.
 export default function AuditPage() {
+  const { id } = useParams<{ id: string }>()
+  return <AuditPageContent key={id} />
+}
+
+function AuditPageContent() {
   const { id } = useParams<{ id: string }>()
   const {
     projects, guidelines, users, currentUserId,
@@ -148,7 +154,7 @@ export default function AuditPage() {
     if (projectGuidelines.length > 0 && !projectGuidelines.find((g) => g.id === activeGuidelineTab)) {
       setActiveGuidelineTab(projectGuidelines[0].id)
     }
-  }, [projectGuidelines.length])
+  }, [projectGuidelines, activeGuidelineTab])
 
   const allCategories = useMemo(() => {
     const result: { category: string; guidelineId: string; enabled: boolean }[] = []
@@ -246,6 +252,7 @@ export default function AuditPage() {
   const [addingItem, setAddingItem] = useState(false)
   const [addItemError, setAddItemError] = useState<string | null>(null)
   const [itemActionError, setItemActionError] = useState<string | null>(null)
+  const [itemActionPending, setItemActionPending] = useState(false)
   const [manageAuditorsError, setManageAuditorsError] = useState<string | null>(null)
   const [scopeError, setScopeError] = useState<string | null>(null)
 
@@ -304,6 +311,7 @@ export default function AuditPage() {
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
   const [selectedItemForModal, setSelectedItemForModal] = useState<ChecklistItem | null>(null)
@@ -439,7 +447,7 @@ export default function AuditPage() {
         }
         return next
       })
-    }).catch(() => {})
+    }).catch(() => { if (!cancelled) setEvidenceError("Couldn't load evidence images for this category.") })
     return () => { cancelled = true }
   }, [id, selectedCategory, checklistItems])
 
@@ -465,7 +473,7 @@ export default function AuditPage() {
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? [])
-    if (!files.length || !pendingEvidenceItemId) return
+    if (!files.length || !pendingEvidenceItemId || answersLocked) return
     const itemId = pendingEvidenceItemId
     setPendingEvidenceItemId(null)
 
@@ -665,7 +673,7 @@ export default function AuditPage() {
     setAddingItem(true)
     setAddItemError(null)
     try {
-      const catConfig = allCategories.find((c) => c.category === selectedCategory)
+      const catConfig = activeGuidelineCategories.find((c) => c.category === selectedCategory)
       const guidelineId = catConfig?.guidelineId || project?.guidelineIds?.[0]
       if (!guidelineId) {
         throw new Error('No guideline associated with this category or project.')
@@ -690,7 +698,7 @@ helpText: newItemHelp.trim() || undefined,
       setShowAddItemModal(false)
       reload()
     } catch (err) {
-      setAddItemError(String(err))
+      setAddItemError(unwrapApiError(err))
     } finally {
       setAddingItem(false)
     }
@@ -715,7 +723,7 @@ helpText: newItemHelp.trim() || undefined,
       await reviewSubmission(id!, true, reviewRemarks)
       setShowReviewPanel(false)
     } catch (err) {
-      setReviewError(err instanceof Error ? err.message : 'Failed to approve this audit. Please try again.')
+      setReviewError(err instanceof Error ? unwrapApiError(err) : 'Failed to approve this audit. Please try again.')
     } finally {
       setSubmitting(false)
     }
@@ -728,14 +736,14 @@ helpText: newItemHelp.trim() || undefined,
       await reviewSubmission(id!, false, reviewRemarks)
       setShowReviewPanel(false)
     } catch (err) {
-      setReviewError(err instanceof Error ? err.message : 'Failed to reject this audit. Please try again.')
+      setReviewError(err instanceof Error ? unwrapApiError(err) : 'Failed to reject this audit. Please try again.')
     } finally {
       setSubmitting(false)
     }
   }
 
   function startEditItem(itemId: string, text: string, severity: Severity) {
-    setEditingItemId(itemId); setEditText(text); setEditSeverity(severity)
+    setEditingItemId(itemId); setEditText(text); setEditSeverity(severity); setItemActionError(null)
   }
 
   async function handleAddAuditor(userId: string) {
@@ -757,25 +765,32 @@ helpText: newItemHelp.trim() || undefined,
   }
 
   async function saveEditItem() {
-    if (!editingItemId) return
+    if (!editingItemId || !editText.trim() || itemActionPending) return
     setItemActionError(null)
+    setItemActionPending(true)
     try {
       await updateChecklistItem(editingItemId, { text: editText, severity: editSeverity })
       setEditingItemId(null)
       reload()
     } catch (err) {
       setItemActionError(unwrapApiError(err))
+    } finally {
+      setItemActionPending(false)
     }
   }
 
   async function handleDeleteItem(itemId: string) {
+    if (itemActionPending) return
     setItemActionError(null)
+    setItemActionPending(true)
     try {
       await deleteChecklistItem(itemId)
       setConfirmDeleteItemId(null)
       reload()
     } catch (err) {
       setItemActionError(unwrapApiError(err))
+    } finally {
+      setItemActionPending(false)
     }
   }
 
@@ -804,12 +819,15 @@ helpText: newItemHelp.trim() || undefined,
 
   async function handleDeleteProject() {
     setDeleting(true)
+    setDeleteError(null)
     try {
       await deleteProject(id!)
+      setShowDeleteConfirm(false)
       navigate('/projects')
+    } catch (err) {
+      setDeleteError(unwrapApiError(err))
     } finally {
       setDeleting(false)
-      setShowDeleteConfirm(false)
     }
   }
 
@@ -854,7 +872,7 @@ helpText: newItemHelp.trim() || undefined,
                   <Button variant="secondary" size="sm" onClick={() => setShowManageAuditors((v) => !v)}>
                     <UserPlus size={13} /> Manage Auditors
                   </Button>
-                  <Button variant="danger-outline" size="sm" onClick={() => setShowDeleteConfirm(true)}>
+                  <Button variant="danger-outline" size="sm" onClick={() => { setDeleteError(null); setShowDeleteConfirm(true) }}>
                     <Trash size={13} /> Delete Project
                   </Button>
                 </>
@@ -1303,11 +1321,11 @@ helpText: newItemHelp.trim() || undefined,
           <div className="flex gap-2 mb-4">
             <label htmlFor="scope-input" className="sr-only">Add a feature to the audit scope</label>
             <input id="scope-input" value={scopeInput} onChange={(e) => setScopeInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && scopeInput.trim()) { setScopeFeatures((p) => [...p, scopeInput.trim()]); setScopeInput('') } }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && scopeInput.trim()) { const v = scopeInput.trim(); setScopeFeatures((p) => p.includes(v) ? p : [...p, v]); setScopeInput('') } }}
               placeholder="e.g. Login, Data Sharing, Privacy Settings…"
               className="flex-1 text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600" />
             <Button variant="neutral" size="md"
-              onClick={() => { if (scopeInput.trim()) { setScopeFeatures((p) => [...p, scopeInput.trim()]); setScopeInput('') } }}>
+              onClick={() => { if (scopeInput.trim()) { const v = scopeInput.trim(); setScopeFeatures((p) => p.includes(v) ? p : [...p, v]); setScopeInput('') } }}>
               Add
             </Button>
           </div>
@@ -1430,10 +1448,11 @@ helpText: newItemHelp.trim() || undefined,
                                       <input
                                         type="checkbox"
                                         checked={sub.enabled}
+                                        disabled={togglingCategory}
                                         aria-label={`${sub.enabled ? 'Disable' : 'Enable'} category ${sub.subcategoryName}`}
                                         onChange={async (e) => {
                                           e.stopPropagation()
-                                          if (!sub.guidelineId) return
+                                          if (!sub.guidelineId || togglingCategory) return
                                           setCategoryError(null)
                                           if (sub.enabled) {
                                             setPendingCategoryToggle({
@@ -1443,6 +1462,7 @@ helpText: newItemHelp.trim() || undefined,
                                             })
                                             return
                                           }
+                                          setTogglingCategory(true)
                                           try {
                                             await toggleProjectChecklistCategory(id!, {
                                               category: sub.originalCategory,
@@ -1452,6 +1472,8 @@ helpText: newItemHelp.trim() || undefined,
                                             reload()
                                           } catch {
                                             setCategoryError('Failed to update this category. Please try again.')
+                                          } finally {
+                                            setTogglingCategory(false)
                                           }
                                         }}
                                         className="w-3.5 h-3.5 rounded text-blue-600 border-slate-300 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
@@ -1505,7 +1527,7 @@ helpText: newItemHelp.trim() || undefined,
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-xs text-slate-400 font-sans tabular-nums">{categoryItems.length} item{categoryItems.length !== 1 ? 's' : ''}</span>
                       {isHeadAuditor && selectedCategory && (
-                        <Button variant="primary" size="xs" onClick={() => setShowAddItemModal(true)}>
+                        <Button variant="primary" size="xs" onClick={() => { setAddItemError(null); setShowAddItemModal(true) }}>
                           <Plus size={12} weight="bold" /> Add Item
                         </Button>
                       )}
@@ -1627,10 +1649,10 @@ helpText: newItemHelp.trim() || undefined,
                                 </p>
                               )}
                               <div className="flex items-center gap-3">
-                                <Button variant="primary" size="sm" onClick={saveEditItem}>
-                                  <CheckIcon size={12} weight="bold" /> Save
+                                <Button variant="primary" size="sm" onClick={saveEditItem} disabled={itemActionPending || !editText.trim()}>
+                                  {itemActionPending ? <Spinner size={12} className="animate-spin" /> : <CheckIcon size={12} weight="bold" />} Save
                                 </Button>
-                                <Button variant="neutral" size="sm" onClick={() => setEditingItemId(null)}>
+                                <Button variant="neutral" size="sm" disabled={itemActionPending} onClick={() => { setEditingItemId(null); setItemActionError(null) }}>
                                   <XIcon size={12} weight="bold" /> Cancel
                                 </Button>
                               </div>
@@ -1708,7 +1730,7 @@ helpText: newItemHelp.trim() || undefined,
                                       title="Edit" aria-label="Edit checklist item">
                                       <PencilSimple size={14} />
                                     </button>
-                                    <button type="button" onClick={() => setConfirmDeleteItemId(ci.id)}
+                                    <button type="button" onClick={() => { setConfirmDeleteItemId(ci.id); setItemActionError(null) }}
                                       className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"
                                       title="Delete" aria-label="Delete checklist item">
                                       <Trash size={14} />
@@ -1736,8 +1758,10 @@ helpText: newItemHelp.trim() || undefined,
                                 </p>
                               )}
                               <div className="flex items-center gap-2">
-                                <Button variant="danger" size="xs" onClick={() => handleDeleteItem(ci.id)}>Delete</Button>
-                                <Button variant="secondary" size="xs" onClick={() => { setConfirmDeleteItemId(null); setItemActionError(null) }}>Cancel</Button>
+                                <Button variant="danger" size="xs" disabled={itemActionPending} onClick={() => handleDeleteItem(ci.id)}>
+                                  {itemActionPending && <Spinner size={12} className="animate-spin" />}Delete
+                                </Button>
+                                <Button variant="secondary" size="xs" disabled={itemActionPending} onClick={() => { setConfirmDeleteItemId(null); setItemActionError(null) }}>Cancel</Button>
                               </div>
                             </div>
                           )}
@@ -1818,6 +1842,7 @@ helpText: newItemHelp.trim() || undefined,
                                 value={resolveNotes[ci.id] ?? ''}
                                 onChange={(e) => setResolveNotes((prev) => ({ ...prev, [ci.id]: e.target.value }))}
                                 placeholder="Optional note explaining the resolution…"
+                                aria-label="Resolution note"
                                 rows={2}
                                 className="w-full text-xs text-slate-700 placeholder:text-slate-400 bg-white border border-amber-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-transparent"
                               />
@@ -1929,7 +1954,7 @@ helpText: newItemHelp.trim() || undefined,
                                     >
                                       <img src={img.url} alt={img.name} className="w-full h-full object-cover" />
                                     </button>
-                                    {isAuditor && img.auditorId === currentUserId && (
+                                    {isAuditor && !answersLocked && img.auditorId === currentUserId && (
                                       <button
                                         type="button"
                                         onClick={() => removeEvidence(ci.id, img)}
@@ -1943,7 +1968,7 @@ helpText: newItemHelp.trim() || undefined,
                                     <p className="absolute bottom-0 left-0 right-0 text-2xs text-white bg-black/50 px-1 py-0.5 truncate pointer-events-none">{img.name}</p>
                                   </div>
                                 ))}
-                                {isAuditor && (
+                                {isAuditor && !answersLocked && (
                                   <button
                                     type="button"
                                     onClick={() => handleImageClick(ci.id)}
@@ -2167,6 +2192,11 @@ helpText: newItemHelp.trim() || undefined,
         <p className="text-sm text-slate-500 text-center mb-6">
           Are you sure you want to delete <span className="font-semibold text-slate-700">{project.name}</span>? This action cannot be undone.
         </p>
+        {deleteError && (
+          <p role="alert" className="flex items-center gap-1.5 text-xs text-rose-600 mb-4">
+            <WarningCircle size={13} weight="fill" className="shrink-0" /> {deleteError}
+          </p>
+        )}
         <div className="flex gap-3">
           <Button variant="neutral" size="md" fullWidth disabled={deleting} onClick={() => setShowDeleteConfirm(false)}>
             Cancel

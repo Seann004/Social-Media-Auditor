@@ -429,8 +429,8 @@ export async function fetchAuditReports(
   let query = ''
   if (filters?.projectStatusFilter) query += `&projectStatusFilter=${filters.projectStatusFilter}`
   if (filters?.search) query += `&search=${encodeURIComponent(filters.search)}`
-  if (filters?.dateFrom) query += `&dateFrom=${filters.dateFrom}`
-  if (filters?.dateTo) query += `&dateTo=${filters.dateTo}`
+  if (filters?.dateFrom) query += `&dateFrom=${encodeURIComponent(filters.dateFrom)}`
+  if (filters?.dateTo) query += `&dateTo=${encodeURIComponent(filters.dateTo)}`
   return request<DbAuditReport[]>(`/reports?${query.replace(/^&/, '')}`)
 }
 

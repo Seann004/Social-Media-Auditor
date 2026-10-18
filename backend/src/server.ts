@@ -110,6 +110,9 @@ app.post('/api/users', optionalAuth, async (req, res) => {
     if (!userId || !userName || !userEmail || !userPassword) {
       return res.status(400).json({ error: 'userId, userName, userEmail and userPassword are required.' })
     }
+    if (typeof userId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+      return res.status(400).json({ error: 'userId must be a UUID.' })
+    }
     if (!['admin', 'head_auditor', 'auditor'].includes(role)) {
       return res.status(400).json({ error: 'role must be one of admin, head_auditor, auditor.' })
     }
@@ -505,6 +508,9 @@ app.post('/api/projects/:id/submit', requireAuth, requireRole('auditor'), requir
 app.post('/api/projects/:id/review', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
   try {
     const { approved, remarks } = req.body
+    if (typeof approved !== 'boolean') {
+      return res.status(400).json({ error: 'approved (boolean) is required.' })
+    }
     await db.reviewSubmission(req.params.id, approved, remarks)
     res.json({ success: true })
   } catch (error) {
@@ -572,8 +578,11 @@ async function groqFetchWithRetry(url: string, options: RequestInit, retries = 3
 app.post('/api/generator/process-chunk', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { textChunk, platform } = req.body
-    if (!textChunk) {
+    if (!textChunk || typeof textChunk !== 'string') {
       return res.status(400).json({ error: 'textChunk is required' })
+    }
+    if (platform !== undefined && typeof platform !== 'string') {
+      return res.status(400).json({ error: 'platform must be a string' })
     }
 
     const apiKey = process.env.GROQ_API_KEY
@@ -725,8 +734,11 @@ You MUST return your output in JSON format matching this EXACT schema:
 app.post('/api/generator/merge-items', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { items, platform } = req.body
-    if (!items || !Array.isArray(items)) {
+    if (!items || !Array.isArray(items) || !items.every((i: any) => i && typeof i === 'object' && (i.text === undefined || typeof i.text === 'string'))) {
       return res.status(400).json({ error: 'items array is required' })
+    }
+    if (platform !== undefined && typeof platform !== 'string') {
+      return res.status(400).json({ error: 'platform must be a string' })
     }
 
     if (items.length === 0) {

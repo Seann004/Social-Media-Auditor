@@ -74,7 +74,7 @@ function SkeletonRows() {
 }
 
 export default function ProjectsPage() {
-  const { projects, users, guidelines, complianceMap, projectItemCounts, currentUserId, initFromDb, loading } = useStore()
+  const { projects, users, guidelines, complianceMap, projectItemCounts, currentUserId, initFromDb, loading, dbError } = useStore()
   const [filter, setFilter] = useState<Filter>('all')
   const currentUser = users.find((u) => u.id === currentUserId)
   const isHeadAuditor = currentUser?.role === 'head_auditor'
@@ -129,6 +129,19 @@ export default function ProjectsPage() {
           </Link>
         )}
       </motion.div>
+
+      {dbError && (
+        <div role="alert" className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <span>Couldn't load audits: {dbError}</span>
+          <button
+            type="button"
+            onClick={() => initFromDb()}
+            className="shrink-0 text-xs font-semibold text-rose-700 hover:text-rose-800 underline rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <motion.div
         initial={{ opacity: 0 }}
@@ -274,7 +287,7 @@ export default function ProjectsPage() {
                         <>
                           <p className="text-2xs text-slate-400">Due</p>
                           <p className="text-xs text-slate-600 font-medium">
-                            {new Date(project.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                            {new Date(`${project.dueDate.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
                           </p>
                         </>
                       ) : (

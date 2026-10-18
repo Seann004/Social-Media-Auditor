@@ -106,8 +106,8 @@ function ScoreBar({ pct, color }: { pct: number; color: string }) {
 }
 
 export default function DashboardPage() {
-  const { projects, users, currentUserId, guidelines, complianceMap, initFromDb, loading } = useStore()
-  const currentUser = users.find((u) => u.id === currentUserId) ?? users[0]
+  const { projects, users, currentUserId, guidelines, complianceMap, initFromDb, loading, dbError } = useStore()
+  const currentUser = users.find((u) => u.id === currentUserId)
   const location = useLocation()
 
   useEffect(() => { initFromDb() }, [location.key])
@@ -143,9 +143,11 @@ export default function DashboardPage() {
     .slice(0, 3)
   const auditTeam = users.filter((u) => u.role !== 'admin')
 
-  const todayIso = new Date().toISOString().split('T')[0]
+  // Compare due dates against the user's local calendar day (not UTC).
+  const now = new Date()
+  const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   const overdueCount = visibleProjects.filter(
-    (p) => p.dueDate && p.dueDate < todayIso && p.status !== 'completed',
+    (p) => p.dueDate && p.dueDate.slice(0, 10) < todayLocal && p.status !== 'completed',
   ).length
   const awaitingReviewCount = statusCounts.under_review
 
@@ -167,7 +169,7 @@ export default function DashboardPage() {
       <motion.div variants={item} className="mb-8 flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
-            {greeting}, {currentUser.name.split(' ')[0]}.
+            {greeting}{currentUser ? `, ${currentUser.name.split(' ')[0]}` : ''}.
           </h1>
           <p className="text-slate-500 text-base mt-1.5 leading-relaxed">
             {activeProjects.length} audit{activeProjects.length !== 1 ? 's' : ''} in progress
@@ -181,6 +183,19 @@ export default function DashboardPage() {
           </Link>
         )}
       </motion.div>
+
+      {dbError && (
+        <div role="alert" className="mb-6 flex items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <span>Couldn't load your audits: {dbError}</span>
+          <button
+            type="button"
+            onClick={() => initFromDb()}
+            className="shrink-0 text-xs font-semibold text-rose-700 hover:text-rose-800 underline rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <motion.div variants={item} className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
 
@@ -292,9 +307,11 @@ export default function DashboardPage() {
             {recentProjects.length === 0 ? (
               <div className="px-6 py-12 text-center">
                 <p className="text-slate-400 text-sm">No audits yet.</p>
-                <Link to="/projects" className="text-blue-600 text-sm font-medium mt-1 inline-block hover:text-blue-700">
-                  Create your first audit
-                </Link>
+                {isHeadAuditor && (
+                  <Link to="/projects/new" className="text-blue-600 text-sm font-medium mt-1 inline-block hover:text-blue-700">
+                    Create your first audit
+                  </Link>
+                )}
               </div>
             ) : (
               recentProjects.map((project) => {
@@ -404,8 +421,10 @@ export default function DashboardPage() {
                 </div>
               ) : (
                 upcomingDeadlines.map((p) => {
-                  const due = new Date(p.dueDate!)
-                  const daysLeft = Math.ceil((due.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                  // Parse as a local calendar date and count whole days from local today,
+                  // so "due today" isn't shown as overdue and agrees with the Overdue count.
+                  const due = new Date(`${p.dueDate!.slice(0, 10)}T00:00:00`)
+                  const daysLeft = Math.round((due.getTime() - new Date(`${todayLocal}T00:00:00`).getTime()) / (1000 * 60 * 60 * 24))
                   const urgent = daysLeft <= 7
                   return (
                     <Link key={p.id} to={`/projects/${p.id}`}
@@ -418,7 +437,7 @@ export default function DashboardPage() {
                         </p>
                       </div>
                       <span className={`text-2xs font-mono font-medium ${urgent ? 'text-rose-500' : 'text-slate-400'}`}>
-                        {daysLeft > 0 ? `${daysLeft}d` : 'overdue'}
+                        {daysLeft > 0 ? `${daysLeft}d` : daysLeft === 0 ? 'today' : 'overdue'}
                       </span>
                     </Link>
                   )

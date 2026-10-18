@@ -48,6 +48,9 @@ export default function CreateProjectPage() {
   const [errors, setErrors] = useState<{ name?: string; platform?: string; guidelines?: string }>({})
   const [submitted, setSubmitted] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  // Declared before the role early-return below so hook order is stable across renders.
+  const [creating, setCreating] = useState(false)
+  const creatingRef = useRef(false)
 
   const nameRef = useRef<HTMLInputElement>(null)
   const platformRef = useRef<HTMLFieldSetElement>(null)
@@ -112,10 +115,9 @@ export default function CreateProjectPage() {
     if (target instanceof HTMLInputElement) target.focus({ preventScroll: true })
   }
 
-  const [creating, setCreating] = useState(false)
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (creatingRef.current) return
     setSubmitted(true)
     setCreateError(null)
     const validationErrors = validate()
@@ -123,6 +125,7 @@ export default function CreateProjectPage() {
       focusFirstInvalid(validationErrors)
       return
     }
+    creatingRef.current = true
     setCreating(true)
     const effectivePlatform = platform === 'Other' ? customPlatform.trim() : platform
     try {
@@ -142,6 +145,7 @@ export default function CreateProjectPage() {
           : "Couldn't create this audit project. Check your connection and try again.",
       )
     } finally {
+      creatingRef.current = false
       setCreating(false)
     }
   }
@@ -558,7 +562,7 @@ export default function CreateProjectPage() {
                   type="date"
                   value={dueDate}
                   onChange={(e) => setDueDate(e.target.value)}
-                  min={new Date().toISOString().split('T')[0]}
+                  min={(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()}
                   className="w-full text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent transition-all focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
                 />
               </motion.div>
@@ -604,7 +608,7 @@ export default function CreateProjectPage() {
                     <span className="text-sm text-slate-500">Due date</span>
                     <span className="text-sm font-medium text-slate-800">
                       {dueDate
-                        ? new Date(dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                        ? new Date(`${dueDate}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
                         : <span className="text-slate-300">Not set</span>}
                     </span>
                   </div>
