@@ -46,6 +46,7 @@ function serializeByKey<T>(key: string, work: () => Promise<T>): Promise<T> {
 }
 
 const complianceRequestGen: Record<string, number> = {}
+let initFromDbGen = 0
 
 const guidelineItemsCache = new Map<string, ChecklistItem[]>()
 
@@ -233,7 +234,7 @@ export const useStore = create<StoreState>()(
     }))
   },
 
-  logout: () => set({ isAuthenticated: false, authToken: null, currentUserId: '', projects: [], responses: {}, allResponses: {}, resolutions: {}, checklistItems: [] }),
+  logout: () => set({ isAuthenticated: false, authToken: null, currentUserId: '', projects: [], responses: {}, allResponses: {}, resolutions: {}, checklistItems: [], complianceMap: {}, projectItemCounts: {}, dbError: null }),
 
   register: async (email, name, role, password) => {
     const id = window.crypto.randomUUID()
@@ -267,6 +268,10 @@ export const useStore = create<StoreState>()(
   initFromDb: async () => {
     const { currentUserId } = get()
     if (!currentUserId) return
+    // Only the most recent call (for the same signed-in user) may commit, so an
+    // older, slower response can't overwrite fresher data or repopulate after logout.
+    const myGen = ++initFromDbGen
+    const isStale = () => myGen !== initFromDbGen || get().currentUserId !== currentUserId
     set({ loading: true, dbError: null })
     try {
       const [dbUsers, dbGuidelines, dbProjects] = await Promise.all([
@@ -308,6 +313,7 @@ export const useStore = create<StoreState>()(
       )
       const globalChecklistItems = dbGuidelines.flatMap((g) => guidelineItemsCache.get(g.guidelineId) ?? [])
 
+      if (isStale()) { if (myGen === initFromDbGen) set({ loading: false }); return }
       set((state) => {
         const projectSpecificGuidelines = state.guidelines.filter((g) => g.projectId)
         const projectSpecificItems = state.checklistItems.filter(
@@ -321,7 +327,8 @@ export const useStore = create<StoreState>()(
         }
       })
     } catch (err) {
-      set({ loading: false, dbError: String(err) })
+      if (isStale()) { if (myGen === initFromDbGen) set({ loading: false }); return }
+      set({ loading: false, dbError: err instanceof Error ? err.message : String(err) })
     }
   },
 

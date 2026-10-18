@@ -31,7 +31,7 @@ function verifyFromHeader(req: Request): AuthUser | null {
   if (!header || !header.startsWith('Bearer ')) return null
   if (!JWT_SECRET) return null
   try {
-    return jwt.verify(header.slice('Bearer '.length), JWT_SECRET) as AuthUser
+    return jwt.verify(header.slice('Bearer '.length), JWT_SECRET, { algorithms: ['HS256'] }) as AuthUser
   } catch {
     return null
   }

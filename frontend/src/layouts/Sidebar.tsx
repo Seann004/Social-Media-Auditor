@@ -131,7 +131,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
             >
               <p className="text-sidebar-text-hover text-sm font-semibold truncate">{nextDue.name}</p>
               <p className="text-sidebar-muted text-xs mt-0.5">
-                Due {new Date(nextDue.dueDate!).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                Due {new Date(`${nextDue.dueDate!.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
               </p>
             </NavLink>
           </div>
@@ -142,6 +142,7 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
         <button
           type="button"
           onClick={() => setShowLogoutConfirm(true)}
+          aria-label={user ? `Sign out (${user.name})` : 'Sign out'}
           className="w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-[var(--color-sidebar-item-hover)] transition-colors group focus-visible:outline-2 focus-visible:outline-[rgba(255,255,255,0.5)] focus-visible:outline-offset-1"
         >
           <div

@@ -725,6 +725,7 @@ export async function syncProjectGuidelines(projectId: string, globalGuidelineId
         .from('Guideline')
         .select('*')
         .eq('guidelineId', globalGuidelineId)
+        .is('projectId', null)
         .single()
       if (gError) throw gError
 
@@ -1203,6 +1204,25 @@ async function resolveProjectIdForItem(itemId: string): Promise<string | null> {
   return (checklist as any)?.projectId ?? null
 }
 
+async function resolveItemGuidelineInProject(projectId: string, itemId: string): Promise<string> {
+  const { data: item, error } = await supabase
+    .from('Checklist_Item')
+    .select('checklistId')
+    .eq('itemId', itemId)
+    .maybeSingle()
+  if (error) throw error
+  if (item) {
+    const { data: checklist, error: clError } = await supabase
+      .from('Checklist')
+      .select('projectId, guidelineId')
+      .eq('checklistId', (item as any).checklistId)
+      .maybeSingle()
+    if (clError) throw clError
+    if (checklist && (checklist as any).projectId === projectId) return (checklist as any).guidelineId
+  }
+  throw new ResultNotFoundError('This checklist item does not belong to this project.')
+}
+
 export class ResultNotFoundError extends Error {
   constructor(message = 'Answer this checklist item before attaching findings or evidence to it.') {
     super(message)
@@ -1275,6 +1295,14 @@ export async function toggleProjectChecklistCategory(projectId: string, guidelin
         .eq('category', `__deactivated__${category}`)
       if (restoreError) throw restoreError
     } else {
+      const { count: activeCount, error: activeError } = await supabase
+        .from('Checklist_Item')
+        .select('itemId', { count: 'exact', head: true })
+        .eq('checklistId', checklistId)
+        .eq('category', category)
+      if (activeError) throw activeError
+      if ((activeCount ?? 0) > 0) return
+
       const { data: guidelineInfo, error: giError } = await supabase
         .from('Guideline')
         .select('originalGuidelineId')
@@ -1346,7 +1374,13 @@ export async function updateChecklistItem(itemId: string, updates: {
   const projectId = await resolveProjectIdForItem(itemId)
   if (projectId) await assertProjectEditable(projectId)
 
-  const { error } = await supabase.from('Checklist_Item').update(updates).eq('itemId', itemId)
+  const allowed: Record<string, unknown> = {}
+  if (updates.itemDescription !== undefined) allowed.itemDescription = updates.itemDescription
+  if (updates.severity !== undefined) allowed.severity = updates.severity
+  if (updates.category !== undefined) allowed.category = updates.category
+  if (Object.keys(allowed).length === 0) return
+
+  const { error } = await supabase.from('Checklist_Item').update(allowed).eq('itemId', itemId)
 
   if (error) throw error
 
@@ -1423,14 +1457,16 @@ export async function upsertAuditResult(
 ): Promise<void> {
 
   await assertProjectEditable(projectId)
+  guidelineId = await resolveItemGuidelineInProject(projectId, itemId)
 
-  const { data: existing } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from('Audit_Result')
     .select('resultId')
     .eq('projectId', projectId)
     .eq('itemId', itemId)
     .eq('userId', userId)
     .maybeSingle()
+  if (existingError) throw existingError
 
   if (existing) {
     const { error } = await supabase
@@ -1496,12 +1532,24 @@ export async function resolveDisagreement(
   if (resolvedStatus === 'needs_review' || resolvedStatus === 'not_started') {
     throw new Error('A resolution must be a definitive status.')
   }
-  const { data: existing } = await supabase
+  const { data: proj, error: projError } = await supabase
+    .from('Audit_Project')
+    .select('submissionStatus')
+    .eq('projectId', projectId)
+    .single()
+  if (projError) throw projError
+  if ((proj as any)?.submissionStatus === 'approved') {
+    throw new EditLockedError('This audit has been approved and can no longer be changed.')
+  }
+  await resolveItemGuidelineInProject(projectId, itemId)
+
+  const { data: existing, error: existingError } = await supabase
     .from('Checklist_Resolution')
     .select('resolutionId')
     .eq('projectId', projectId)
     .eq('itemId', itemId)
     .maybeSingle()
+  if (existingError) throw existingError
 
   if (existing) {
     const { error } = await supabase
@@ -1669,6 +1717,16 @@ export class IncompleteCoverageError extends Error {
 
 export async function reviewSubmission(projectId: string, approved: boolean, remarks: string): Promise<void> {
 
+  const { data: proj, error: projError } = await supabase
+    .from('Audit_Project')
+    .select('headAuditorId, submissionStatus')
+    .eq('projectId', projectId)
+    .single()
+  if (projError) throw projError
+  if ((proj as any)?.submissionStatus !== 'pending_review') {
+    throw new AlreadySubmittedError('This audit is not awaiting review.')
+  }
+
   if (approved) {
     const summary = await fetchProjectComplianceSummary([projectId])
     const coverage = summary[projectId]
@@ -1677,13 +1735,7 @@ export async function reviewSubmission(projectId: string, approved: boolean, rem
     }
   }
 
-  const { data: proj } = await supabase
-    .from('Audit_Project')
-    .select('headAuditorId')
-    .eq('projectId', projectId)
-    .single()
-
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
 
     .from('Audit_Project')
 
@@ -1701,7 +1753,14 @@ export async function reviewSubmission(projectId: string, approved: boolean, rem
 
     .eq('projectId', projectId)
 
+    .eq('submissionStatus', 'pending_review')
+
+    .select('projectId')
+
   if (error) throw error
+  if (!updated || updated.length === 0) {
+    throw new AlreadySubmittedError('This audit is not awaiting review.')
+  }
 
   if (proj) {
     const { error: reportError } = await supabase

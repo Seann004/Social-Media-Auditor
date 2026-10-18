@@ -14,7 +14,11 @@ export function useRealtimeGuidelines() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'Guideline' },
         async (payload) => {
-          const raw = payload.new as DbGuideline
+          const raw = payload.new as DbGuideline & { projectId?: string | null }
+          // Project-scoped copies (cloned when guidelines are attached to a project) are
+          // inserted into the same table; they are not global frameworks and must not be
+          // merged into the shared guideline list (duplicates, cross-project leakage).
+          if (raw.projectId || raw.isDeleted) return
           try {
             const items = await fetchGuidelineItems(raw.guidelineId)
             addGuidelineFromRealtime(raw, items)

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useStore, reconcileResponse, type ResolutionInfo } from '../store/useStore'
 import * as db from '../lib/db'
 import type { AuditResponse, ChecklistItem } from '../types'
@@ -21,8 +21,10 @@ export function useProjectData(projectId: string | undefined): ProjectData {
   const [responses, setResponses] = useState<Record<string, AuditResponse>>({})
   const [allResponses, setAllResponses] = useState<Record<string, AuditResponse[]>>({})
   const [resolutions, setResolutions] = useState<Record<string, ResolutionInfo>>({})
+  const loadGen = useRef(0)
 
   const load = useCallback(async () => {
+    const myGen = ++loadGen.current
     if (!projectId || !currentUserId) return
     setLoading(true)
     setError(null)
@@ -33,6 +35,9 @@ export function useProjectData(projectId: string | undefined): ProjectData {
         db.fetchProjectDetails(projectId),
         db.fetchResolutions(projectId),
       ])
+
+      // A newer load (project id changed, reload, logout) has started; drop this stale response.
+      if (myGen !== loadGen.current) return
 
       const resolutionMap: Record<string, ResolutionInfo> = {}
       for (const r of dbResolutions) {
@@ -131,9 +136,10 @@ export function useProjectData(projectId: string | undefined): ProjectData {
         }
       })
     } catch (err) {
-      setError(String(err))
+      if (myGen !== loadGen.current) return
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setLoading(false)
+      if (myGen === loadGen.current) setLoading(false)
     }
   }, [projectId, currentUserId])
 

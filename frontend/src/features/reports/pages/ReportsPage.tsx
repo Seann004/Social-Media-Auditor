@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -83,6 +83,8 @@ export default function ReportsPage() {
   const [reportChecklistItems, setReportChecklistItems] = useState<DbChecklistItem[]>([])
   const [showPrintWarning, setShowPrintWarning] = useState(false)
   const [scoresError, setScoresError] = useState<string | null>(null)
+  const reportsReqGen = useRef(0)
+  const detailsReqGen = useRef(0)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300)
@@ -90,30 +92,41 @@ export default function ReportsPage() {
   }, [search])
 
   const loadReports = useCallback(async () => {
+    const myGen = ++reportsReqGen.current
     if (!currentUserId) return
     setLoadingReports(true)
     setReportsError(null)
     try {
       const data = await db.fetchAuditReports(currentUserId, {
         search: debouncedSearch || undefined,
-        dateFrom: dateFrom || undefined,
-        dateTo: dateTo || undefined,
+        // Date inputs are local calendar days; send local start/end-of-day instants so
+        // the backend's timestamp comparison includes the whole "to" day.
+        dateFrom: dateFrom ? new Date(`${dateFrom}T00:00:00`).toISOString() : undefined,
+        dateTo: dateTo ? new Date(`${dateTo}T23:59:59.999`).toISOString() : undefined,
       })
+      if (myGen !== reportsReqGen.current) return
       setReports(data)
     } catch (err) {
+      if (myGen !== reportsReqGen.current) return
       setReports([])
       setReportsError(err instanceof Error ? err.message : 'Failed to load reports.')
     } finally {
-      setLoadingReports(false)
+      if (myGen === reportsReqGen.current) setLoadingReports(false)
     }
   }, [currentUserId, debouncedSearch, dateFrom, dateTo])
 
   useEffect(() => { loadReports() }, [loadReports])
 
   async function handleSelectReport(report: DbAuditReport) {
+    const myGen = ++detailsReqGen.current
     setSelectedReport(report)
     setLoadingScores(true)
     setScoresError(null)
+    // Clear the previous report's data so it can't be shown (or printed) under this report's header.
+    setComplianceScores([])
+    setAuditResults([])
+    setReportChecklistItems([])
+    setResolutions([])
     try {
       const [scores, results, items, reportResolutions] = await Promise.all([
         db.fetchComplianceScores(report.projectId),
@@ -121,18 +134,21 @@ export default function ReportsPage() {
         db.fetchProjectChecklistItems(report.projectId),
         db.fetchResolutions(report.projectId),
       ])
+      // Ignore responses for a report the user has already clicked away from.
+      if (myGen !== detailsReqGen.current) return
       setComplianceScores(scores ?? [])
       setAuditResults(results ?? [])
       setReportChecklistItems(items ?? [])
       setResolutions(reportResolutions ?? [])
     } catch (err) {
+      if (myGen !== detailsReqGen.current) return
       setComplianceScores([])
       setAuditResults([])
       setReportChecklistItems([])
       setResolutions([])
       setScoresError(err instanceof Error ? err.message : 'Failed to load this report’s data.')
     } finally {
-      setLoadingScores(false)
+      if (myGen === detailsReqGen.current) setLoadingScores(false)
     }
   }
 
@@ -160,7 +176,8 @@ export default function ReportsPage() {
         resultId: latest.resultId,
         itemId,
         result: effective,
-        findings: resolution?.notes ?? latest.findings,
+        // Resolutions are saved with notes '' by default; don't let an empty note hide the findings.
+        findings: resolution?.notes || latest.findings,
         notes: latest.notes,
       })
     }
@@ -229,9 +246,9 @@ export default function ReportsPage() {
           <Button
             variant="secondary"
             size="md"
-            disabled={!selectedReport}
+            disabled={!selectedReport || loadingScores || !!scoresError}
             onClick={() => setShowPrintWarning(true)}
-            title={selectedReport ? 'Print or save this report as PDF' : 'Select a report first to print it'}
+            title={!selectedReport ? 'Select a report first to print it' : loadingScores ? 'Loading report data…' : scoresError ? "This report's data couldn't be loaded" : 'Print or save this report as PDF'}
             className="shadow-sm shrink-0"
           >
             <Printer size={14} /> Print
@@ -271,8 +288,10 @@ export default function ReportsPage() {
                       <div className="pt-2 space-y-2">
                         <div className="flex gap-2">
                           <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+                            aria-label="From date" max={dateTo || undefined}
                             className="flex-1 text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-300 text-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600" />
                           <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+                            aria-label="To date" min={dateFrom || undefined}
                             className="flex-1 text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-300 text-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600" />
                         </div>
                         <button type="button" onClick={() => { setSearch(''); setDateFrom(''); setDateTo('') }}
@@ -416,7 +435,7 @@ export default function ReportsPage() {
                     <p className="text-base font-semibold text-slate-800">Overall Compliance Score</p>
                     <p className="text-sm text-slate-500 mt-0.5">Based on {totalAnswered} of {totalItems} items answered</p>
                     <p className="text-xs text-slate-400 mt-2">
-                      Completed {new Date(selectedReport.updatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      {selectedReport.projectStatus === 'completed' ? 'Completed' : 'Last updated'} {new Date(selectedReport.updatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
                     </p>
                   </div>
                 </div>
