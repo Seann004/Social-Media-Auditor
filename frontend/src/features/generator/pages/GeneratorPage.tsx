@@ -296,7 +296,7 @@ export default function GeneratorPage() {
 
     const cleanCategoryName = (name: string): string => {
       return name
-        .replace(/^Section\s+\d+(\.\d+)*\s*[-—|:]\s*/i, '')
+        .replace(/^Section\s+\d+(\.\d+)*\s*[-\u2014|:]\s*/i, '')
         .replace(/^\d+(\.\d+)*\s+/, '')
         .trim()
     }
@@ -648,7 +648,7 @@ export default function GeneratorPage() {
       }
 
       if (anyFallbackUsed) {
-        setAiErrors((prev) => [...prev, 'AI Engine failed to connect to the LLM service for one or more chunks — heuristic fallback was used. Results may be less accurate.'])
+        setAiErrors((prev) => [...prev, 'AI Engine failed to connect to the LLM service for one or more chunks, so a heuristic fallback was used. Results may be less accurate.'])
       }
 
       setPdfStep(3)
@@ -727,7 +727,7 @@ export default function GeneratorPage() {
             <div key={i} className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
               <svg className="w-4 h-4 text-amber-500 mt-0.5 shrink-0 fill-current" viewBox="0 0 256 256"><path d="M236.8,188.09,149.35,36.22a24.76,24.76,0,0,0-42.7,0L19.2,188.09a23.51,23.51,0,0,0,0,23.72A24.35,24.35,0,0,0,40.55,224h174.9a24.35,24.35,0,0,0,21.33-12.19A23.51,23.51,0,0,0,236.8,188.09ZM120,104a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm8,88a12,12,0,1,1,12-12A12,12,0,0,1,128,192Z"/></svg>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-amber-900">AI Engine — LLM Connection Failed</p>
+                <p className="text-sm font-medium text-amber-900">AI Engine: LLM Connection Failed</p>
                 <p className="text-xs text-amber-700 mt-0.5">{msg}</p>
               </div>
               <button

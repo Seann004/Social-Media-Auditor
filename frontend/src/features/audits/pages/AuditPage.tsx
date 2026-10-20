@@ -25,10 +25,14 @@ import {
   ImageIcon as Image,
   XCircleIcon as XCircleFill,
   PlusIcon as Plus,
+  LinkSimpleIcon as LinkSimple,
 } from '@phosphor-icons/react'
-import { useStore, calcScore } from '../../../store/useStore'
+import { useStore, calcScore, reconcileResponse } from '../../../store/useStore'
 import { useProjectData } from '../../../hooks/useProjectData'
-import { saveEvidenceImages, fetchEvidenceForItems, fetchProjectReliability, type ProjectReliability } from '../../../lib/db'
+import {
+  saveEvidenceImages, fetchEvidenceForItems, fetchProjectReliability, type ProjectReliability,
+  fetchAnswerSuggestions, acceptAnswerSuggestions, dismissAnswerSuggestion, type AnswerSuggestion, type AcceptedAnswer,
+} from '../../../lib/db'
 import type { ChecklistItemStatus, Severity, ChecklistItem, ProjectScore, AuditResponse } from '../../../types'
 import StatusBadge from '../../audits/components/StatusBadge'
 import SeverityBadge from '../../audits/components/SeverityBadge'
@@ -296,8 +300,13 @@ function AuditPageContent() {
   useEffect(() => {
     if (!id) return
     let cancelled = false
-    fetchProjectReliability(id).then((r) => { if (!cancelled) setReliability(r) }).catch(() => {})
-    return () => { cancelled = true }
+    const timer = window.setTimeout(() => {
+      fetchProjectReliability(id).then((r) => { if (!cancelled) setReliability(r) }).catch(() => {})
+    }, 2000)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [id, responses])
 
   const [showReviewPanel, setShowReviewPanel] = useState(false)
@@ -450,6 +459,125 @@ function AuditPageContent() {
     }).catch(() => { if (!cancelled) setEvidenceError("Couldn't load evidence images for this category.") })
     return () => { cancelled = true }
   }, [id, selectedCategory, checklistItems])
+
+  const [suggestions, setSuggestions] = useState<Record<string, AnswerSuggestion>>({})
+  const [showSuggestionList, setShowSuggestionList] = useState(false)
+  const [suggestionBusy, setSuggestionBusy] = useState<string | null>(null)
+  const [suggestionError, setSuggestionError] = useState<string | null>(null)
+  const suggestionsEnabled = isAuditor && !!project
+    && project.submissionStatus !== 'pending_review' && project.submissionStatus !== 'approved'
+
+  async function loadSuggestions() {
+    if (!id || !suggestionsEnabled) {
+      setSuggestions({})
+      return
+    }
+    try {
+      const rows = await fetchAnswerSuggestions(id)
+      setSuggestions(Object.fromEntries(rows.map((s) => [s.itemId, s])))
+    } catch {
+      setSuggestions({})
+      setSuggestionError("Couldn't load answers from earlier audits.")
+    }
+  }
+
+  useEffect(() => { loadSuggestions() }, [id, suggestionsEnabled])
+
+  const suggestedItems = useMemo(
+    () => checklistItems.filter((ci) => {
+      if (!suggestions[ci.id]) return false
+      const mine = allResponses[`${id}__${ci.id}`]?.find((r) => r.auditorId === currentUserId)
+      return !mine || mine.status === 'not_started'
+    }),
+    [checklistItems, suggestions, allResponses, id, currentUserId],
+  )
+  const suggestedIds = new Set(suggestedItems.map((ci) => ci.id))
+  const exactMatchIds = suggestedItems
+    .filter((ci) => suggestions[ci.id].relation === 'equivalent' && suggestions[ci.id].suggestedStatus !== 'not_applicable')
+    .map((ci) => ci.id)
+
+  function applyAcceptedAnswers(accepted: AcceptedAnswer[]) {
+    if (!id || accepted.length === 0) return
+    const itemIds = accepted.map((a) => a.itemId)
+    useStore.setState((state) => {
+      const nextAll = { ...state.allResponses }
+      const nextResponses = { ...state.responses }
+      for (const a of accepted) {
+        const key = `${id}__${a.itemId}`
+        const rows: AuditResponse[] = [
+          ...(nextAll[key] ?? []).filter((r) => r.auditorId !== currentUserId),
+          {
+            id: `r_${a.itemId}`,
+            projectId: id,
+            checklistItemId: a.itemId,
+            status: a.result,
+            notes: a.notes ?? '',
+            findings: a.findings ?? undefined,
+            auditorId: currentUserId,
+            updatedAt: a.timeSubmitted.split('T')[0],
+          },
+        ]
+        nextAll[key] = rows
+        const reconciled = reconcileResponse(rows, state.resolutions[key]?.status)
+        if (reconciled) nextResponses[key] = reconciled
+      }
+      return { allResponses: nextAll, responses: nextResponses }
+    })
+
+    const clear = (prev: Record<string, string>) => {
+      const next = { ...prev }
+      for (const itemId of itemIds) delete next[itemId]
+      return next
+    }
+    setFindingsValues(clear)
+    setNoteValues(clear)
+    fetchEvidenceForItems(id, itemIds).then((rows) => {
+      setEvidence((prev) => {
+        const next = { ...prev }
+        for (const itemId of itemIds) next[itemId] = []
+        for (const row of rows) {
+          next[row.itemId] = [...next[row.itemId], ...row.images.map((img) => ({ auditorId: row.userId, ...img }))]
+        }
+        return next
+      })
+    }).catch(() => setEvidenceError("Couldn't load evidence images for the reused answers."))
+  }
+
+  async function handleAcceptSuggestions(itemIds: string[]) {
+    if (!id || itemIds.length === 0) return
+    setSuggestionBusy(itemIds.length === 1 ? itemIds[0] : 'all')
+    setSuggestionError(null)
+    try {
+      const accepted = await acceptAnswerSuggestions(id, itemIds)
+      applyAcceptedAnswers(accepted)
+      if (accepted.length < itemIds.length) {
+        setSuggestionError(accepted.length === 0
+          ? 'Nothing was reused. Those items already have an answer.'
+          : `Reused ${accepted.length} of ${itemIds.length} answers. The rest already had an answer.`)
+      }
+      setShowSuggestionList(false)
+      await loadSuggestions()
+    } catch (err) {
+      setSuggestionError(err instanceof Error ? err.message : "Couldn't reuse that answer. Try again.")
+    } finally {
+      setSuggestionBusy(null)
+    }
+  }
+
+  async function handleDismissSuggestion(s: AnswerSuggestion) {
+    if (!id) return
+    setSuggestionBusy(s.itemId)
+    setSuggestionError(null)
+    try {
+      await dismissAnswerSuggestion(id, s.itemId, s.sourceItemId)
+      await loadSuggestions()
+    } catch (err) {
+      setSuggestionError(err instanceof Error ? err.message : "Couldn't dismiss that suggestion.")
+      loadSuggestions()
+    } finally {
+      setSuggestionBusy(null)
+    }
+  }
 
   function handleImageClick(itemId: string) {
     if (answersLocked) return
@@ -629,7 +757,7 @@ function AuditPageContent() {
       markSaved(key)
     } catch {
       setFieldSaveState((prev) => ({ ...prev, [key]: 'error' }))
-      setFieldSaveError((prev) => ({ ...prev, [key]: "Couldn't save this note. Your text is still here — click away and back to retry." }))
+      setFieldSaveError((prev) => ({ ...prev, [key]: "Couldn't save this note. Your text is still here. Click away and back to retry." }))
     }
   }
 
@@ -644,7 +772,7 @@ function AuditPageContent() {
       markSaved(key)
     } catch {
       setFieldSaveState((prev) => ({ ...prev, [key]: 'error' }))
-      setFieldSaveError((prev) => ({ ...prev, [key]: "Couldn't save these findings. Your text is still here — click away and back to retry." }))
+      setFieldSaveError((prev) => ({ ...prev, [key]: "Couldn't save these findings. Your text is still here. Click away and back to retry." }))
     }
   }
 
@@ -891,7 +1019,7 @@ helpText: newItemHelp.trim() || undefined,
               )}
               {isAuditor && project.submissionStatus === 'pending_review' && (
                 <span className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg">
-                  <WarningCircle size={13} /> Pending Review
+                  <Lock size={13} /> Submitted, waiting for the head auditor
                 </span>
               )}
             </div>
@@ -1001,6 +1129,78 @@ helpText: newItemHelp.trim() || undefined,
                           </div>
                         </button>
                       ))}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {suggestionsEnabled && suggestedItems.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowSuggestionList((v) => !v)}
+                aria-expanded={showSuggestionList}
+                className={[
+                  'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium ring-1 transition-colors cursor-pointer',
+                  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600',
+                  showSuggestionList
+                    ? 'bg-blue-600 text-white ring-blue-600'
+                    : 'bg-blue-50 text-blue-700 ring-blue-200 hover:bg-blue-100',
+                ].join(' ')}
+              >
+                <LinkSimple size={12} weight="bold" />
+                {suggestedItems.length} from earlier audits
+                <CaretRight size={11} weight="bold" className={`transition-transform duration-200 ${showSuggestionList ? 'rotate-90' : ''}`} />
+              </button>
+
+              <AnimatePresence>
+                {showSuggestionList && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setShowSuggestionList(false)} />
+                    <motion.div
+                      initial={{ opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute left-0 top-full mt-1.5 w-80 max-h-80 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-20 py-1.5"
+                    >
+                      {exactMatchIds.length > 0 && (
+                        <div className="px-3 pt-1 pb-2 border-b border-slate-100 mb-1">
+                          <Button
+                            variant="primary"
+                            size="xs"
+                            className="w-full"
+                            disabled={suggestionBusy !== null}
+                            onClick={() => handleAcceptSuggestions(exactMatchIds)}
+                          >
+                            {suggestionBusy === 'all' && <Spinner size={12} className="animate-spin" />}
+                            Use all {exactMatchIds.length} matching answer{exactMatchIds.length !== 1 ? 's' : ''}
+                          </Button>
+                          <p className="text-2xs text-slate-400 mt-1.5">Partly related and N/A answers are left for you to check one by one.</p>
+                        </div>
+                      )}
+                      {suggestedItems.map((item) => {
+                        const s = suggestions[item.id]
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => { setShowSuggestionList(false); goToItem(item) }}
+                            className="w-full text-left px-3 py-2 hover:bg-blue-50 transition-colors flex items-start gap-2 cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-600"
+                          >
+                            <LinkSimple size={12} weight="bold" className="text-blue-500 mt-0.5 shrink-0" />
+                            <div className="min-w-0">
+                              <p className="text-xs font-medium text-slate-700 truncate">{item.itemName || item.text}</p>
+                              <p className="text-2xs text-slate-400 truncate">
+                                {STATUS_LABELS[s.suggestedStatus]} in {s.sourceGuideline}
+                                {s.relation === 'partial' ? ' · partly related' : ''}
+                              </p>
+                            </div>
+                          </button>
+                        )
+                      })}
                     </motion.div>
                   </>
                 )}
@@ -1386,7 +1586,7 @@ helpText: newItemHelp.trim() || undefined,
                     const cs = sub.catScore
                     return (
                       <option key={sub.originalCategory} value={sub.originalCategory}>
-                        {sIdx + 1}.{subIdx + 1} {sub.subcategoryName}{!sub.enabled && isHeadAuditor ? ' (Deactivated)' : cs.applicable > 0 ? ` — ${cs.percentage.toFixed(0)}%` : ''}
+                        {sIdx + 1}.{subIdx + 1} {sub.subcategoryName}{!sub.enabled && isHeadAuditor ? ' (Deactivated)' : cs.applicable > 0 ? ` (${cs.percentage.toFixed(0)}%)` : ''}
                       </option>
                     )
                   })}
@@ -1443,7 +1643,7 @@ helpText: newItemHelp.trim() || undefined,
                             return (
                               <li key={sub.originalCategory}>
                                 <div className={['group flex items-center rounded-lg border-l-2 transition-colors w-full', active ? 'bg-blue-50/70 border-blue-500' : 'border-transparent hover:bg-white/70'].join(' ')}>
-                                  {isHeadAuditor && (
+                                  {isHeadAuditor && !answersLocked && (
                                     <div className="pl-2.5 pr-0.5 py-2 flex items-center">
                                       <input
                                         type="checkbox"
@@ -1526,7 +1726,7 @@ helpText: newItemHelp.trim() || undefined,
                     </h2>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-xs text-slate-400 font-sans tabular-nums">{categoryItems.length} item{categoryItems.length !== 1 ? 's' : ''}</span>
-                      {isHeadAuditor && selectedCategory && (
+                      {isHeadAuditor && !answersLocked && selectedCategory && (
                         <Button variant="primary" size="xs" onClick={() => { setAddItemError(null); setShowAddItemModal(true) }}>
                           <Plus size={12} weight="bold" /> Add Item
                         </Button>
@@ -1537,7 +1737,9 @@ helpText: newItemHelp.trim() || undefined,
 
                 {isHeadAuditor && (
                   <p className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 mb-5">
-                    You can edit or delete checklist items. Responses are recorded by assigned auditors.
+                    {answersLocked
+                      ? 'This audit is locked while it is under review or approved, so checklist items can no longer be changed.'
+                      : 'You can edit or delete checklist items. Responses are recorded by assigned auditors.'}
                   </p>
                 )}
 
@@ -1554,6 +1756,17 @@ helpText: newItemHelp.trim() || undefined,
                     <WarningCircle size={14} className="shrink-0" />
                     <span>{evidenceError}</span>
                     <button type="button" onClick={() => setEvidenceError(null)} aria-label="Dismiss"
+                      className="ml-auto text-rose-400 hover:text-rose-600 rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600">
+                      <XIcon size={12} weight="bold" />
+                    </button>
+                  </div>
+                )}
+
+                {suggestionError && (
+                  <div role="alert" className="mb-4 flex items-center gap-2 text-rose-700 text-xs bg-rose-50 border border-rose-200 rounded-lg px-3 py-2.5">
+                    <WarningCircle size={14} className="shrink-0" />
+                    <span>{suggestionError}</span>
+                    <button type="button" onClick={() => setSuggestionError(null)} aria-label="Dismiss"
                       className="ml-auto text-rose-400 hover:text-rose-600 rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600">
                       <XIcon size={12} weight="bold" />
                     </button>
@@ -1579,7 +1792,7 @@ helpText: newItemHelp.trim() || undefined,
                   <div className="py-12 text-center">
                     <WarningCircle size={30} className="text-rose-300 mx-auto mb-3" />
                     <p className="text-slate-600 text-sm font-medium">This category couldn't be loaded.</p>
-                    <p className="text-slate-400 text-xs mt-1">The checklist request failed — it may just be a connection blip.</p>
+                    <p className="text-slate-400 text-xs mt-1">The checklist request failed. It may just be a connection blip.</p>
                     <Button variant="secondary" size="sm" className="mt-3 mx-auto" onClick={() => reload()}>
                       Retry
                     </Button>
@@ -1704,7 +1917,7 @@ helpText: newItemHelp.trim() || undefined,
                                   <div className="mt-1.5 flex flex-wrap items-center gap-2">
                                     <p className="inline-flex items-center gap-1 text-2xs text-violet-700 bg-violet-50 border border-violet-200 px-2 py-0.5 rounded-md">
                                       Resolved by {users.find((u) => u.id === resolution.resolvedBy)?.name ?? 'Head auditor'}: {STATUS_LABELS[resolution.status]}
-                                      {resolution.notes ? ` — ${resolution.notes}` : ''}
+                                      {resolution.notes ? `: ${resolution.notes}` : ''}
                                     </p>
                                     {isHeadAuditor && amendingResolutionId !== ci.id && (
                                       <button type="button" onClick={() => setAmendingResolutionId(ci.id)}
@@ -1723,7 +1936,7 @@ helpText: newItemHelp.trim() || undefined,
                                 >
                                   Help
                                 </button>
-                                {isHeadAuditor && (
+                                {isHeadAuditor && !answersLocked && (
                                   <div className="flex items-center gap-1 ml-0.5">
                                     <button type="button" onClick={() => startEditItem(ci.id, ci.text, ci.severity)}
                                       className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
@@ -1765,6 +1978,51 @@ helpText: newItemHelp.trim() || undefined,
                               </div>
                             </div>
                           )}
+
+                          {suggestionsEnabled && !isEditing && suggestedIds.has(ci.id) && (() => {
+                            const s = suggestions[ci.id]
+                            const exact = s.relation === 'equivalent'
+                            const busy = suggestionBusy !== null
+                            return (
+                              <div className={`mt-3 rounded-lg border px-4 py-3 ${exact ? 'bg-blue-50/60 border-blue-200' : 'bg-slate-50 border-slate-200'}`}>
+                                <div className="flex items-start gap-2">
+                                  <LinkSimple size={14} weight="bold" className={`mt-0.5 shrink-0 ${exact ? 'text-blue-600' : 'text-slate-400'}`} />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs text-slate-700">
+                                      {exact ? 'Same requirement' : 'Related requirement'} answered{' '}
+                                      <strong>{STATUS_LABELS[s.suggestedStatus]}</strong> in "{s.sourceProjectTitle}"
+                                    </p>
+                                    <p className="text-2xs text-slate-500 mt-0.5">
+                                      {s.sourceGuideline}{s.sourceItemCode ? ` ${s.sourceItemCode}` : ''} ·{' '}
+                                      {new Date(s.answeredAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                                      {s.evidenceCount > 0 && ` · ${s.evidenceCount} photo${s.evidenceCount > 1 ? 's' : ''}`}
+                                      {s.otherSources > 0 && ` · ${s.otherSources} more audit${s.otherSources > 1 ? 's' : ''}`}
+                                    </p>
+                                    {s.findings && (
+                                      <p className="text-xs text-slate-600 mt-1.5 line-clamp-2 italic break-words">"{s.findings}"</p>
+                                    )}
+                                    {!exact && (
+                                      <p className="text-2xs text-slate-500 mt-1.5">Only partly overlaps, so check it yourself before answering.</p>
+                                    )}
+                                    {exact && s.suggestedStatus === 'not_applicable' && (
+                                      <p className="text-2xs text-slate-500 mt-1.5">N/A depends on each project's scope, so make sure it still applies here.</p>
+                                    )}
+                                    <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
+                                      {exact && (
+                                        <Button variant="primary" size="xs" disabled={busy} onClick={() => handleAcceptSuggestions([ci.id])}>
+                                          {suggestionBusy === ci.id && <Spinner size={12} className="animate-spin" />}
+                                          Use answer
+                                        </Button>
+                                      )}
+                                      <Button variant="ghost" size="xs" disabled={busy} onClick={() => handleDismissSuggestion(s)}>
+                                        Dismiss
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })()}
 
                           {isAuditor && !isEditing && (
                             <div className="mt-3 space-y-1">
@@ -1826,7 +2084,7 @@ helpText: newItemHelp.trim() || undefined,
                             <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 space-y-2">
                               <p className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
                                 <Flag size={12} weight="fill" />
-                                {raters.length > 1 ? 'Auditors disagree — resolve this item' : resolution ? 'Change resolution' : 'Flagged for review — resolve this item'}
+                                {raters.length > 1 ? 'Auditors disagree: resolve this item' : resolution ? 'Change resolution' : 'Flagged for review: resolve this item'}
                               </p>
                               <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                                 {AUDITOR_RESPONSE_OPTIONS.map(({ value, label, icon: Icon }) => (

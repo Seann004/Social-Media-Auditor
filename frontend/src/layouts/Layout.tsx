@@ -1,17 +1,30 @@
 import { useState, useEffect } from 'react'
 import { Outlet } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import {
-  ListIcon as List,
-  ShieldCheckIcon as ShieldCheck,
-} from '@phosphor-icons/react'
 import Sidebar from './Sidebar'
+import Topbar from './Topbar'
 import { useStore } from '../store/useStore'
 import { useRealtimeGuidelines } from '../hooks/useRealtimeGuidelines'
+
+const DESKTOP_QUERY = '(min-width: 1024px)'
+
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(() => window.matchMedia(DESKTOP_QUERY).matches)
+  useEffect(() => {
+    const media = window.matchMedia(DESKTOP_QUERY)
+    const onChange = () => setIsDesktop(media.matches)
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+  return isDesktop
+}
 
 export default function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const initFromDb = useStore((s) => s.initFromDb)
+  const collapsed = useStore((s) => s.sidebarCollapsed)
+  const toggleSidebar = useStore((s) => s.toggleSidebar)
+  const isDesktop = useIsDesktop()
 
   useRealtimeGuidelines()
 
@@ -19,8 +32,24 @@ export default function Layout() {
     initFromDb()
   }, [])
 
+  useEffect(() => {
+    if (isDesktop) setDrawerOpen(false)
+  }, [isDesktop])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'b') return
+      const target = e.target as HTMLElement
+      if (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      e.preventDefault()
+      toggleSidebar()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [toggleSidebar])
+
   return (
-    <div className="flex h-screen overflow-hidden bg-page-bg print:block print:h-auto print:overflow-visible">
+    <div className="flex h-screen h-dvh overflow-hidden bg-page-bg print:block print:h-auto print:overflow-visible">
       <AnimatePresence>
         {drawerOpen && (
           <motion.div
@@ -42,26 +71,16 @@ export default function Layout() {
           drawerOpen ? 'translate-x-0' : '-translate-x-full',
         ].join(' ')}
       >
-        <Sidebar onClose={() => setDrawerOpen(false)} />
+        {isDesktop ? (
+          <Sidebar collapsed={collapsed} onToggle={toggleSidebar} />
+        ) : (
+          <Sidebar collapsed={false} onClose={() => setDrawerOpen(false)} />
+        )}
       </div>
 
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden print:block print:overflow-visible">
-        <div className="lg:hidden print:hidden flex items-center gap-3 px-4 h-14 bg-primary shrink-0 border-b border-primary-hover">
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/10 transition-colors"
-            aria-label="Open menu"
-          >
-            <List size={22} weight="bold" />
-          </button>
-          <div className="flex items-center gap-2">
-            <ShieldCheck size={18} weight="bold" className="text-white" />
-            <span className="text-white font-bold text-base tracking-tight">SafetyAudit</span>
-          </div>
-        </div>
-
-        <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden print:overflow-visible print:h-auto print:block">
+        <Topbar onOpenMenu={() => setDrawerOpen(true)} />
+        <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-none print:overflow-visible print:h-auto print:block">
           <Outlet />
         </main>
       </div>

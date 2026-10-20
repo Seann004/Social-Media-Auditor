@@ -1,9 +1,8 @@
-import { useState, useEffect, useMemo } from 'react'
-import { useNavigate, Navigate } from 'react-router-dom'
+import { useState, useMemo } from 'react'
+import { Navigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   CaretDownIcon as CaretDown,
-  UploadSimpleIcon as UploadSimple,
   BookOpenIcon as BookOpen,
   TrashIcon as Trash,
   MagnifyingGlassIcon as MagnifyingGlass,
@@ -13,6 +12,7 @@ import type { ChecklistItem } from '../../../types'
 import { useStore } from '../../../store/useStore'
 import Button from '../../../components/ui/Button'
 import ChecklistItemDetailModal from '../../audits/components/ChecklistItemDetailModal'
+import LinkedItemsPanel from '../components/LinkedItemsPanel'
 
 const container = {
   hidden: { opacity: 0 },
@@ -51,7 +51,6 @@ function matchesQuery(item: ChecklistItem, q: string) {
 }
 
 export default function GuidelinesPage() {
-  const navigate = useNavigate()
   const { guidelines, checklistItems, users, currentUserId, deleteGuideline, loading } = useStore()
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [expandedCat, setExpandedCat] = useState<Set<string>>(new Set())
@@ -59,13 +58,7 @@ export default function GuidelinesPage() {
   const [selectedItemForModal, setSelectedItemForModal] = useState<ChecklistItem | null>(null)
   const [itemModalTab, setItemModalTab] = useState<'help' | 'traceability'>('help')
   const [search, setSearch] = useState('')
-  const [hour, setHour] = useState(() => new Date().getHours())
-
-  useEffect(() => {
-    const tick = () => setHour(new Date().getHours())
-    const id = setInterval(tick, 60_000)
-    return () => clearInterval(id)
-  }, [])
+  const [view, setView] = useState<'frameworks' | 'links'>('frameworks')
 
   const currentUser = users.find((u) => u.id === currentUserId)
   const isAdmin = currentUser?.role === 'admin'
@@ -126,8 +119,6 @@ export default function GuidelinesPage() {
     : activeGuidelines
   const matchCount = searchResults ? searchResults.itemIds.size : 0
 
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
-
   function toggleGuideline(id: string) {
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -165,10 +156,8 @@ export default function GuidelinesPage() {
         <div>
           {isAdmin ? (
             <>
-              <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
-                {greeting}, {currentUser?.name?.split(' ')[0]}.
-              </h1>
-              <p className="text-slate-500 text-base mt-1.5">You have Admin access — manage compliance guidelines below.</p>
+              <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Guidelines</h1>
+              <p className="text-slate-500 text-base mt-1.5">You have Admin access. Manage compliance guidelines below.</p>
             </>
           ) : (
             <>
@@ -180,13 +169,6 @@ export default function GuidelinesPage() {
             </>
           )}
         </div>
-
-        {isAdmin && (
-          <Button variant="primary" size="md" onClick={() => navigate('/generator')}>
-            <UploadSimple size={14} weight="bold" />
-            Upload Guideline
-          </Button>
-        )}
       </motion.div>
 
       {isAdmin && (
@@ -211,6 +193,26 @@ export default function GuidelinesPage() {
         </motion.div>
       )}
 
+      <div className="mb-5 inline-flex rounded-lg border border-slate-200 bg-white p-1">
+        {([['frameworks', 'Frameworks'], ['links', 'Linked items']] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setView(key)}
+            aria-pressed={view === key}
+            className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
+              view === key ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'links' ? (
+        <LinkedItemsPanel guidelines={activeGuidelines} isAdmin={isAdmin} />
+      ) : (
+      <>
       <div className="mb-5 flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <label htmlFor="guideline-search" className="sr-only">Search guidelines and checklist items</label>
@@ -283,36 +285,38 @@ export default function GuidelinesPage() {
                     type="button"
                     onClick={() => toggleGuideline(guideline.id)}
                     aria-expanded={isOpen}
-                    className="flex-1 flex items-center gap-4 px-6 py-5 hover:bg-slate-50 transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-600 text-left"
+                    className="flex-1 min-w-0 flex items-center gap-4 px-6 py-5 hover:bg-slate-50 transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-600 text-left"
                   >
                     <div className="w-9 h-9 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center shrink-0">
                       <BookOpen size={16} className="text-blue-600" />
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-base font-semibold text-slate-800 break-all">{guideline.name}</p>
-                        <span className="text-2xs text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-md font-mono">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <p className="text-base font-semibold text-slate-800 truncate" title={guideline.name}>{guideline.name}</p>
+                        <span className="shrink-0 whitespace-nowrap text-2xs text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-md font-mono">
                           v{guideline.version}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-500 mt-0.5 leading-relaxed max-w-[65ch] truncate">
+                      <p className="text-xs text-slate-500 mt-0.5 leading-relaxed truncate" title={guideline.description}>
                         {guideline.description}
                       </p>
                     </div>
 
-                    <div className="hidden sm:flex items-center gap-4 shrink-0 text-right">
-                      <div>
+                    <div className="hidden sm:grid grid-cols-[3.5rem_3.5rem_8.5rem] gap-4 items-center shrink-0">
+                      <div className="text-right">
                         <p className="font-mono text-sm font-semibold text-slate-700 tabular-nums">{items.length}</p>
                         <p className="text-2xs text-slate-400">items</p>
                       </div>
-                      <div>
+                      <div className="text-right">
                         <p className="font-mono text-sm font-semibold text-rose-600 tabular-nums">{criticalCount}</p>
                         <p className="text-2xs text-slate-400">critical</p>
                       </div>
-                      <div>
-                        <p className="text-2xs text-slate-500">{guideline.categories.length} categories</p>
-                        <p className="text-2xs text-slate-400">{guideline.source}</p>
+                      <div className="min-w-0">
+                        <p className="text-2xs text-slate-500 truncate">
+                          {guideline.categories.length} {guideline.categories.length === 1 ? 'category' : 'categories'}
+                        </p>
+                        <p className="text-2xs text-slate-400 truncate" title={guideline.source}>{guideline.source}</p>
                       </div>
                     </div>
 
@@ -476,6 +480,8 @@ export default function GuidelinesPage() {
             )
           })}
         </motion.div>
+      )}
+      </>
       )}
 
       <ChecklistItemDetailModal

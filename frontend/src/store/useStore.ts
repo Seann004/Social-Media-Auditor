@@ -133,6 +133,8 @@ function mapDbItem(i: db.DbChecklistItem): ChecklistItem {
 
 interface StoreState {
   isAuthenticated: boolean
+  sidebarCollapsed: boolean
+  toggleSidebar: () => void
   authToken: string | null
   users: User[]
   currentUserId: string
@@ -206,6 +208,8 @@ export const useStore = create<StoreState>()(
   persist(
     (set, get) => ({
   isAuthenticated: false,
+  sidebarCollapsed: false,
+  toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   authToken: null,
   users: [],
   currentUserId: '',
@@ -578,8 +582,10 @@ export const useStore = create<StoreState>()(
 
   setResponse: async (projectId, itemId, guidelineId, status, notes = '', findings) => {
     const { currentUserId } = get()
+    const key = rkey(projectId, itemId)
+    const previousRows = get().allResponses[key]
+    const previousResponse = get().responses[key]
     set((state) => {
-      const key = rkey(projectId, itemId)
       const existingRows = state.allResponses[key] ?? []
       const myExisting = existingRows.find((r) => r.auditorId === currentUserId)
       const myRow: AuditResponse = {
@@ -598,9 +604,21 @@ export const useStore = create<StoreState>()(
       }
     })
     try {
-      const key = rkey(projectId, itemId)
       await serializeByKey(key, () => db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes))
+    } catch (err) {
+      set((state) => {
+        const allResponses = { ...state.allResponses }
+        const responses = { ...state.responses }
+        if (previousRows) allResponses[key] = previousRows
+        else delete allResponses[key]
+        if (previousResponse) responses[key] = previousResponse
+        else delete responses[key]
+        return { allResponses, responses }
+      })
+      throw err
+    }
 
+    try {
       const myGen = (complianceRequestGen[projectId] ?? 0) + 1
       complianceRequestGen[projectId] = myGen
       const updated = await db.fetchProjectComplianceSummary([projectId])
@@ -625,8 +643,7 @@ export const useStore = create<StoreState>()(
         }))
       }
     } catch (err) {
-      console.error('[setResponse] Failed to save audit result to DB:', err)
-      throw err
+      console.error('[setResponse] Answer saved, but refreshing the project summary failed:', err)
     }
   },
 
@@ -652,6 +669,7 @@ export const useStore = create<StoreState>()(
       name: 'safetyaudit-session',
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
+        sidebarCollapsed: state.sidebarCollapsed,
         authToken: state.authToken,
         currentUserId: state.currentUserId,
         users: state.users.filter((u) => u.id === state.currentUserId),

@@ -34,7 +34,7 @@ const item = {
 
 export default function CreateProjectPage() {
   const navigate = useNavigate()
-  const { users, currentUserId, guidelines, createProject } = useStore()
+  const { users, currentUserId, guidelines, createProject, loading } = useStore()
   const currentUser = users.find((u) => u.id === currentUserId)!
 
   const [projectName, setProjectName] = useState('')
@@ -344,7 +344,11 @@ export default function CreateProjectPage() {
                   </div>
                 )}
 
-                {availableGuidelines.length === 0 && (
+                {availableGuidelines.length === 0 && loading && (
+                  <p className="text-sm text-slate-400 py-6 text-center" role="status">Loading frameworks…</p>
+                )}
+
+                {availableGuidelines.length === 0 && !loading && (
                   <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-5 py-8 text-center">
                     <BookOpen size={26} className="text-slate-300 mx-auto mb-2" />
                     <p className="text-sm font-medium text-slate-600">No guideline frameworks available yet.</p>
@@ -466,7 +470,7 @@ export default function CreateProjectPage() {
                   <AuditorAvatar user={currentUser} size="md" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-slate-800 truncate">{currentUser.name}</p>
-                    <p className="text-xs text-blue-600 font-medium">Head Auditor — you</p>
+                    <p className="text-xs text-blue-600 font-medium">Head Auditor (you)</p>
                   </div>
                   <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
                     <CheckIcon size={12} weight="bold" className="text-white" />
@@ -522,7 +526,7 @@ export default function CreateProjectPage() {
 
                   {searchableAuditors.length === 0 ? (
                     <p className="px-4 py-4 text-sm text-slate-400 text-center">
-                      {memberSearchQuery ? 'No auditors match that name.' : 'All auditors have been added.'}
+                      {loading ? 'Loading auditors…' : memberSearchQuery ? 'No auditors match that name.' : 'All auditors have been added.'}
                     </p>
                   ) : (
                     <ul className="max-h-52 overflow-y-auto divide-y divide-slate-50">

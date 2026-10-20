@@ -48,7 +48,7 @@ function ScoreBar({ pct }: { pct: number }) {
         />
       </div>
       <span className="font-mono text-xs text-slate-500 tabular-nums w-12 text-right shrink-0">
-        {pct > 0 ? `${formatPercent(pct)}%` : '—'}
+        {pct > 0 ? `${formatPercent(pct)}%` : 'n/a'}
       </span>
     </div>
   )
@@ -291,7 +291,7 @@ export default function ProjectsPage() {
                           </p>
                         </>
                       ) : (
-                        <p className="text-2xs text-slate-300">—</p>
+                        <p className="text-2xs text-slate-300">n/a</p>
                       )}
                     </div>
 

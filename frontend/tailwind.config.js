@@ -4,7 +4,7 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        // Inter is the only typeface in this project — sans and mono both resolve to
+        // Inter is the only typeface in this project. Sans and mono both resolve to
         // it (use `tabular-nums` for aligned figures instead of switching family).
         sans: ['Inter', 'ui-sans-serif', 'system-ui'],
         mono: ['Inter', 'ui-sans-serif', 'system-ui'],

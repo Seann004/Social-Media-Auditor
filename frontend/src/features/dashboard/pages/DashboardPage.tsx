@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowRightIcon as ArrowRight } from '@phosphor-icons/react'
@@ -6,7 +6,6 @@ import GuidelinesPage from '../../guidelines/pages/GuidelinesPage'
 import { useStore } from '../../../store/useStore'
 import StatusBadge from '../../audits/components/StatusBadge'
 import AuditorAvatar from '../../../components/ui/AuditorAvatar'
-import { buttonClasses } from '../../../components/ui/Button'
 import { platformColor, platformInitial } from '../../../lib/platformColors'
 import { scoreColor, formatPercent } from '../../../lib/scoreColor'
 import { AUDIT_STATUS_COLOR } from '../../../lib/statusColors'
@@ -112,14 +111,6 @@ export default function DashboardPage() {
 
   useEffect(() => { initFromDb() }, [location.key])
 
-  const [hour, setHour] = useState(() => new Date().getHours())
-  useEffect(() => {
-    const tick = () => setHour(new Date().getHours())
-    const id = setInterval(tick, 60_000)
-    return () => clearInterval(id)
-  }, [])
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
-
   const isHeadAuditor = currentUser?.role === 'head_auditor'
   const isAdmin = currentUser?.role === 'admin'
   const isAuditor = currentUser?.role === 'auditor'
@@ -168,20 +159,12 @@ export default function DashboardPage() {
     >
       <motion.div variants={item} className="mb-8 flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
-            {greeting}{currentUser ? `, ${currentUser.name.split(' ')[0]}` : ''}.
-          </h1>
+          <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Dashboard</h1>
           <p className="text-slate-500 text-base mt-1.5 leading-relaxed">
             {activeProjects.length} audit{activeProjects.length !== 1 ? 's' : ''} in progress
             {completedProjects.length > 0 && `, ${completedProjects.length} completed`}.
           </p>
         </div>
-        {isHeadAuditor && (
-          <Link to="/projects/new" className={buttonClasses('primary', 'md', 'hidden md:inline-flex')}>
-            New Audit
-            <ArrowRight size={14} weight="bold" />
-          </Link>
-        )}
       </motion.div>
 
       {dbError && (
@@ -358,7 +341,7 @@ export default function DashboardPage() {
                     <div className="hidden sm:flex flex-col items-end gap-1">
                       <ScoreBar pct={scorePct} color={barColor} />
                       <span className="font-mono text-2xs text-slate-500 tabular-nums">
-                        {scorePct > 0 ? `${formatPercent(scorePct)}%` : '—'}
+                        {scorePct > 0 ? `${formatPercent(scorePct)}%` : 'n/a'}
                       </span>
                     </div>
 
