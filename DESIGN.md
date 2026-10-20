@@ -222,52 +222,50 @@ image asset is `public/favicon.svg`.
 
 ## 7. App shell
 
-Built in [`src/layouts/Layout.tsx`](./frontend/src/layouts/Layout.tsx) +
-[`src/layouts/Sidebar.tsx`](./frontend/src/layouts/Sidebar.tsx): a fixed **blue sidebar**
-(`bg-sidebar-bg`, `w-72`) + light main content area. Desktop-first; this is an internal
-audit tool, not a consumer app.
+Built in [`src/layouts/Layout.tsx`](./frontend/src/layouts/Layout.tsx),
+[`src/layouts/Sidebar.tsx`](./frontend/src/layouts/Sidebar.tsx) and
+[`src/layouts/Topbar.tsx`](./frontend/src/layouts/Topbar.tsx): a **blue sidebar**
+(`bg-sidebar-bg`) on the left, a white top bar over the content, and a light main
+content area. Desktop-first; this is an internal audit tool, not a consumer app.
 
 ```
-┌───────────┬──────────────────────────────────────────────────────────┐
-│  SIDEBAR  │                                                            │
-│  (always  │   MAIN CONTENT (light bg-page-bg, scrolls)                 │
-│  blue,    │   max-w-[1400px] mx-auto px-6 md:px-10, py-8 md:py-10       │
-│  no theme │                                                            │
-│  to       │   Dashboard: stats strip (divide-x) → asymmetric 2/3 + 1/3  │
-│  follow)  │   grid. Projects/Reports: divide-y row lists, not card      │
-│           │   grids. Audit: fixed left category nav (208px) +          │
-│ ┌───────┐ │   scrollable checklist content.                            │
-│ │ Logo  │ │                                                            │
-│ ├───────┤ │                                                            │
-│ │ Dash  │ │  active = bg-sidebar-item-active, idle = sidebar-text,      │
-│ │ Audits│ │  hover = sidebar-item-hover (role-gated, see §8)            │
-│ │ Guide-│ │                                                            │
-│ │ lines │ │                                                            │
-│ │ Report│ │                                                            │
-│ ├───────┤ │                                                            │
-│ │ user  │ │  ← click opens a Sign Out confirm modal, never signs        │
-│ │profile│ │    out on the first click                                  │
-│ └───────┘ │                                                            │
-└───────────┴──────────────────────────────────────────────────────────┘
+┌──────────────┬───────────────────────────────────────────────────────┐
+│ Logo         │ Good evening, Alice              [+ New Audit]  (A ▾)  │
+├──────────────┼───────────────────────────────────────────────────────┤
+│ WORKSPACE    │                                                       │
+│ Dashboard  › │   MAIN CONTENT (light bg-page-bg, scrolls)             │
+│ Audits     › │   Each page keeps its own title and actions row.       │
+│ Reports    › │                                                       │
+│ FRAMEWORKS   │                                                       │
+│ Guidelines › │                                                       │
+│ ┌──────────┐ │                                                       │
+│ │ Next     │ │                                                       │
+│ │ deadline │ │                                                       │
+│ └──────────┘ │                                                       │
+├──────────────┤                                                       │
+│ « Collapse   │                                                       │
+└──────────────┴───────────────────────────────────────────────────────┘
 ```
 
 **Rules (as built):**
-- **Sidebar**: `w-72` desktop, off-canvas drawer on mobile (`-translate-x-full` → `0`,
-  `transition-transform duration-300 ease-in-out`, `bg-black/50` backdrop, closes on
-  backdrop click). Always the blue surface; it does not lighten or theme-follow, because
-  there is no theme to follow.
-  - **Motion note:** the drawer transition doesn't currently gate behind
-    `prefers-reduced-motion`; if you touch this component, consider adding
-    `motion-reduce:transition-none` to match the reduced-motion discipline used elsewhere
-    (framer-motion springs, §11).
-- **Nav items**: role-filtered list (see §8), `rounded-lg` (via the nav item's own
-  padding/hover classes), active state = `bg-sidebar-item-active` + `text-sidebar-text-hover`.
-- **User profile / sign out**: bottom of the sidebar: avatar circle (role colour +
-  initials) + name + role. Clicking it opens a confirmation modal (`rounded-2xl`,
-  `shadow-2xl`) rather than signing out immediately; this was a deliberate fix; don't
-  regress it back to an instant sign-out on click.
-- **Main content**: no topbar. Each page renders its own heading + actions row at the
-  top of the content area instead of a shared sticky bar.
+- **Sidebar**: `w-64` expanded (the default), `w-[76px]` collapsed to an icon rail. The
+  choice is stored as `sidebarCollapsed` in the persisted store, toggled by the Collapse
+  button at the bottom or `Ctrl+B`. Collapsed items keep a `title` and `aria-label` so the
+  label is still available. Always the blue surface.
+- **Mobile (below `lg`)**: the sidebar is an off-canvas drawer (`-translate-x-full` → `0`,
+  `bg-black/50` backdrop, closes on backdrop click), always expanded, opened from the
+  menu button in the top bar. The collapse control is desktop only.
+- **Nav items**: role-filtered (see §8) and grouped under Workspace and Frameworks. Active
+  state is a white pill with `text-primary`; idle is `text-sidebar-text` with
+  `sidebar-item-hover` on hover.
+- **Top bar**: time-of-day greeting on the left; on the right one role action
+  (head auditor: New Audit, admin: Upload Guideline, auditor: none) and the avatar menu.
+  Pages no longer render their own greeting.
+- **Sign out**: lives in the avatar menu and always opens a confirmation modal
+  (`rounded-2xl`, `shadow-2xl`) rather than signing out immediately; don't regress it
+  back to an instant sign-out.
+- **No search or notifications**: leave them out until there is a real feature behind them.
+- **Print**: sidebar and top bar are `print:hidden`.
 
 ---
 

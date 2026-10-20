@@ -1169,7 +1169,7 @@ export async function addProjectChecklistItem(projectId: string, guidelineId: st
 
 
 export class EditLockedError extends Error {
-  constructor(message = 'This audit is locked because it has been submitted for review.') {
+  constructor(message = 'This audit is locked because it is under review or already approved.') {
     super(message)
     this.name = 'EditLockedError'
   }

@@ -300,8 +300,13 @@ function AuditPageContent() {
   useEffect(() => {
     if (!id) return
     let cancelled = false
-    fetchProjectReliability(id).then((r) => { if (!cancelled) setReliability(r) }).catch(() => {})
-    return () => { cancelled = true }
+    const timer = window.setTimeout(() => {
+      fetchProjectReliability(id).then((r) => { if (!cancelled) setReliability(r) }).catch(() => {})
+    }, 2000)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [id, responses])
 
   const [showReviewPanel, setShowReviewPanel] = useState(false)
@@ -1014,7 +1019,7 @@ helpText: newItemHelp.trim() || undefined,
               )}
               {isAuditor && project.submissionStatus === 'pending_review' && (
                 <span className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg">
-                  <WarningCircle size={13} /> Pending Review
+                  <Lock size={13} /> Submitted, waiting for the head auditor
                 </span>
               )}
             </div>
@@ -1638,7 +1643,7 @@ helpText: newItemHelp.trim() || undefined,
                             return (
                               <li key={sub.originalCategory}>
                                 <div className={['group flex items-center rounded-lg border-l-2 transition-colors w-full', active ? 'bg-blue-50/70 border-blue-500' : 'border-transparent hover:bg-white/70'].join(' ')}>
-                                  {isHeadAuditor && (
+                                  {isHeadAuditor && !answersLocked && (
                                     <div className="pl-2.5 pr-0.5 py-2 flex items-center">
                                       <input
                                         type="checkbox"
@@ -1721,7 +1726,7 @@ helpText: newItemHelp.trim() || undefined,
                     </h2>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-xs text-slate-400 font-sans tabular-nums">{categoryItems.length} item{categoryItems.length !== 1 ? 's' : ''}</span>
-                      {isHeadAuditor && selectedCategory && (
+                      {isHeadAuditor && !answersLocked && selectedCategory && (
                         <Button variant="primary" size="xs" onClick={() => { setAddItemError(null); setShowAddItemModal(true) }}>
                           <Plus size={12} weight="bold" /> Add Item
                         </Button>
@@ -1732,7 +1737,9 @@ helpText: newItemHelp.trim() || undefined,
 
                 {isHeadAuditor && (
                   <p className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 mb-5">
-                    You can edit or delete checklist items. Responses are recorded by assigned auditors.
+                    {answersLocked
+                      ? 'This audit is locked while it is under review or approved, so checklist items can no longer be changed.'
+                      : 'You can edit or delete checklist items. Responses are recorded by assigned auditors.'}
                   </p>
                 )}
 
@@ -1929,7 +1936,7 @@ helpText: newItemHelp.trim() || undefined,
                                 >
                                   Help
                                 </button>
-                                {isHeadAuditor && (
+                                {isHeadAuditor && !answersLocked && (
                                   <div className="flex items-center gap-1 ml-0.5">
                                     <button type="button" onClick={() => startEditItem(ci.id, ci.text, ci.severity)}
                                       className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"

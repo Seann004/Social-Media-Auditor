@@ -34,7 +34,7 @@ app.use(express.urlencoded({ limit: '20mb', extended: true }))
 
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 600,
+  limit: 3000,
   standardHeaders: true,
   legacyHeaders: false,
 })
@@ -69,6 +69,9 @@ function sendError(res: express.Response, error: unknown) {
   }
   console.error(error)
   if (error && typeof error === 'object' && 'code' in error && 'details' in error) {
+    if ((error as { code: string }).code === '23505') {
+      return res.status(409).json({ error: 'That record already exists.' })
+    }
     return res.status(500).json({ error: 'Something went wrong while saving. Please try again.' })
   }
   res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
