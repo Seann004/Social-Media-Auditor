@@ -358,7 +358,7 @@ export default function DashboardPage() {
                     <div className="hidden sm:flex flex-col items-end gap-1">
                       <ScoreBar pct={scorePct} color={barColor} />
                       <span className="font-mono text-2xs text-slate-500 tabular-nums">
-                        {scorePct > 0 ? `${formatPercent(scorePct)}%` : '—'}
+                        {scorePct > 0 ? `${formatPercent(scorePct)}%` : 'n/a'}
                       </span>
                     </div>
 

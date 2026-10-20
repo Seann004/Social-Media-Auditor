@@ -1,7 +1,7 @@
 /*
-  SafetyAudit — Semantic Color Palette
+  SafetyAudit Semantic Color Palette
   All colors are defined here with descriptive names.
-  Reference these names throughout the codebase — never use raw hex codes.
+  Reference these names throughout the codebase and never use raw hex codes.
 */
 
 :root {
@@ -40,7 +40,7 @@
   --color-card-hover:         #f8fafc;
   --color-input-bg:           #f8fafc;
 
-  /* ── Sidebar (blue — same family as login bg and buttons) ── */
+  /* ── Sidebar (blue, same family as login bg and buttons) ── */
   --color-sidebar-bg:          #2563eb;
   --color-sidebar-text:        rgba(255, 255, 255, 0.75);
   --color-sidebar-text-hover:  #ffffff;

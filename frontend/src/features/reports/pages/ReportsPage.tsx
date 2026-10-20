@@ -57,7 +57,7 @@ function ScoreBar({ pct }: { pct: number }) {
         <div className={`absolute inset-y-0 left-0 w-full rounded-full origin-left ${color}`}
           style={{ transform: `scaleX(${Math.min(pct, 100) / 100})`, transition: 'transform 0.9s cubic-bezier(0.16,1,0.3,1)' }} />
       </div>
-      <span className="font-mono text-xs text-slate-600 tabular-nums w-12">{pct > 0 ? `${formatPercent(pct)}%` : '—'}</span>
+      <span className="font-mono text-xs text-slate-600 tabular-nums w-12">{pct > 0 ? `${formatPercent(pct)}%` : 'n/a'}</span>
     </div>
   )
 }
@@ -229,7 +229,7 @@ export default function ReportsPage() {
   return (
     <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 md:py-8 print:px-0 print:py-0">
       <div className="hidden print:block mb-6 border-b border-slate-200 pb-4">
-        <h1 className="text-2xl font-bold">SafetyAudit — Audit Report</h1>
+        <h1 className="text-2xl font-bold">SafetyAudit: Audit Report</h1>
         {selectedReport && (
           <p className="text-sm text-slate-600 mt-1">
             {selectedReport.projectTitle} · {selectedReport.smPlatform}
@@ -443,7 +443,7 @@ export default function ReportsPage() {
                 {!loadingScores && (failingResults.length > 0 || naResults.length > 0) && (
                   <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
                     <div className="px-5 py-3 bg-slate-50 border-b border-slate-100">
-                      <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Quick Summary — Failing &amp; Not Applicable</p>
+                      <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Quick Summary: Failing &amp; Not Applicable</p>
                     </div>
                     <div className="px-5 py-4 border-b border-slate-100">
                       <SummaryBarChart pass={passResults.length} fail={failingResults.length} na={naResults.length} />
@@ -573,7 +573,7 @@ export default function ReportsPage() {
 
           {(failingResults.length > 0 || naResults.length > 0) && (
             <div className="mb-8">
-              <p className="text-sm font-semibold mb-3">Quick Summary — Failing &amp; Not Applicable</p>
+              <p className="text-sm font-semibold mb-3">Quick Summary: Failing &amp; Not Applicable</p>
 
               <div className="mb-6 max-w-md" style={{ breakInside: 'avoid' }}>
                 <SummaryBarChart pass={passResults.length} fail={failingResults.length} na={naResults.length} />
@@ -663,7 +663,7 @@ export default function ReportsPage() {
         </div>
         <h3 id="print-modal-title" className="text-base font-bold text-slate-900 text-center mb-1">Print this report</h3>
         <p className="text-sm text-slate-500 text-center mb-6">
-          This opens your browser's print dialog — choose "Save as PDF" there if you want a PDF file.
+          This opens your browser's print dialog. Choose "Save as PDF" there if you want a PDF file.
           {totalItems > 50 && ' This report has a lot of items, so the page may freeze for a few seconds while the print view is prepared.'}
         </p>
         <div className="flex gap-3">

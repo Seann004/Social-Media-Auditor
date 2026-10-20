@@ -13,6 +13,7 @@ import type { ChecklistItem } from '../../../types'
 import { useStore } from '../../../store/useStore'
 import Button from '../../../components/ui/Button'
 import ChecklistItemDetailModal from '../../audits/components/ChecklistItemDetailModal'
+import LinkedItemsPanel from '../components/LinkedItemsPanel'
 
 const container = {
   hidden: { opacity: 0 },
@@ -59,6 +60,7 @@ export default function GuidelinesPage() {
   const [selectedItemForModal, setSelectedItemForModal] = useState<ChecklistItem | null>(null)
   const [itemModalTab, setItemModalTab] = useState<'help' | 'traceability'>('help')
   const [search, setSearch] = useState('')
+  const [view, setView] = useState<'frameworks' | 'links'>('frameworks')
   const [hour, setHour] = useState(() => new Date().getHours())
 
   useEffect(() => {
@@ -168,7 +170,7 @@ export default function GuidelinesPage() {
               <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">
                 {greeting}, {currentUser?.name?.split(' ')[0]}.
               </h1>
-              <p className="text-slate-500 text-base mt-1.5">You have Admin access — manage compliance guidelines below.</p>
+              <p className="text-slate-500 text-base mt-1.5">You have Admin access. Manage compliance guidelines below.</p>
             </>
           ) : (
             <>
@@ -211,6 +213,26 @@ export default function GuidelinesPage() {
         </motion.div>
       )}
 
+      <div className="mb-5 inline-flex rounded-lg border border-slate-200 bg-white p-1">
+        {([['frameworks', 'Frameworks'], ['links', 'Linked items']] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setView(key)}
+            aria-pressed={view === key}
+            className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 ${
+              view === key ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'links' ? (
+        <LinkedItemsPanel guidelines={activeGuidelines} isAdmin={isAdmin} />
+      ) : (
+      <>
       <div className="mb-5 flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <label htmlFor="guideline-search" className="sr-only">Search guidelines and checklist items</label>
@@ -476,6 +498,8 @@ export default function GuidelinesPage() {
             )
           })}
         </motion.div>
+      )}
+      </>
       )}
 
       <ChecklistItemDetailModal

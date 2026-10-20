@@ -466,7 +466,7 @@ export default function CreateProjectPage() {
                   <AuditorAvatar user={currentUser} size="md" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-slate-800 truncate">{currentUser.name}</p>
-                    <p className="text-xs text-blue-600 font-medium">Head Auditor — you</p>
+                    <p className="text-xs text-blue-600 font-medium">Head Auditor (you)</p>
                   </div>
                   <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
                     <CheckIcon size={12} weight="bold" className="text-white" />

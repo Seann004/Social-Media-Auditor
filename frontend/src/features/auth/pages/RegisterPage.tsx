@@ -13,8 +13,8 @@ import type { UserRole } from '../../../types'
 
 const PASSWORD_RULES = [
   { label: 'At least 8 characters', test: (p: string) => p.length >= 8 },
-  { label: 'One uppercase letter (A–Z)', test: (p: string) => /[A-Z]/.test(p) },
-  { label: 'One number (0–9)', test: (p: string) => /[0-9]/.test(p) },
+  { label: 'One uppercase letter (A to Z)', test: (p: string) => /[A-Z]/.test(p) },
+  { label: 'One number (0 to 9)', test: (p: string) => /[0-9]/.test(p) },
   { label: 'One symbol (e.g. _ ! @)', test: (p: string) => /[^A-Za-z0-9]/.test(p) },
 ]
 

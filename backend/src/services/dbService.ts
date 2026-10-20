@@ -674,7 +674,7 @@ export async function syncProjectMembers(projectId: string, userIds: string[]): 
 
 
 export class GuidelineHasAnswersError extends Error {
-  constructor(message = 'This guideline cannot be removed — it already has recorded answers under it.') {
+  constructor(message = 'This guideline cannot be removed because it already has recorded answers under it.') {
     super(message)
     this.name = 'GuidelineHasAnswersError'
   }
@@ -1026,6 +1026,7 @@ export async function initializeProjectChecklists(projectId: string): Promise<vo
           if (globalItems && globalItems.length > 0) {
             const newItems = globalItems.map((item: any) => ({
               itemId: crypto.randomUUID(),
+              originalItemId: item.itemId,
               checklistId: newChecklistId,
               itemDescription: item.itemDescription,
               category: item.category,
@@ -1174,7 +1175,7 @@ export class EditLockedError extends Error {
   }
 }
 
-async function assertProjectEditable(projectId: string): Promise<void> {
+export async function assertProjectEditable(projectId: string): Promise<void> {
   const { data, error } = await supabase
     .from('Audit_Project')
     .select('submissionStatus')
@@ -1336,6 +1337,7 @@ export async function toggleProjectChecklistCategory(projectId: string, guidelin
       if (globalItems && globalItems.length > 0) {
         const newItems = globalItems.map((item: any) => ({
           itemId: crypto.randomUUID(),
+          originalItemId: item.itemId,
           checklistId,
           itemDescription: item.itemDescription,
           category: item.category,
@@ -1482,7 +1484,7 @@ export async function upsertAuditResult(
   }
 }
 
-function reconcileEffectiveStatus(statuses: string[], resolvedStatus?: string): string {
+export function reconcileEffectiveStatus(statuses: string[], resolvedStatus?: string): string {
   if (resolvedStatus) return resolvedStatus
   const distinct = new Set(statuses)
   return distinct.size === 1 ? statuses[0] : 'needs_review'
@@ -2290,7 +2292,7 @@ export async function sendAssignmentEmail(projectId: string, userId: string) {
     const brevoApiKey = process.env.BREVO_API_KEY
     const senderEmail = process.env.BREVO_SENDER_EMAIL
     if (!brevoApiKey || !senderEmail) {
-      console.warn('[Email] BREVO_API_KEY or BREVO_SENDER_EMAIL not configured — skipping assignment email.')
+      console.warn('[Email] BREVO_API_KEY or BREVO_SENDER_EMAIL not configured, skipping assignment email.')
       return
     }
 

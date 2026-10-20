@@ -3,12 +3,13 @@ import express from 'express'
 import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import * as db from './services/dbService.js'
+import * as mapping from './services/mappingService.js'
 import { supabase } from './config/supabase.js'
 import { requireAuth, requireRole, optionalAuth, signToken } from './middleware/auth.js'
 import { requireProjectAccess, requireProjectOwner, requireChecklistItemProjectAccess, filterAccessibleProjectIds, isProjectMember } from './middleware/projectAccess.js'
 
 if (!process.env.JWT_SECRET) {
-  console.error('FATAL: JWT_SECRET is not set. Refusing to start — every request would silently fail auth.')
+  console.error('FATAL: JWT_SECRET is not set. Refusing to start because every request would silently fail auth.')
   process.exit(1)
 }
 
@@ -60,10 +61,16 @@ function sendError(res: express.Response, error: unknown) {
   if (error instanceof db.GuidelineHasAnswersError) {
     return res.status(409).json({ error: error.message })
   }
-  if (error instanceof db.ResultNotFoundError) {
+  if (error instanceof db.ResultNotFoundError || error instanceof mapping.SuggestionNotFoundError || error instanceof mapping.MappingNotFoundError) {
     return res.status(404).json({ error: error.message })
   }
+  if (error instanceof mapping.MappingFailedError) {
+    return res.status(502).json({ error: error.message })
+  }
   console.error(error)
+  if (error && typeof error === 'object' && 'code' in error && 'details' in error) {
+    return res.status(500).json({ error: 'Something went wrong while saving. Please try again.' })
+  }
   res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
 }
 
@@ -294,6 +301,9 @@ app.post('/api/guidelines', requireAuth, requireRole('admin'), async (req, res) 
     }
     await db.createGuideline({ guideline, items })
     res.status(201).json({ success: true })
+    mapping.generateMappingsForGuideline(guideline.guidelineId, askGroq)
+      .then((r) => console.log(`Mapped ${guideline.guidelineName}: ${r.suggested} suggested links`))
+      .catch((err) => console.error('Auto mapping failed:', err))
   } catch (error) {
     sendError(res, error)
   }
@@ -569,7 +579,7 @@ async function groqFetchWithRetry(url: string, options: RequestInit, retries = 3
     const res = await fetchWithTimeout(url, options, GROQ_TIMEOUT_MS)
     if (res.status !== 429) return res
     const retryAfter = Number(res.headers.get('retry-after') || 0) || 15
-    console.warn(`[GROQ] 429 rate limit — waiting ${retryAfter}s before retry ${attempt + 1}/${retries}`)
+    console.warn(`[GROQ] 429 rate limit, waiting ${retryAfter}s before retry ${attempt + 1}/${retries}`)
     await new Promise((r) => setTimeout(r, retryAfter * 1000))
   }
   return fetchWithTimeout(url, options, GROQ_TIMEOUT_MS)
@@ -602,7 +612,7 @@ A valid clause MUST impose a concrete obligation, standard, or requirement on th
 Valid clause patterns include: numbered sections (e.g. "1.", "Article 5", "Section 3.2"),
 titled requirement blocks, or named standards.
 
-IGNORE the following — do NOT extract checklist items from them or use them as references:
+IGNORE the following and do NOT extract checklist items from them or use them as references:
 - Page headers, footers, or version/date stamps (e.g. "2.1.87 | 17 October 2022", "v1.3 | 2024")
 - Standalone page numbers
 - Document furniture: "Executive Summary", "Foreword", "Preface", "Table of Contents",
@@ -861,10 +871,117 @@ You MUST return your output in JSON format matching this EXACT schema:
   }
 })
 
+async function askGroq(systemPrompt: string, userPrompt: string): Promise<any> {
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) throw new Error('GROQ_API_KEY is not configured on the backend server')
+  const response = await groqFetchWithRetry('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+    }),
+  })
+  if (!response.ok) throw new Error(`Groq API error: ${await response.text()}`)
+  const data = await response.json() as any
+  return JSON.parse(data.choices?.[0]?.message?.content || '{}')
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+app.post('/api/guidelines/:id/mappings/generate', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: 'Guideline not found.' })
+    const result = await mapping.generateMappingsForGuideline(req.params.id, askGroq)
+    res.json(result)
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.get('/api/mappings', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const guidelineId = typeof req.query.guidelineId === 'string' ? req.query.guidelineId : undefined
+    res.json(await mapping.fetchMappings(guidelineId))
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.get('/api/mappings/coverage', requireAuth, async (req, res) => {
+  try {
+    res.json(await mapping.fetchCoverage())
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.patch('/api/mappings/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const { status, relation } = req.body
+    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: 'Mapping not found.' })
+    if (!['suggested', 'confirmed', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'status must be suggested, confirmed or rejected.' })
+    }
+    if (relation !== undefined && !['equivalent', 'partial'].includes(relation)) {
+      return res.status(400).json({ error: 'relation must be equivalent or partial.' })
+    }
+    await mapping.reviewMapping(req.params.id, status, relation, req.user!.userId)
+    res.json({ success: true })
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.get('/api/projects/:id/suggestions', requireAuth, requireProjectAccess('id'), async (req, res) => {
+  try {
+    res.json(await mapping.fetchProjectSuggestions(req.params.id, req.user!.userId))
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+const MAX_ACCEPT_ITEMS = 500
+
+app.post('/api/projects/:id/suggestions/accept', requireAuth, requireRole('auditor'), requireProjectAccess('id'), async (req, res) => {
+  try {
+    const { itemIds } = req.body
+    if (!Array.isArray(itemIds) || itemIds.length === 0 || itemIds.length > MAX_ACCEPT_ITEMS
+      || !itemIds.every((i) => typeof i === 'string' && UUID_RE.test(i))) {
+      return res.status(400).json({ error: `itemIds must be a list of 1 to ${MAX_ACCEPT_ITEMS} item ids.` })
+    }
+    const accepted = await mapping.acceptSuggestions(req.params.id, req.user!.userId, itemIds)
+    res.json({ accepted })
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.post('/api/projects/:id/suggestions/dismiss', requireAuth, requireRole('auditor'), requireProjectAccess('id'), async (req, res) => {
+  try {
+    const { itemId, sourceItemId } = req.body
+    if (typeof itemId !== 'string' || typeof sourceItemId !== 'string') {
+      return res.status(400).json({ error: 'itemId and sourceItemId are required.' })
+    }
+    await mapping.dismissSuggestion(req.params.id, req.user!.userId, itemId, sourceItemId)
+    res.json({ success: true })
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
 app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (res.headersSent) return next(err)
   if (err instanceof CorsRejectedError) {
     return res.status(403).json({ error: 'Not allowed by CORS' })
+  }
+  if ((err as any)?.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Request body is not valid JSON.' })
   }
   console.error(err)
   res.status(500).json({ error: 'Internal server error' })

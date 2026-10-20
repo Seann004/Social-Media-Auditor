@@ -1,4 +1,4 @@
-# SafetyAudit — Child Safety Compliance Platform
+# SafetyAudit: Child Safety Compliance Platform
 
 A full-stack web application for conducting structured compliance audits of social media platforms against child safety regulatory frameworks (e.g. eSafety AU, MY PDPA, ONSA Child Protection Code).
 
@@ -15,7 +15,7 @@ A full-stack web application for conducting structured compliance audits of soci
 | Icons | Phosphor Icons |
 | Backend | Node.js + Express (TypeScript) |
 | Database | Supabase (PostgreSQL) |
-| AI Generator | Groq API — Llama 3.3 70B |
+| AI Generator | Groq API (Llama 3.3 70B) |
 
 ---
 
@@ -95,12 +95,12 @@ cd ../frontend && npm install
 
 ### 4. Start both servers
 
-**Terminal 1 — Backend** (http://localhost:3000)
+**Terminal 1: Backend** (http://localhost:3000)
 ```bash
 cd backend && npm run dev
 ```
 
-**Terminal 2 — Frontend** (http://localhost:5173)
+**Terminal 2: Frontend** (http://localhost:5173)
 ```bash
 cd frontend && npm run dev
 ```

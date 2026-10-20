@@ -483,3 +483,99 @@ export async function mergeChecklistItems(items: any[], platform: string): Promi
     body: JSON.stringify({ items, platform }),
   })
 }
+
+export type MappingRelation = 'equivalent' | 'partial'
+export type MappingStatus = 'suggested' | 'confirmed' | 'rejected'
+
+export interface MappedItem {
+  itemId: string
+  guidelineId: string
+  guidelineName: string
+  category: string
+  itemCode: string | null
+  text: string
+  reference: string | null
+  clause: string | null
+}
+
+export interface ItemMapping {
+  mappingId: string
+  relation: MappingRelation
+  confidence: number | null
+  rationale: string | null
+  status: MappingStatus
+  createdAt: string
+  reviewedAt: string | null
+  itemA: MappedItem
+  itemB: MappedItem
+}
+
+export interface MappingCoverage {
+  guidelines: { guidelineId: string; name: string; totalItems: number; linkedItems: number }[]
+  pairs: { guidelineA: string; guidelineB: string; count: number }[]
+  mappings: Record<MappingStatus, number>
+  decisions: { accepted: number; dismissed: number }
+}
+
+export interface AnswerSuggestion {
+  itemId: string
+  guidelineId: string
+  suggestedStatus: ChecklistItemStatus
+  relation: MappingRelation
+  sourceProjectId: string
+  sourceProjectTitle: string
+  sourceGuideline: string
+  sourceItemId: string
+  sourceItemCode: string | null
+  findings: string | null
+  evidenceCount: number
+  answeredAt: string
+  otherSources: number
+}
+
+export async function generateMappings(guidelineId: string): Promise<{ checked: number; suggested: number; failedBatches: number }> {
+  return request(`/guidelines/${guidelineId}/mappings/generate`, { method: 'POST' })
+}
+
+export async function fetchMappings(guidelineId?: string): Promise<ItemMapping[]> {
+  const query = guidelineId ? `?guidelineId=${encodeURIComponent(guidelineId)}` : ''
+  return request<ItemMapping[]>(`/mappings${query}`)
+}
+
+export async function reviewMapping(mappingId: string, status: MappingStatus, relation?: MappingRelation): Promise<void> {
+  await request(`/mappings/${mappingId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status, relation }),
+  })
+}
+
+export async function fetchMappingCoverage(): Promise<MappingCoverage> {
+  return request<MappingCoverage>('/mappings/coverage')
+}
+
+export async function fetchAnswerSuggestions(projectId: string): Promise<AnswerSuggestion[]> {
+  return request<AnswerSuggestion[]>(`/projects/${projectId}/suggestions`)
+}
+
+export interface AcceptedAnswer {
+  itemId: string
+  result: ChecklistItemStatus
+  notes: string | null
+  findings: string | null
+  timeSubmitted: string
+}
+
+export async function acceptAnswerSuggestions(projectId: string, itemIds: string[]): Promise<AcceptedAnswer[]> {
+  const res = await request<{ accepted: AcceptedAnswer[] }>(`/projects/${projectId}/suggestions/accept`, {
+    method: 'POST',
+    body: JSON.stringify({ itemIds }),
+  })
+  return res.accepted
+}
+
+export async function dismissAnswerSuggestion(projectId: string, itemId: string, sourceItemId: string): Promise<void> {
+  await request(`/projects/${projectId}/suggestions/dismiss`, {
+    method: 'POST',
+    body: JSON.stringify({ itemId, sourceItemId }),
+  })
+}
