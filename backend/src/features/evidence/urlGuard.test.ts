@@ -9,7 +9,7 @@ describe('urlGuard', () => {
   it.each([
     'http://127.0.0.1/', 'http://localhost:3000/', 'http://10.0.0.5/', 'http://192.168.1.1/',
     'http://169.254.169.254/latest/meta-data/', 'http://[::1]/', 'http://[fc00::1]/',
-    'http://[::ffff:127.0.0.1]/', 'http://2130706433/', 'http://0x7f.0.0.1/',
+    'http://[::ffff:127.0.0.1]/', 'http://2130706433/', 'http://[::127.0.0.1]/', 'http://[::a9fe:a9fe]/', 'http://0x7f.0.0.1/',
     'file:///etc/passwd', 'ftp://example.com/', 'http://user:pw@example.com/', 'not a url',
   ])('blocks %s', async (u) => {
     expect((await guard.check(u)).allowed).toBe(false)
@@ -45,6 +45,17 @@ describe('urlGuard', () => {
     expect((await g.check('http://127.0.0.1:4000/')).allowed).toBe(true)
     expect((await g.check('http://127.0.0.1:4001/')).allowed).toBe(false)
     expect((await g.check('http://127.0.0.1/')).allowed).toBe(false)
+  })
+
+  it('blocks a name resolving to a ::/96 IPv4-compatible address', async () => {
+    const g = createUrlGuard({ lookup: async () => [{ address: '::7f00:1' }] })
+    expect((await g.check('https://v6.example.com/')).allowed).toBe(false)
+  })
+
+  it('allows a normal public IPv6 address', async () => {
+    expect((await guard.check('http://[2606:4700:4700::1111]/')).allowed).toBe(true)
+    const g = createUrlGuard({ lookup: async () => [{ address: '2606:4700:4700::1111' }] })
+    expect((await g.check('https://v6.example.com/')).allowed).toBe(true)
   })
 
   it('caches lookups per guard instance', async () => {

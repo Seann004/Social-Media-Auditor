@@ -21,9 +21,16 @@ const defaultLookup: LookupFn = (host) => dns.lookup(host, { all: true })
 
 const blocked = (reason: string): UrlCheckResult => ({ allowed: false, reason })
 
+const GLOBAL_UNICAST_V6 = ipaddr.IPv6.parseCIDR('2000::/3')
+
 function isPublicAddress(ip: string): boolean {
   try {
-    return ipaddr.process(ip).range() === 'unicast'
+    const addr = ipaddr.process(ip)
+    if (addr.kind() === 'ipv6') {
+      // Only global unicast 2000::/3; rejects ::/96 IPv4-compatible and other odd ranges.
+      return (addr as ipaddr.IPv6).match(GLOBAL_UNICAST_V6) && addr.range() === 'unicast'
+    }
+    return addr.range() === 'unicast'
   } catch {
     return false
   }
