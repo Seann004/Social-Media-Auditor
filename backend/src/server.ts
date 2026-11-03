@@ -2,6 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import * as db from './services/dbService.js'
+import { groqFetchWithRetry } from './lib/groq.js'
 
 dotenv.config()
 
@@ -413,17 +414,6 @@ app.post('/api/reports', async (req, res) => {
 
 // ─── Llama 3.3 Groq Generator Routes ──────────────────────────────────────────
 
-async function groqFetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
-  for (let attempt = 0; attempt < retries; attempt++) {
-    const res = await fetch(url, options)
-    if (res.status !== 429) return res
-    const retryAfter = Number(res.headers.get('retry-after') || 0) || 15
-    console.warn(`[GROQ] 429 rate limit — waiting ${retryAfter}s before retry ${attempt + 1}/${retries}`)
-    await new Promise((r) => setTimeout(r, retryAfter * 1000))
-  }
-  // Final attempt — return whatever we get
-  return fetch(url, options)
-}
 app.post('/api/generator/process-chunk', async (req, res) => {
   try {
     const { textChunk, platform } = req.body
