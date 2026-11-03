@@ -11,6 +11,8 @@ export const RUN_TIMEOUT_MS = 900_000
 export const MAX_START_URLS = 10
 export const MAX_CONCURRENT_RUNS = 1
 export const MAX_RUNS_PER_PROJECT_PER_DAY = 5
+export const MAX_REDIRECT_HOPS = 5
+export const NETWORK_IDLE_WAIT_MS = 5_000
 
 // AI budget
 export const MAX_INPUT_TOKENS_PER_CALL = 5_000
