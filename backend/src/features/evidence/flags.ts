@@ -13,6 +13,7 @@ export interface FlagInput {
 }
 
 const MAX_URLS_NAMED = 3
+const NO_QUOTE_REASON = 'The AI gave this result without quoting any captured page.'
 const CLAIM_RESULTS: readonly SuggestedResult[] = ['yes', 'no', 'partially']
 
 const STATUS_WORDS: Readonly<Record<AccessStatus, string>> = {
@@ -47,11 +48,13 @@ export function computeFlags(input: FlagInput): ReviewFlag[] {
     input.quotes.length === 0
   const evidenceShort = input.passagesFound === 0 || !input.evidenceSufficient
 
-  if (evidenceShort || noQuotedClaim) {
+  if (evidenceShort) {
     flags.push({
       type: 'missing_evidence',
       reason: reasonFromAi(input.aiReason, 'No captured page clearly covers this item.'),
     })
+  } else if (noQuotedClaim) {
+    flags.push({ type: 'missing_evidence', reason: NO_QUOTE_REASON })
   }
 
   if (evidenceShort && input.failedPages.length > 0) {

@@ -51,6 +51,21 @@ describe('computeFlags', () => {
     expect(blank.find((f) => f.type === 'missing_evidence')?.reason).not.toBe('   ')
   })
 
+  it('uses fixed wording, not aiReason, when a result has no quotes but evidence is sufficient', () => {
+    const flags = computeFlags(input({ suggestedResult: 'yes', quotes: [], aiReason: 'Age is verified at sign-up.' }))
+    const mine = flags.filter((f) => f.type === 'missing_evidence')
+    expect(mine).toHaveLength(1)
+    expect(mine[0].reason).toBe('The AI gave this result without quoting any captured page.')
+    expect(mine[0].reason).not.toContain('Age is verified')
+  })
+
+  it('short-evidence wording wins over the no-quote wording, with a single flag', () => {
+    const flags = computeFlags(input({ evidenceSufficient: false, quotes: [], aiReason: 'Nothing on age checks.' }))
+    const mine = flags.filter((f) => f.type === 'missing_evidence')
+    expect(mine).toHaveLength(1)
+    expect(mine[0].reason).toBe('Nothing on age checks.')
+  })
+
   it('inaccessible only when evidence is short AND a page failed, naming up to 3 urls', () => {
     const failedPages = [1, 2, 3, 4].map((n) => ({ url: `https://a.test/${n}`, status: 'login_required' as const }))
     const flag = computeFlags(input({ evidenceSufficient: false, failedPages })).find((f) => f.type === 'inaccessible')
