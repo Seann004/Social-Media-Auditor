@@ -1,4 +1,4 @@
-import type { Page } from 'playwright'
+import type { CDPSession, Page } from 'playwright'
 import { z } from 'zod'
 import { isTimeoutError } from './browser.js'
 import { logCaptureFailure } from './captureLog.js'
@@ -35,7 +35,7 @@ export interface PageContent {
  * For an element with no box innerText falls back to textContent, so a wholly hidden body is
  * ruled out at the end.
  */
-const READ_PAGE_SOURCE = String.raw`(() => {
+export const READ_PAGE_SOURCE = String.raw`(() => {
   // A named form field shadows the property of that name on its form, so every DOM read and write
   // goes through the prototypes. Otherwise an input called "style" could cost a real page.
   const getter = (proto, name) => {
@@ -304,6 +304,41 @@ async function readSnapshot(page: Page, timeoutMs: number): Promise<string | nul
   }
 }
 
+export interface IsolatedWorld {
+  cdp: CDPSession
+  /** Runs source in the isolated world and returns its value. Throws if the source throws. */
+  evaluate(expression: string): Promise<unknown>
+}
+
+/**
+ * Switches the page's scripts off and opens an isolated world in it, whose native functions the
+ * page's own scripts cannot replace. A named form field still shadows the property of that name
+ * on its form, and CSS applies in every world. The scripts stay off for the life of the page.
+ */
+export async function openIsolatedWorld(page: Page, worldName = 'evidence-capture'): Promise<IsolatedWorld> {
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setScriptExecutionDisabled', { value: true })
+  const { frameTree } = await cdp.send('Page.getFrameTree')
+  const { executionContextId } = await cdp.send('Page.createIsolatedWorld', {
+    frameId: frameTree.frame.id,
+    worldName,
+  })
+  return {
+    cdp,
+    async evaluate(expression) {
+      const { result, exceptionDetails } = await cdp.send('Runtime.evaluate', {
+        expression,
+        contextId: executionContextId,
+        returnByValue: true,
+      })
+      if (exceptionDetails) {
+        throw new Error(`The page read failed: ${exceptionDetails.exception?.description ?? exceptionDetails.text}`)
+      }
+      return result.value
+    },
+  }
+}
+
 /**
  * Reads the page from an isolated world, whose native functions the page's own scripts cannot
  * replace, so a script cannot forge the text. Two things still reach an isolated world. A named
@@ -316,22 +351,8 @@ async function readSnapshot(page: Page, timeoutMs: number): Promise<string | nul
  * So take the screenshot first, and close the page after.
  */
 export async function readPageContent(page: Page, timeoutMs: number): Promise<PageContent> {
-  const cdp = await page.context().newCDPSession(page)
-  await cdp.send('Emulation.setScriptExecutionDisabled', { value: true })
-  const { frameTree } = await cdp.send('Page.getFrameTree')
-  const { executionContextId } = await cdp.send('Page.createIsolatedWorld', {
-    frameId: frameTree.frame.id,
-    worldName: 'evidence-capture',
-  })
-  const { result, exceptionDetails } = await cdp.send('Runtime.evaluate', {
-    expression: READ_PAGE_SOURCE,
-    contextId: executionContextId,
-    returnByValue: true,
-  })
-  if (exceptionDetails) {
-    throw new Error(`The page read failed: ${exceptionDetails.exception?.description ?? exceptionDetails.text}`)
-  }
-  const content = pageContentSchema.parse(result.value)
+  const world = await openIsolatedWorld(page)
+  const content = pageContentSchema.parse(await world.evaluate(READ_PAGE_SOURCE))
   const accessibilitySnapshot = await readSnapshot(page, timeoutMs)
   return { ...content, accessibilitySnapshot }
 }

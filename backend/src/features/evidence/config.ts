@@ -31,6 +31,8 @@ export const MAX_WORDS_PER_PASSAGE = 250
 export const MAX_PASSAGES_PER_ITEM = 5
 export const MAX_HIGHLIGHTS_PER_SUGGESTION = 2
 export const JPEG_QUALITY = 70
+/** Context kept around a highlighted quote in its close-up, in CSS pixels. */
+export const HIGHLIGHT_PADDING_PX = 80
 
 // Links and sessions (seconds unless named otherwise)
 export const VIEWING_LINK_SECONDS = 300
