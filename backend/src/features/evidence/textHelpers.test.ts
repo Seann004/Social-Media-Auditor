@@ -68,6 +68,23 @@ describe('isQuoteVerified', () => {
   it('rejects quotes shorter than 3 words', () => {
     expect(isQuoteVerified('the', 'the policy')).toBe(false)
   })
+  it('rejects a quote that ends mid-word', () => {
+    expect(isQuoteVerified('we do not', 'We... we do nothing about it')).toBe(false)
+    expect(isQuoteVerified('users share data', 'users share database')).toBe(false)
+  })
+  it('rejects a quote that starts mid-word', () => {
+    expect(isQuoteVerified('ata is kept', 'data is kept')).toBe(false)
+  })
+  it('accepts a quote followed by punctuation', () => {
+    expect(isQuoteVerified('data is kept', 'data is kept.')).toBe(true)
+  })
+  it('finds a later valid match after a mid-word first hit', () => {
+    expect(isQuoteVerified('we do not', 'we do nothing. we do not share')).toBe(true)
+  })
+  it('rejects punctuation-only quotes', () => {
+    expect(isQuoteVerified('... ... ...', 'wait ... ... ... what')).toBe(false)
+    expect(isQuoteVerified('- - -', 'a - - - b')).toBe(false)
+  })
   it('rejects text not in the passage', () => {
     expect(isQuoteVerified('we verify every age', 'no such text')).toBe(false)
   })

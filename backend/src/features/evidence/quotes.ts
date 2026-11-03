@@ -16,10 +16,31 @@ export function normaliseForMatch(s: string): string {
 }
 
 const MIN_QUOTE_WORDS = 3
+const WORD_CHAR = /[\p{L}\p{N}]/u
 
-/** A quote is verified only if it has at least 3 words and appears verbatim (after normalising) in the passage. */
+function isWordChar(ch: string | undefined): boolean {
+  return ch !== undefined && ch !== '' && WORD_CHAR.test(ch)
+}
+
+/**
+ * A quote is verified only if it has at least 3 tokens containing a letter or
+ * digit and appears verbatim (after normalising) in the passage, starting and
+ * ending on word boundaries. Every occurrence is checked, not just the first.
+ */
 export function isQuoteVerified(quote: string, passageText: string): boolean {
   const q = normaliseForMatch(quote)
-  if (q.split(' ').filter(Boolean).length < MIN_QUOTE_WORDS) return false
-  return normaliseForMatch(passageText).includes(q)
+  const meaningful = q.split(' ').filter((t) => WORD_CHAR.test(t))
+  if (meaningful.length < MIN_QUOTE_WORDS) return false
+  const passage = normaliseForMatch(passageText)
+  let from = 0
+  for (;;) {
+    const at = passage.indexOf(q, from)
+    if (at === -1) return false
+    const before = at > 0 ? passage[at - 1] : undefined
+    const after = passage[at + q.length]
+    const startOk = !isWordChar(before) || !isWordChar(q[0])
+    const endOk = !isWordChar(after) || !isWordChar(q[q.length - 1])
+    if (startOk && endOk) return true
+    from = at + 1
+  }
 }
