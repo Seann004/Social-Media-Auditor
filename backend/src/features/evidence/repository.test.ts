@@ -139,6 +139,8 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
   })
 
   it('markInterruptedRuns fails queued, capturing and assessing runs with "server restarted"', async () => {
+    // The method is global (no project filter), so the live variant skips it to protect real runs.
+    if (variant !== 'memory') return
     const queued = await newRun()
     const capturing = await newRun()
     await h.repo.updateRun(capturing.id, { status: 'capturing' })
@@ -147,7 +149,7 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
     const done = await newRun()
     await h.repo.updateRun(done.id, { status: 'completed' })
 
-    expect(await h.repo.markInterruptedRuns()).toBeGreaterThanOrEqual(3)
+    expect(await h.repo.markInterruptedRuns()).toBe(3)
     for (const r of [queued, capturing, assessing]) {
       const got = await h.repo.getRun(r.id)
       expect(got?.status).toBe('failed')
