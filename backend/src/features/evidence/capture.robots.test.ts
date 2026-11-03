@@ -1,6 +1,6 @@
 import { createServer, type RequestListener, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startFixtureSite, unusedPort, type FixtureSite } from './__fixtures__/site.js'
 import { closeBrowser, getBrowser } from './browser.js'
 import { capturePages, type CapturedPageData } from './capture.js'
@@ -12,11 +12,13 @@ let site: FixtureSite
 let guard: UrlGuard
 
 beforeEach(async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => undefined)
   site = await startFixtureSite()
   guard = createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${site.port}`] })
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await site.close()
 })
 

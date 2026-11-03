@@ -1,4 +1,5 @@
 import robotsParserModule from 'robots-parser'
+import { logCaptureFailure } from './captureLog.js'
 import { PAGE_TIMEOUT_MS, USER_AGENT } from './config.js'
 import type { UrlGuard } from './urlGuard.js'
 
@@ -80,8 +81,9 @@ async function loadRules(origin: string, guard: UrlGuard): Promise<RuleSet> {
     }
     const rules = parseRobots(robotsUrl, await result.text())
     return { kind: 'rules', isAllowed: (url) => rules.isAllowed(url, USER_AGENT) === true }
-  } catch {
-    return unreadable('the site could not be reached')
+  } catch (err) {
+    logCaptureFailure('Could not read robots.txt', robotsUrl, err)
+    return unreadable('it could not be fetched')
   }
 }
 

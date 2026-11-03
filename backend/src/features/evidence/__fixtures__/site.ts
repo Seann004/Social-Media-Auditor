@@ -105,15 +105,6 @@ function tricksPage(internalUrl: string, udpPort: number): string {
   )
 }
 
-/** Serves a page the first time and never answers again. */
-function firstThenSilence(): Handler {
-  let served = 0
-  return (res) => {
-    served += 1
-    if (served === 1) sendHtml(res, html('Harmless', '<p>Harmless the first time.</p>'))
-  }
-}
-
 /** Serves a page the first time and redirects every time after, as a hostile server could. */
 function firstThenRedirect(location: string): Handler {
   let served = 0
@@ -164,8 +155,6 @@ function buildRoutes(internalUrl: string, udpPort: number, sitePort: () => numbe
     '/slow': () => undefined,
     // Busy after DOMContentLoaded, so navigation succeeds and only reading the page can hang.
     '/busy': page('Busy', '<p>Busy.</p><script>setTimeout(() => { for (;;); }, 0)</script>'),
-    // Answers the walk from Node, then never answers the browser.
-    '/flip-to-slow': firstThenSilence(),
     '/download': (res) => {
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="x.bin"' })
       res.end('not a page')

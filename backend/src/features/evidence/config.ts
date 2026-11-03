@@ -13,6 +13,10 @@ export const MAX_CONCURRENT_RUNS = 1
 export const MAX_RUNS_PER_PROJECT_PER_DAY = 5
 export const MAX_REDIRECT_HOPS = 5
 export const NETWORK_IDLE_WAIT_MS = 5_000
+export const MAX_RESPONSE_BYTES = 25 * 1024 * 1024
+export const BROWSER_CLOSE_TIMEOUT_MS = 5_000
+/** A visit may take this many page timeouts: check, navigate, screenshot and read. */
+export const VISIT_DEADLINE_PAGE_TIMEOUTS = 4
 
 // AI budget
 export const MAX_INPUT_TOKENS_PER_CALL = 5_000
