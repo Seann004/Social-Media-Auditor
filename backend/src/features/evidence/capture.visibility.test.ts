@@ -231,7 +231,7 @@ describe('the visibility filter', () => {
 })
 
 describe('a page that fights the read', () => {
-  it('cannot forge the text, the title or the links, or defeat the filter', async () => {
+  it('cannot forge the text or the title, or disable the filter, by replacing functions', async () => {
     const page = await capture('/forged')
 
     expect(page.accessStatus).toBe('ok')
@@ -250,7 +250,7 @@ describe('a page that fights the read', () => {
     expect(pages.map((p) => new URL(p.url).pathname)).toEqual(['/forged', '/real-link'])
   })
 
-  it('cannot undo the hiding before the snapshot is taken', async () => {
+  it('cannot undo the hiding with a timer or an observer before the snapshot is taken', async () => {
     const page = await capture('/undoing')
 
     expect(page.text).toContain('Visible words.')

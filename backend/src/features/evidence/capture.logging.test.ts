@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, t
 import { captureAll, html, startPageServer, withAlteredPages, type PageServer } from './__fixtures__/pages.js'
 import { unusedPort } from './__fixtures__/site.js'
 import { closeBrowser, getBrowser } from './browser.js'
+import { logCaptureFailure } from './captureLog.js'
 import { createRobotsChecker } from './robots.js'
 import { createUrlGuard } from './urlGuard.js'
 
@@ -140,6 +141,20 @@ describe('failure causes are logged', () => {
 
     expect(logLines().length).toBeGreaterThan(0)
     expect(logLines().filter((line) => /page-secret|part-secret/.test(line))).toEqual([])
+  })
+
+  it.each([
+    ['a query with a bracket in it', 'http://h.example/p?a=(b)&token=SECRET-VALUE', /SECRET/],
+    ['a query with a quote in it', "http://h.example/p?a=b'&token=SECRET-VALUE", /SECRET/],
+    ['a fragment', 'http://h.example/cb#access_token=SECRET-VALUE', /SECRET/],
+    ['a password', 'http://user:SECRET-VALUE@h.example/p', /SECRET|user/],
+    ['a password with an @ in it', 'http://user:SEC@RET-VALUE@h.example/p', /SEC|RET|user/],
+  ])('strips %s, from the url and from the message', (_what, url, secret) => {
+    logCaptureFailure('Sample', url, new Error(`page.goto: net::ERR_FAILED at ${url}\nCall log: ${url}`))
+
+    expect(logLines()).toHaveLength(1)
+    expect(logLines()[0]).toContain('h.example')
+    expect(logLines()[0]).not.toMatch(secret)
   })
 
   it('stays quiet about a capture that was simply aborted', async () => {

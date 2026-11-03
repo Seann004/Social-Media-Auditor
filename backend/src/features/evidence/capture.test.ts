@@ -6,8 +6,8 @@ import type { AddressInfo } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { chromium, type Browser, type Page } from 'playwright'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFailed, vi } from 'vitest'
-import { withAlteredPages } from './__fixtures__/pages.js'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { quietLogUnlessTestFails, TEST_PAGE_TIMEOUT_MS, TEST_TIMEOUT_MS, withAlteredPages } from './__fixtures__/pages.js'
 import { startFixtureSite, unusedPort, type FixtureSite } from './__fixtures__/site.js'
 import { closeBrowser, createGuardedContext, getBrowser, gotoGuarded } from './browser.js'
 import { capturePages, DEFAULT_CAPTURE_LIMITS, type CaptureLimits, type CapturedPageData } from './capture.js'
@@ -15,6 +15,8 @@ import { LINK_DEPTH, MAX_PAGES_PER_RUN, PAGE_TIMEOUT_MS, USER_AGENT } from './co
 import { createUrlGuard, type UrlGuard } from './urlGuard.js'
 
 const FAST_TIMEOUT_MS = 1_500
+
+vi.setConfig({ testTimeout: TEST_TIMEOUT_MS })
 
 const never = new AbortController().signal
 
@@ -38,8 +40,7 @@ async function capture(startUrls: string[], overrides: CaptureOverrides = {}): P
     startUrls,
     respectRobots: overrides.respectRobots ?? false,
     signal: overrides.signal ?? never,
-    // Under the test timeout, so that a step that stalls reports itself before the test gives up.
-    limits: { pageTimeoutMs: 12_000, ...overrides.limits },
+    limits: { pageTimeoutMs: TEST_PAGE_TIMEOUT_MS, ...overrides.limits },
     onPage: async (page) => {
       pages.push(page)
     },
@@ -79,12 +80,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  // Failures here are on purpose, and capture.logging.test.ts checks what gets logged. Only a test
-  // that fails has any use for the log, and it then says which step of the capture went wrong.
-  const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-  onTestFailed(() => {
-    process.stderr.write(`${log.mock.calls.map((call) => call.join(' ')).join('\n')}\n`)
-  })
+  quietLogUnlessTestFails()
   site = await startFixtureSite()
   guard = createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${site.port}`] })
 })

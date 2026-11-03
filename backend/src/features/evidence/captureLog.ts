@@ -1,6 +1,6 @@
-/** A query string can hold a token, and a url can hold a password. Neither reaches the log. */
+/** A query or a fragment can hold a token, and a url can hold a password. None of them reach the log. */
 function withoutSecrets(text: string): string {
-  return text.replace(/\?[^\s"')]*/g, '?[removed]').replace(/\/\/[^/\s@]+@/g, '//[removed]@')
+  return text.replace(/\/\/[^/\s?#]*@/g, '//').replace(/[?#]\S*/g, '[removed]')
 }
 
 /** The first line only: Playwright follows it with a call log. Node's fetch keeps the real reason in `cause`. */

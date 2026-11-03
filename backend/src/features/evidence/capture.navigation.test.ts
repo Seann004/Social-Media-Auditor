@@ -59,6 +59,21 @@ beforeEach(async () => {
       res.end(html('Wrong place', '<p>The relative link resolved against the wrong url.</p>'))
     },
     '/plain': html('Plain', '<p>Plain words.</p>'),
+    '/moves-to-refused': html('Moving', '<p>Words before moving.</p>', moveTo('/refused')),
+    '/refused': (res) => {
+      res.writeHead(403, { 'content-type': 'text/html' })
+      res.end(html('Refused', '<p>This server refused the request with a 403.</p>'))
+    },
+    '/moves-to-broken': html('Moving', '<p>Words before moving.</p>', moveTo('/broken')),
+    '/broken': (res) => {
+      res.writeHead(500, { 'content-type': 'text/html' })
+      res.end(html('Broken', '<p>Server error words.</p>'))
+    },
+    '/missing-moves-on': (res) => {
+      res.writeHead(404, { 'content-type': 'text/html' })
+      res.end(html('Missing', '<p>Not here.</p>', moveTo('/plain')))
+    },
+    '/pushes-state': html('Pushing', `<p>Same document.</p><script>history.pushState({}, '', '/elsewhere')</script>`),
     '/js-to-plain': html('Moving', '<p>Words before moving.</p>', moveTo('/plain')),
     '/js-to-redirect': html('Moving', '<p>Words before moving.</p>', moveTo('/old')),
     '/js-to-disallowed': html('Moving', '<p>Words before moving.</p>', moveTo('/deep/dir/page')),
@@ -156,6 +171,34 @@ describe('a navigation the page starts itself', () => {
 
     expect(pages[0]).toMatchObject({ accessStatus: 'ok', finalUrl: `${server.url}/plain` })
     expect(pages[0].text).toContain('Plain words.')
+  })
+
+  it.each([
+    ['/moves-to-refused', '/refused', 403, 'blocked', 'refused the request'],
+    ['/moves-to-broken', '/broken', 500, 'error', 'Server error words.'],
+    ['/missing-moves-on', '/plain', 200, 'ok', 'Plain words.'],
+  ])('classifies %s from the document it ended on', async (path, finalPath, status, access, words) => {
+    const pages = await captureAll({
+      browser,
+      guard: server.guard('127.0.0.1'),
+      startUrls: [`${server.url}${path}`],
+      limits: { maxDepth: 0 },
+    })
+
+    expect(pages[0]).toMatchObject({ finalUrl: `${server.url}${finalPath}`, httpStatus: status, accessStatus: access })
+    expect(pages[0].text).toContain(words)
+  })
+
+  it('keeps the status of the document when the url changes without a new one', async () => {
+    const pages = await captureAll({
+      browser,
+      guard: server.guard('127.0.0.1'),
+      startUrls: [`${server.url}/pushes-state`],
+      limits: { maxDepth: 0 },
+    })
+
+    expect(pages[0]).toMatchObject({ finalUrl: `${server.url}/elsewhere`, httpStatus: 200, accessStatus: 'ok' })
+    expect(pages[0].text).toContain('Same document.')
   })
 
   it('is refused when it redirects, and the redirect is not followed', async () => {

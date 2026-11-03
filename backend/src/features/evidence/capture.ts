@@ -177,13 +177,30 @@ function navigationGuard(entry: QueueEntry, run: CaptureRun): UrlGuard {
   }
 }
 
-/** Keeps a list of every url the main frame asks for, including ones the page starts itself. */
-function trackMainFrameNavigations(page: Page): string[] {
-  const urls: string[] = []
+interface MainFrameHistory {
+  /** Every url the main frame asked for, including ones the page started itself. */
+  urls: string[]
+  /** Every document the main frame was answered with, in order. */
+  responses: { url: string; status: number }[]
+}
+
+function trackMainFrame(page: Page): MainFrameHistory {
+  const history: MainFrameHistory = { urls: [], responses: [] }
   page.on('request', (request) => {
-    if (isMainFrameNavigation(request)) urls.push(request.url())
+    if (isMainFrameNavigation(request)) history.urls.push(request.url())
   })
-  return urls
+  page.on('response', (response) => {
+    if (isMainFrameNavigation(response.request())) history.responses.push({ url: response.url(), status: response.status() })
+  })
+  return history
+}
+
+/** The document at finalUrl, or the latest one if the url changed with no new document, as pushState does. */
+function statusOfDocument(history: MainFrameHistory, finalUrl: string): number | null {
+  const current = withoutFragment(finalUrl)
+  const latestFirst = [...history.responses].reverse()
+  const document = latestFirst.find((response) => withoutFragment(response.url) === current) ?? latestFirst[0]
+  return document?.status ?? null
 }
 
 async function findRefusal(urls: string[], guard: UrlGuard, violations: string[]): Promise<string | null> {
@@ -213,11 +230,11 @@ async function takeScreenshot(page: Page, timeoutMs: number): Promise<Buffer | n
   }
 }
 
-async function loadPage(page: Page, entry: QueueEntry, guard: UrlGuard, navigations: string[], run: CaptureRun): Promise<Visit> {
+async function loadPage(page: Page, entry: QueueEntry, guard: UrlGuard, history: MainFrameHistory, run: CaptureRun): Promise<Visit> {
   const timeoutMs = run.limits.pageTimeoutMs
   const navigation = await gotoGuarded(page, entry.url, guard, timeoutMs)
   if (navigation.blockedReason !== null) {
-    const refusal = await findRefusal(navigations, guard, run.violations)
+    const refusal = await findRefusal(history.urls, guard, run.violations)
     return discardedVisit(entry.url, refusal ?? navigation.blockedReason)
   }
 
@@ -228,10 +245,10 @@ async function loadPage(page: Page, entry: QueueEntry, guard: UrlGuard, navigati
 
   // Last, so that it also covers anything the page did while it was being read.
   const finalUrl = page.url()
-  const refusal = await findRefusal([...navigations, finalUrl], guard, run.violations)
+  const refusal = await findRefusal([...history.urls, finalUrl], guard, run.violations)
   if (refusal !== null) return discardedVisit(entry.url, refusal)
 
-  const httpStatus = navigation.response?.status() ?? null
+  const httpStatus = statusOfDocument(history, finalUrl)
   const access = classifyAccess({
     httpStatus,
     finalUrl,
@@ -277,12 +294,12 @@ async function visitPage(entry: QueueEntry, run: CaptureRun): Promise<Visit> {
   try {
     page = await run.context.newPage()
     page.on('popup', (popup) => void closeQuietly(popup))
-    const navigations = trackMainFrameNavigations(page)
+    const history = trackMainFrame(page)
     try {
-      return await loadPage(page, entry, guard, navigations, run)
+      return await loadPage(page, entry, guard, history, run)
     } catch (err) {
       // A navigation the guard refused can surface as a failed load. It is still a refusal.
-      const refusal = await findRefusal(navigations, guard, run.violations)
+      const refusal = await findRefusal(history.urls, guard, run.violations)
       if (refusal !== null) return discardedVisit(entry.url, refusal)
       return failedVisit(entry.url, err, run)
     }
