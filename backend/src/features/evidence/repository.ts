@@ -1,0 +1,122 @@
+import type {
+  AnswerStatus,
+  CapturedPage,
+  Confidence,
+  Decision,
+  EvidenceRun,
+  Passage,
+  ReviewFlag,
+  RunScope,
+  SuggestedResult,
+  Suggestion,
+  SuggestionQuote,
+} from './types.js'
+
+export interface EvidenceSource {
+  id: string
+  projectId: string
+  startUrls: string[]
+  createdBy: string | null
+  createdAt: string
+}
+
+export interface EvidencePermission {
+  id: string
+  projectId: string
+  granted: boolean
+  note: string | null
+  recordedBy: string | null
+  recordedAt: string
+}
+
+export interface NewRun {
+  projectId: string
+  startedBy: string | null
+  scope: RunScope
+  /** Run whose pages are reused. Defaults to the new run itself (a capture run). */
+  capturedInRunId?: string
+  categoriesTotal?: number
+  pagesTotal?: number
+}
+
+export type RunPatch = Partial<Omit<EvidenceRun, 'id' | 'projectId' | 'createdAt'>>
+
+export type NewPage = Omit<CapturedPage, 'id' | 'runId' | 'capturedAt'>
+
+export interface NewPassage {
+  position: number
+  kind: 'text' | 'controls'
+  text: string
+}
+
+export interface NewSuggestion {
+  runId: string
+  projectId: string
+  itemId: string
+  suggestedResult: SuggestedResult | null
+  reason: string
+  confidence: Confidence
+  flags: ReviewFlag[]
+  quotes: Omit<SuggestionQuote, 'id'>[]
+}
+
+export interface NewDecision {
+  suggestionId: string
+  projectId: string
+  itemId: string
+  userId: string | null
+  decision: 'accepted' | 'overridden'
+  finalResult: AnswerStatus
+  overrideReason: string | null
+  origin: 'card' | 'answer_button' | 'auto_match'
+}
+
+export interface EvidenceRepository {
+  saveSource(projectId: string, startUrls: string[], userId: string | null): Promise<EvidenceSource>
+  getSource(projectId: string): Promise<EvidenceSource | null>
+
+  getPermission(projectId: string): Promise<EvidencePermission | null>
+  setPermission(
+    projectId: string,
+    granted: boolean,
+    note: string | null,
+    userId: string | null,
+  ): Promise<EvidencePermission>
+
+  createRun(input: NewRun): Promise<EvidenceRun>
+  updateRun(id: string, patch: RunPatch): Promise<EvidenceRun>
+  getRun(id: string): Promise<EvidenceRun | null>
+  latestRun(projectId: string): Promise<EvidenceRun | null>
+  /** Latest run with status completed or partial. */
+  latestResultRun(projectId: string): Promise<EvidenceRun | null>
+  countRunsSince(projectId: string, iso: string): Promise<number>
+  /** Latest run that is queued, capturing or assessing. */
+  activeRun(projectId: string): Promise<EvidenceRun | null>
+  /** Fails every queued, capturing or assessing run. Returns how many. */
+  markInterruptedRuns(): Promise<number>
+
+  addPage(runId: string, page: NewPage): Promise<CapturedPage>
+  listPages(capturedInRunId: string): Promise<CapturedPage[]>
+  getPage(id: string): Promise<CapturedPage | null>
+
+  addPassages(pageId: string, passages: NewPassage[]): Promise<Passage[]>
+  /** Matches ANY query term, best match first. */
+  searchPassages(capturedInRunId: string, query: string, limit: number): Promise<Passage[]>
+
+  /** Throws if the run already has a suggestion for the item. */
+  addSuggestion(input: NewSuggestion): Promise<Suggestion>
+  listSuggestions(runId: string): Promise<Suggestion[]>
+  getSuggestion(id: string): Promise<Suggestion | null>
+  getQuote(id: string): Promise<SuggestionQuote | null>
+
+  addDecision(input: NewDecision): Promise<Decision>
+  /** Every decision for the project, oldest first. */
+  listDecisions(projectId: string): Promise<Decision[]>
+}
+
+export interface ScreenshotStore {
+  upload(path: string, jpeg: Buffer): Promise<void>
+  signedUrl(path: string, seconds: number): Promise<string>
+  /** Removes every object under `<projectId>/`. */
+  removeProject(projectId: string): Promise<void>
+}

@@ -23,18 +23,21 @@ export interface ReviewFlag {
 export interface EvidenceRun {
   id: string
   projectId: string
-  startedBy: string
+  startedBy: string | null
   status: RunStatus
   capturedInRunId: string
   scope: RunScope
   unassessedCategories: string[]
   categoriesTotal: number
   categoriesDone: number
+  pagesTotal: number
+  pagesDone: number
   tokensUsed: number
   model: string | null
   promptVersion: string
   error: string | null
   createdAt: string
+  startedAt: string | null
   finishedAt: string | null
 }
 
@@ -48,6 +51,7 @@ export interface CapturedPage {
   accessDetail: string | null
   title: string | null
   text: string | null
+  accessibilitySnapshot: unknown | null
   screenshotPath: string | null
   contentHash: string | null
   capturedAt: string
@@ -89,7 +93,7 @@ export interface Decision {
   suggestionId: string
   projectId: string
   itemId: string
-  userId: string
+  userId: string | null
   decision: 'accepted' | 'overridden'
   finalResult: AnswerStatus
   overrideReason: string | null
