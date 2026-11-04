@@ -216,7 +216,6 @@ export function createAuditData(opts: AuditDataOptions = {}): AuditData {
       // Read after the upsert, so anything saved while it ran is merged rather than overwritten.
       const rows = orderRows(await readRows('resultId,userId,findings,evidenceImages', 'findings and photos'), userId)
       const own = rows.find((r) => r.userId === userId)
-      const createdRow = !ownBefore
 
       const fail = (e: { message: string } | null) => {
         if (e) throw new Error(`Could not save the answer for the item: ${e.message}`)
@@ -224,10 +223,16 @@ export function createAuditData(opts: AuditDataOptions = {}): AuditData {
       const itemRows = () => client.from('Audit_Result').update({ result }).eq('projectId', projectId).eq('itemId', itemId)
 
       if (!accepting) {
-        fail((await itemRows()).error)
-        if (!createdRow) return { itemId, status: result, findings: own?.findings ?? null, evidenceImages: own?.evidenceImages ?? [] }
-        // The auditor's new row would otherwise show empty findings next to a real finding on another row.
+        // An empty row of the auditor's own (new, or left empty by a failed earlier try) would otherwise
+        // show empty findings next to a real finding on another row.
         const merged = { findings: mergeFindings(rows, undefined), evidenceImages: mergeImages(rows, []) }
+        const ownEmpty = !own?.findings?.trim() && (own?.evidenceImages ?? []).length === 0
+        const hasContent = merged.findings !== null || merged.evidenceImages.length > 0
+        if (!ownEmpty || !hasContent) {
+          fail((await itemRows()).error)
+          return { itemId, status: result, findings: own?.findings ?? null, evidenceImages: own?.evidenceImages ?? [] }
+        }
+        fail((await itemRows()).error)
         const mine = await client.from('Audit_Result').update(merged).eq('projectId', projectId).eq('itemId', itemId).eq('userId', userId)
         fail(mine.error)
         return { itemId, status: result, ...merged }

@@ -22,11 +22,12 @@ const row = (userId: string, over: Partial<Row> = {}): Row => ({
 })
 
 /** Just enough of the client: select().eq().eq() and update().eq().eq(), both awaitable. */
-function world(initial: Row[], hooks: { duringUpsert?: (rows: Row[]) => void; failRead?: boolean } = {}) {
+function world(initial: Row[], hooks: { duringUpsert?: (rows: Row[]) => void; failRead?: boolean; failUpdateNumbers?: number[] } = {}) {
   const rows = initial
   const log: string[] = []
   const updates: Partial<Row>[] = []
   let updateError: { message: string } | null = null
+  let updateCount = 0
   const client = {
     from(table: string) {
       if (table !== 'Audit_Result') throw new Error(`unexpected table ${table}`)
@@ -52,9 +53,11 @@ function world(initial: Row[], hooks: { duringUpsert?: (rows: Row[]) => void; fa
             eq(c: string, v: unknown) { filters.push([c, v]); return upd },
             then(resolve: (v: unknown) => void) {
               log.push('update')
+              updateCount += 1
+              const refused = hooks.failUpdateNumbers?.includes(updateCount) ? { message: 'update refused' } : null
               updates.push(patch)
-              if (!updateError) for (const r of matching()) Object.assign(r, structuredClone(patch))
-              resolve({ error: updateError })
+              if (!updateError && !refused) for (const r of matching()) Object.assign(r, structuredClone(patch))
+              resolve({ error: updateError ?? refused })
             },
           }
           return upd
@@ -262,10 +265,31 @@ describe('applyAnswer', () => {
       expect(w2.rows.find((r) => r.userId === 'u1')?.findings).toBe('late')
     })
 
-    it('an auditor who already has a row keeps it as it is', async () => {
+    it('a retry after the merge update failed still fills the empty row', async () => {
+      const w2 = world([row('u2', { findings: 'F2', evidenceImages: [photo] })], { failUpdateNumbers: [2] })
+      await expect(w2.audit.applyAnswer({ ...base, result: 'partially' })).rejects.toThrow(/update refused/)
+      expect(w2.rows.find((r) => r.userId === 'u1')?.findings).toBeNull()
+      await w2.audit.applyAnswer({ ...base, result: 'partially' })
+      const mine = w2.rows.find((r) => r.userId === 'u1')
+      expect(mine).toMatchObject({ result: 'partially', findings: 'F2', evidenceImages: [photo] })
+      expect(w2.rows.find((r) => r.userId === 'u2')).toMatchObject({ findings: 'F2', evidenceImages: [photo] })
+    })
+
+    it.each([
+      ['only findings', { findings: 'Mine' }],
+      ['only photos', { evidenceImages: [{ url: 'data:m', name: 'm.png' }] }],
+    ])('an existing row holding %s is left alone', async (_n, own) => {
+      const w2 = world([row('u1', own), row('u2', { findings: 'F2', evidenceImages: [photo] })])
+      await w2.audit.applyAnswer({ ...base, result: 'partially' })
+      const mine = w2.rows.find((r) => r.userId === 'u1')!
+      expect(mine.findings).toBe(own.findings ?? null)
+      expect(mine.evidenceImages).toEqual(own.evidenceImages ?? [])
+    })
+
+    it('an auditor whose row is empty gets the findings of the item too', async () => {
       const w2 = world([row('u1'), row('u2', { findings: 'F2' })])
       await w2.audit.applyAnswer({ ...base, result: 'partially' })
-      expect(w2.rows.map((r) => r.findings)).toEqual([null, 'F2'])
+      expect(w2.rows.map((r) => r.findings)).toEqual(['F2', 'F2'])
     })
   })
 })
