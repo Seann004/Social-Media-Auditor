@@ -52,3 +52,19 @@ export const RUN_UPDATE_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 5_00
 export const MAX_OVERRIDE_REASON_CHARS = 2_000
 /** Submission statuses in which the audit's answers can no longer change. */
 export const LOCKED_SUBMISSION_STATUSES: readonly string[] = ['pending_review', 'approved']
+
+// Starting runs
+/** Extra time past the whole-run timeout before a capturing or assessing run is taken to be lost. */
+export const STALE_RUN_MARGIN_MS = 300_000
+/** The queue runs one job at a time, so a queued run can wait a long time. Past this it is taken to be lost. */
+export const STALE_QUEUED_RUN_MS = 6 * 60 * 60 * 1000
+export const RUNS_WINDOW_MS = 24 * 60 * 60 * 1000
+
+// API
+/** Per signed-in user. The page polls every 3 seconds and several tabs may be open. */
+export const API_REQUESTS_PER_MINUTE = 300
+export const API_RATE_WINDOW_MS = 60_000
+export const MAX_BODY_SIZE = '64kb'
+export const MAX_ROUTE_PARAM_LENGTH = 64
+export const MAX_URL_LENGTH = 2_048
+export const MAX_PERMISSION_NOTE_CHARS = 500

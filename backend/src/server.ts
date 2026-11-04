@@ -3,6 +3,7 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import * as db from './services/dbService.js'
 import { groqFetchWithRetry } from './lib/groq.js'
+import { createEvidenceModule } from './features/evidence/index.js'
 
 dotenv.config()
 
@@ -10,6 +11,12 @@ const app = express()
 const port = process.env.PORT || 3000
 
 app.use(cors())
+
+// AI evidence assessment. Mounted before the global parser: its routes carry their own small body
+// limits and error handling, and none of its middleware may run for the older routes below.
+const evidence = createEvidenceModule(process.env)
+app.use('/api', ...evidence.routers)
+
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ limit: '50mb', extended: true }))
 
@@ -103,6 +110,7 @@ app.patch('/api/projects/:id', async (req, res) => {
 app.delete('/api/projects/:id', async (req, res) => {
   try {
     await db.deleteProject(req.params.id)
+    await evidence.removeProjectScreenshots(req.params.id) // best effort: logs, never throws
     res.json({ success: true })
   } catch (error) {
     console.error('Error deleting project:', error)
@@ -700,4 +708,5 @@ You MUST return your output in JSON format matching this EXACT schema:
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`)
+  evidence.start().catch((error) => console.error('Evidence module start-up failed:', error))
 })
