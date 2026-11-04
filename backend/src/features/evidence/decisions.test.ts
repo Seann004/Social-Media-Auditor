@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppliedAnswer, ApplyAnswerInput, AuditData } from './auditData.js'
-import { ACCEPTED_EVIDENCE_LINK_SECONDS } from './config.js'
+import { ACCEPTED_EVIDENCE_LINK_SECONDS, MAX_OVERRIDE_REASON_CHARS } from './config.js'
 import { DecisionError, latestDecisionPerItem, recordDecision } from './decisions.js'
 import { createMemoryRepository } from './memoryRepository.js'
 import type { NewSuggestion } from './repository.js'
@@ -114,9 +114,10 @@ describe('recordDecision', () => {
   })
 
   it('attaches at most the highlight limit', async () => {
-    const s = await seed(w, {}, (pageId) => [1, 2, 3].map((n) => ({ passageId: 'x', pageId, quoteText: `q${n}`, verified: true, highlightScreenshotPath: `p1/run1/hl-${Math.min(n, 2)}.jpg` })))
+    const s = await seed(w, {}, (pageId) => [1, 2, 3].map((n) => ({ passageId: 'x', pageId, quoteText: `q${n}`, verified: true, highlightScreenshotPath: `p1/run1/hl-${n}.jpg` })))
+    await w.repo.upload('p1/run1/hl-3.jpg', Buffer.from('x'))
     await accept(w, s.id)
-    expect(w.applied[0].addImages).toHaveLength(2)
+    expect(w.applied[0].addImages?.map((i) => i.name)).toEqual(['AI evidence hl-1.jpg', 'AI evidence hl-2.jpg'])
   })
 
   it('falls back to the page screenshot for a verified quote without a close-up, once per page', async () => {
@@ -215,7 +216,46 @@ describe('recordDecision', () => {
     const s = await seed(w)
     vi.spyOn(w.repo, 'addDecision').mockRejectedValueOnce(new Error('db down'))
     await expect(accept(w, s.id)).rejects.toThrow('db down')
+    expect(w.applied).toHaveLength(1)
     await accept(w, s.id)
+    expect(await w.repo.listDecisions('p1')).toHaveLength(1)
+  })
+
+  it('a rejecting applyAnswer records no decision', async () => {
+    const s = await seed(w)
+    w.audit.applyAnswer.mockRejectedValueOnce(new Error('answer refused'))
+    await expect(accept(w, s.id)).rejects.toThrow('answer refused')
+    expect(await w.repo.listDecisions('p1')).toHaveLength(0)
+  })
+
+  it('accept ignores a stray final result and reason from the caller', async () => {
+    const s = await seed(w)
+    const { decision } = await recordDecision(
+      { suggestionId: s.id, userId: 'u1', decision: 'accepted', origin: 'card', finalResult: 'non_compliant', overrideReason: 'sneaky' },
+      w.deps,
+    )
+    expect(w.applied[0].result).toBe('compliant')
+    expect(decision).toMatchObject({ finalResult: 'compliant', overrideReason: null })
+  })
+
+  it('a rejected audit is not locked', async () => {
+    const s = await seed(w)
+    w.audit.status = 'rejected'
+    await accept(w, s.id)
+    expect(w.applied).toHaveLength(1)
+  })
+
+  it('malformed input is 422 before anything is read or written', async () => {
+    const s = await seed(w)
+    const bad: Partial<Parameters<typeof recordDecision>[0]>[] = [
+      { decision: 'rejected' as never },
+      { origin: 'bogus' as never },
+      { overrideReason: 12345 as never },
+      { overrideReason: 'x'.repeat(MAX_OVERRIDE_REASON_CHARS + 1) },
+    ]
+    for (const extra of bad) await failsWith(override(w, s.id, extra), 422)
+    await override(w, s.id, { overrideReason: 'x'.repeat(MAX_OVERRIDE_REASON_CHARS) })
+    expect(w.applied).toHaveLength(1)
     expect(await w.repo.listDecisions('p1')).toHaveLength(1)
   })
 

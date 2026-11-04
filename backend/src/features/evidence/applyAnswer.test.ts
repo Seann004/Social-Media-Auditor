@@ -22,7 +22,7 @@ const row = (userId: string, over: Partial<Row> = {}): Row => ({
 })
 
 /** Just enough of the client: select().eq().eq() and update().eq().eq(), both awaitable. */
-function world(initial: Row[]) {
+function world(initial: Row[], hooks: { duringUpsert?: (rows: Row[]) => void; failRead?: boolean } = {}) {
   const rows = initial
   const log: string[] = []
   const updates: Partial<Row>[] = []
@@ -40,7 +40,13 @@ function world(initial: Row[]) {
         },
       }
       return {
-        select: (columns: string) => { log.push(`columns:${columns}`); return chain },
+        select: (columns: string) => {
+          log.push(`columns:${columns}`)
+          if (hooks.failRead) {
+            return { eq: () => ({ eq: () => Promise.resolve({ data: null, error: { message: 'read refused' } }) }) }
+          }
+          return chain
+        },
         update(patch: Partial<Row>) {
           const upd = {
             eq(c: string, v: unknown) { filters.push([c, v]); return upd },
@@ -58,9 +64,10 @@ function world(initial: Row[]) {
   }
   const upsert = vi.fn(async (projectId: string, itemId: string, userId: string, guidelineId: string, result: string, notes: string) => {
     log.push('upsert')
-    const existing = rows.find((r) => r.userId === userId && r.itemId === itemId)
+    const existing = rows.find((r) => r.userId === userId && r.itemId === itemId && r.projectId === projectId)
     if (existing) Object.assign(existing, { result, notes: notes || null })
     else rows.push({ ...row(userId), projectId, itemId, result, notes: notes || null, resultId: `r-${userId}` })
+    hooks.duringUpsert?.(rows)
     return { answered: 0, compliant: 0, nonCompliant: 0, notApplicable: 0, percentage: 0, total: 0 }
   })
   const audit = createAuditData({
@@ -171,5 +178,94 @@ describe('applyAnswer', () => {
   it('throws when the update fails', async () => {
     w.failUpdate()
     await expect(w.audit.applyAnswer(base)).rejects.toThrow(/update refused/)
+  })
+
+  it('leaves other items and other projects untouched, whatever the call', async () => {
+    const otherItem = row('u1', { itemId: 'i2', resultId: 'x-item', result: 'non_compliant', findings: 'keep', evidenceImages: [{ url: 'u', name: 'n' }] })
+    const otherProject = row('u1', { projectId: 'p2', resultId: 'x-proj', result: 'non_compliant', findings: 'keep2' })
+    const w2 = world([row('u1'), row('u2', { findings: 'F2' }), otherItem, otherProject])
+    const before = structuredClone([otherItem, otherProject])
+    await w2.audit.applyAnswer({ ...base, findingsIfEmpty: 'AI', addImages: [ai(1)] })
+    await w2.audit.applyAnswer({ ...base, result: 'partially' })
+    expect([w2.rows[2], w2.rows[3]]).toEqual(before)
+    expect(w2.rows[0].findings).toBe('F2')
+  })
+
+  it('same-named photos with different links on two rows are both kept', async () => {
+    const a: Img = { url: 'data:image/png;base64,AAA', name: 'photo.png' }
+    const b: Img = { url: 'data:image/png;base64,BBB', name: 'photo.png' }
+    w.rows[0].evidenceImages = [a]
+    w.rows[1].evidenceImages = [b]
+    await w.audit.applyAnswer({ ...base, addImages: [] })
+    expect(w.rows[0].evidenceImages).toEqual([a, b])
+  })
+
+  it('handles rows whose photos are null, and treats whitespace-only findings as empty', async () => {
+    w.rows[0].evidenceImages = null
+    w.rows[0].findings = '   '
+    w.rows[1].evidenceImages = null
+    const out = await w.audit.applyAnswer({ ...base, findingsIfEmpty: 'AI', addImages: [ai(1)] })
+    expect(out.findings).toBe('AI')
+    expect(w.rows[0].evidenceImages).toEqual([ai(1)])
+  })
+
+  it('does not write when the read fails, and does not upsert', async () => {
+    const w2 = world([row('u1')], { failRead: true })
+    await expect(w2.audit.applyAnswer(base)).rejects.toThrow(/read refused/)
+    expect(w2.upsert).not.toHaveBeenCalled()
+    expect(w2.updates).toHaveLength(0)
+  })
+
+  it('does not update when the upsert fails', async () => {
+    w.upsert.mockRejectedValueOnce(new Error('upsert refused'))
+    await expect(w.audit.applyAnswer(base)).rejects.toThrow(/upsert refused/)
+    expect(w.updates).toHaveLength(0)
+  })
+
+  it('without the service key it rejects and upserts nothing', async () => {
+    const upsert = vi.fn()
+    const audit = createAuditData({ db: async () => ({ upsertAuditResult: upsert }) as unknown as AuditDb, client: () => null })
+    await expect(audit.applyAnswer(base)).rejects.toThrow(/service/i)
+    expect(upsert).not.toHaveBeenCalled()
+  })
+
+  it('accept keeps findings and a photo another auditor saved while the upsert ran', async () => {
+    const late: Img = { url: 'data:late', name: 'late.png' }
+    const w2 = world([row('u1'), row('u2')], {
+      duringUpsert: (rows) => {
+        const u2 = rows.find((r) => r.userId === 'u2')!
+        u2.findings = 'Saved during the upsert'
+        u2.evidenceImages = [late]
+      },
+    })
+    await w2.audit.applyAnswer({ ...base, findingsIfEmpty: 'AI', addImages: [ai(1)] })
+    expect(w2.rows.map((r) => r.findings)).toEqual(['Saved during the upsert', 'Saved during the upsert'])
+    expect(w2.rows.map((r) => r.evidenceImages)).toEqual([[late, ai(1)], [late, ai(1)]])
+  })
+
+  describe('override by an auditor with no row of their own', () => {
+    const photo: Img = { url: 'data:p', name: 'p.png' }
+
+    it('gives the new row the findings and photos, and leaves other rows alone', async () => {
+      const w2 = world([row('u2', { findings: 'F2', evidenceImages: [photo] }), row('u3', { findings: 'F3' })])
+      const out = await w2.audit.applyAnswer({ ...base, result: 'partially' })
+      const byUser = Object.fromEntries(w2.rows.map((r) => [r.userId, r]))
+      expect(byUser.u1).toMatchObject({ result: 'partially', findings: 'F2\n\nF3', evidenceImages: [photo] })
+      expect(byUser.u2).toMatchObject({ result: 'partially', findings: 'F2', evidenceImages: [photo] })
+      expect(byUser.u3).toMatchObject({ result: 'partially', findings: 'F3', evidenceImages: [] })
+      expect(out).toMatchObject({ status: 'partially', findings: 'F2\n\nF3', evidenceImages: [photo] })
+    })
+
+    it('uses what is on the rows after the upsert, not before it', async () => {
+      const w2 = world([row('u2')], { duringUpsert: (rows) => { rows.find((r) => r.userId === 'u2')!.findings = 'late' } })
+      await w2.audit.applyAnswer({ ...base, result: 'partially' })
+      expect(w2.rows.find((r) => r.userId === 'u1')?.findings).toBe('late')
+    })
+
+    it('an auditor who already has a row keeps it as it is', async () => {
+      const w2 = world([row('u1'), row('u2', { findings: 'F2' })])
+      await w2.audit.applyAnswer({ ...base, result: 'partially' })
+      expect(w2.rows.map((r) => r.findings)).toEqual([null, 'F2'])
+    })
   })
 })

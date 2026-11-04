@@ -27,6 +27,7 @@ function fakeClient(tables: Record<string, Row[]>) {
 }
 
 const db: AuditDb = {
+  upsertAuditResult: async () => ({}),
   fetchProjectChecklistItems: async () => [
     {
       itemId: 'i1',

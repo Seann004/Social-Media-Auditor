@@ -12,14 +12,14 @@ export interface AnswerRow {
   result: ChecklistItemStatus
   notes: string | null
   findings: string | null
-  evidenceImages: { url: string; name: string }[]
+  evidenceImages: EvidenceImage[]
 }
 
 export interface AppliedAnswer {
   itemId: string
   status: AnswerStatus
   findings: string | null
-  evidenceImages: { url: string; name: string }[]
+  evidenceImages: EvidenceImage[]
 }
 
 export interface EvidenceImage {
@@ -202,31 +202,46 @@ export function createAuditData(opts: AuditDataOptions = {}): AuditData {
       const client = adminClient(opts)
       const accepting = input.findingsIfEmpty !== undefined || input.addImages !== undefined
 
-      const read = await client
+      const readRows = async (columns: string, what: string): Promise<ResultRow[]> => {
+        const read = await client.from('Audit_Result').select(columns).eq('projectId', projectId).eq('itemId', itemId)
+        if (read.error) throw new Error(`Could not read the ${what} for the item: ${read.error.message}`)
+        return (read.data ?? []) as unknown as ResultRow[]
+      }
+
+      // The deciding auditor's notes, so the upsert does not blank them.
+      const before = await readRows('resultId,userId,notes', 'notes')
+      const ownBefore = before.find((r) => r.userId === userId)
+      await (await db()).upsertAuditResult(projectId, itemId, userId, guidelineId, result, ownBefore?.notes ?? '')
+
+      // Read after the upsert, so anything saved while it ran is merged rather than overwritten.
+      const rows = orderRows(await readRows('resultId,userId,findings,evidenceImages', 'findings and photos'), userId)
+      const own = rows.find((r) => r.userId === userId)
+      const createdRow = !ownBefore
+
+      const fail = (e: { message: string } | null) => {
+        if (e) throw new Error(`Could not save the answer for the item: ${e.message}`)
+      }
+      const itemRows = () => client.from('Audit_Result').update({ result }).eq('projectId', projectId).eq('itemId', itemId)
+
+      if (!accepting) {
+        fail((await itemRows()).error)
+        if (!createdRow) return { itemId, status: result, findings: own?.findings ?? null, evidenceImages: own?.evidenceImages ?? [] }
+        // The auditor's new row would otherwise show empty findings next to a real finding on another row.
+        const merged = { findings: mergeFindings(rows, undefined), evidenceImages: mergeImages(rows, []) }
+        const mine = await client.from('Audit_Result').update(merged).eq('projectId', projectId).eq('itemId', itemId).eq('userId', userId)
+        fail(mine.error)
+        return { itemId, status: result, ...merged }
+      }
+
+      const findings = mergeFindings(rows, input.findingsIfEmpty)
+      const evidenceImages = mergeImages(rows, input.addImages ?? [])
+      const write = await client
         .from('Audit_Result')
-        .select('resultId,userId,notes,findings,evidenceImages')
+        .update({ result, findings, evidenceImages })
         .eq('projectId', projectId)
         .eq('itemId', itemId)
-      if (read.error) throw new Error(`Could not read the answers for the item: ${read.error.message}`)
-      const rows = orderRows((read.data ?? []) as unknown as ResultRow[], userId)
-
-      // Makes sure the deciding auditor has a row, and keeps the notes they already wrote.
-      const own = rows.find((r) => r.userId === userId)
-      await (await db()).upsertAuditResult(projectId, itemId, userId, guidelineId, result, own?.notes ?? '')
-
-      const findings = accepting ? mergeFindings(rows, input.findingsIfEmpty) : null
-      const evidenceImages = accepting ? mergeImages(rows, input.addImages ?? []) : null
-      const patch = accepting ? { result, findings, evidenceImages } : { result }
-
-      const write = await client.from('Audit_Result').update(patch).eq('projectId', projectId).eq('itemId', itemId)
-      if (write.error) throw new Error(`Could not save the answer for the item: ${write.error.message}`)
-
-      return {
-        itemId,
-        status: result,
-        findings: accepting ? findings : (own?.findings ?? null),
-        evidenceImages: accepting ? (evidenceImages ?? []) : (own?.evidenceImages ?? []),
-      }
+      fail(write.error)
+      return { itemId, status: result, findings, evidenceImages }
     },
   }
 }

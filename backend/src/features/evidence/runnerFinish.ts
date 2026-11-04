@@ -1,8 +1,8 @@
 import type { AssessItem } from './assess.js'
+import { LOCKED_SUBMISSION_STATUSES } from './config.js'
 import { categoryKey, endIfRunGone, logRunProblem, type RunCtx } from './runnerShared.js'
 import { toAnswerStatus, type Suggestion } from './types.js'
 
-const LOCKED_SUBMISSIONS: readonly string[] = ['pending_review', 'approved']
 
 export type StopReason = 'limit' | 'tokens' | 'timeout'
 
@@ -80,7 +80,7 @@ export async function autoMatchAnswers(ctx: RunCtx, created: Suggestion[]): Prom
   try {
     // Decisions on a locked audit are refused (Task 11), and an "accepted" on one would mislead the review.
     const submission = await audit.getSubmissionStatus(ctx.run.projectId)
-    if (submission === null || LOCKED_SUBMISSIONS.includes(submission)) return
+    if (submission === null || LOCKED_SUBMISSION_STATUSES.includes(submission)) return
     answers = await audit.listAnswers(ctx.run.projectId)
     decided = new Set((await repo.listDecisions(ctx.run.projectId)).map((d) => d.itemId))
   } catch (err) {

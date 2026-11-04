@@ -1,11 +1,17 @@
 import type { AppliedAnswer, AuditData, EvidenceImage } from './auditData.js'
-import { ACCEPTED_EVIDENCE_LINK_SECONDS, MAX_HIGHLIGHTS_PER_SUGGESTION } from './config.js'
+import {
+  ACCEPTED_EVIDENCE_LINK_SECONDS,
+  LOCKED_SUBMISSION_STATUSES,
+  MAX_HIGHLIGHTS_PER_SUGGESTION,
+  MAX_OVERRIDE_REASON_CHARS,
+} from './config.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import { toAnswerStatus, type AnswerStatus, type Decision, type Suggestion } from './types.js'
 
 const ANSWER_STATUSES: readonly AnswerStatus[] = ['compliant', 'non_compliant', 'partially', 'not_applicable']
 const MIN_REASON_LENGTH = 3
-const LOCKED = ['pending_review', 'approved']
+const DECISIONS: readonly string[] = ['accepted', 'overridden']
+const ORIGINS: readonly string[] = ['card', 'answer_button']
 const IMAGE_NAME_PREFIX = 'AI evidence'
 
 export class DecisionError extends Error {
@@ -85,6 +91,18 @@ interface Plan {
   overrideReason: string | null
 }
 
+/** The shape of the request, checked before anything is read or written. */
+function checkShape(input: DecisionInput): void {
+  if (!DECISIONS.includes(input.decision)) throw new DecisionError('The decision must be accepted or overridden.', 422)
+  if (!ORIGINS.includes(input.origin)) throw new DecisionError('The origin must be card or answer_button.', 422)
+  if (input.decision !== 'overridden') return
+  const reason = input.overrideReason
+  if (reason !== undefined && typeof reason !== 'string') throw new DecisionError('The reason must be text.', 422)
+  if ((reason ?? '').length > MAX_OVERRIDE_REASON_CHARS) {
+    throw new DecisionError(`The reason can be at most ${MAX_OVERRIDE_REASON_CHARS} characters.`, 422)
+  }
+}
+
 function plan(input: DecisionInput, suggestion: Suggestion): Plan {
   if (input.decision === 'accepted') {
     if (!suggestion.suggestedResult) throw new DecisionError('The AI did not suggest a result, so there is nothing to accept.', 422)
@@ -111,13 +129,14 @@ export async function recordDecision(
   input: DecisionInput,
   deps: DecisionDeps,
 ): Promise<{ decision: Decision; answer: AppliedAnswer }> {
+  checkShape(input)
   const suggestion = await deps.repo.getSuggestion(input.suggestionId)
   if (!suggestion) throw new DecisionError('That suggestion no longer exists.', 404)
   const { projectId, itemId } = suggestion
 
   const submission = await deps.audit.getSubmissionStatus(projectId)
   if (submission === null) throw new DecisionError('The project no longer exists.', 404)
-  if (LOCKED.includes(submission)) {
+  if (LOCKED_SUBMISSION_STATUSES.includes(submission)) {
     throw new DecisionError('The audit has been submitted, so its answers can no longer change.', 409)
   }
 

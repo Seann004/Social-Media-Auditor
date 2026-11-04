@@ -47,3 +47,8 @@ export const SESSION_HOURS = 12
 
 // Keeping a run's status true: waits between tries at an update that failed (about a minute in all)
 export const RUN_UPDATE_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000, 20_000, 25_000]
+
+// Decisions
+export const MAX_OVERRIDE_REASON_CHARS = 2_000
+/** Submission statuses in which the audit's answers can no longer change. */
+export const LOCKED_SUBMISSION_STATUSES: readonly string[] = ['pending_review', 'approved']
