@@ -3,8 +3,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { describeImage, highlightOn } from './__fixtures__/highlightHelpers.js'
 import { html, quietLogUnlessTestFails, startPageServer, TEST_TIMEOUT_MS, type PageServer } from './__fixtures__/pages.js'
 import { closeBrowser, getBrowser } from './browser.js'
+import { openHighlightWorld } from './highlight.js'
 import { HIGHLIGHT_SOURCE } from './highlightSource.js'
-import { openIsolatedWorld, READ_PAGE_SOURCE } from './pageRead.js'
+import { openIsolatedWorld } from './pageRead.js'
+import { SETTINGS_FORM } from './__fixtures__/highlightCases.js'
 import { normaliseForMatch } from './quotes.js'
 
 vi.setConfig({ testTimeout: TEST_TIMEOUT_MS })
@@ -55,6 +57,12 @@ describe('finding a quote', () => {
       '/boundary': page('<p>Bathe pages in water.</p>'),
       '/boundary-twice': page('<p>Bathe pages in water.</p><p>Read the page carefully.</p>'),
       '/ligature': page('<p>The ﬁle is ﬁne and café is open</p>'),
+      '/settings': SETTINGS_FORM,
+      '/shadow': page(
+        `<div id="h">slotted light words stay</div><script>document.getElementById('h').attachShadow({ mode: 'open' }).innerHTML = '<p>shadow only words here</p><slot></slot>'</script>`,
+      ),
+      '/script-shown': page('<p>Real words here.</p><script>var shown = "script source words"</script>', '<style>script, style, title { display: block }</style>'),
+      '/textarea': page('<p>Before <textarea>words typed into the box</textarea> after</p>'),
       '/nested': page('<div>Alpha <span>beta <em>gamma</em></span> delta</div>'),
     })
   })
@@ -104,6 +112,27 @@ describe('finding a quote', () => {
     expect(await foundQuotes('/ligature', ['The file is fine and café is open'])).toEqual(['The file is fine and café is open'])
   })
 
+  it('does not join the words either side of a select', async () => {
+    expect(await foundQuotes('/settings', ['Language Region'])).toEqual(['Language Region'])
+    expect(await foundQuotes('/settings', ['Allow teens to message Everyone Friends only'])).toEqual([])
+    expect(await foundQuotes('/settings', ['Allow teens to message', 'Friends only'])).toEqual(['Allow teens to message', 'Friends only'])
+    expect(await foundQuotes('/settings', ['LanguageRegion'])).toEqual([])
+  })
+
+  it('finds slotted text, and not text only in a shadow root', async () => {
+    expect(await foundQuotes('/shadow', ['slotted light words stay'])).toEqual(['slotted light words stay'])
+    expect(await foundQuotes('/shadow', ['shadow only words here'])).toEqual([])
+  })
+
+  it('does not box the source of a script even when the page makes it visible', async () => {
+    expect(await foundQuotes('/script-shown', ['Real words here.'])).toEqual(['Real words here.'])
+    expect(await foundQuotes('/script-shown', ['script source words'])).toEqual([])
+  })
+
+  it('does not find text typed into a text area', async () => {
+    expect(await foundQuotes('/textarea', ['words typed into the box'])).toEqual([])
+  })
+
   it('finds a quote that begins and ends inside nested elements', async () => {
     expect(await foundQuotes('/nested', ['beta gamma delta'])).toEqual(['beta gamma delta'])
   })
@@ -135,9 +164,8 @@ describe('the text the page builds', () => {
     try {
       const tab = await context.newPage()
       await tab.setContent(page(body))
-      const world = await openIsolatedWorld(tab)
-      if (filtered) await world.evaluate(READ_PAGE_SOURCE)
-      await world.evaluate(HIGHLIGHT_SOURCE)
+      const world = filtered ? await openHighlightWorld(tab) : await openIsolatedWorld(tab)
+      if (!filtered) await world.evaluate(HIGHLIGHT_SOURCE)
       return String(await world.evaluate('globalThis.__evidenceHighlighter.builtText()'))
     } finally {
       await context.close()

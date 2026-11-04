@@ -1,5 +1,7 @@
 import type { Browser } from 'playwright'
-import { captureHighlights, type HighlightOptions } from '../highlight.js'
+import { createGuardedContext, gotoGuarded } from '../browser.js'
+import { captureHighlights, locateQuote, openHighlightWorld, type HighlightOptions, type Placement } from '../highlight.js'
+import type { IsolatedWorld } from '../pageRead.js'
 import { TEST_PAGE_TIMEOUT_MS, type PageServer } from './pages.js'
 
 export const never = new AbortController().signal
@@ -64,4 +66,55 @@ export async function describeImage(browser: Browser, jpeg: Buffer): Promise<Ima
   } finally {
     await page.close()
   }
+}
+
+/** Opens a page the way a highlight run does, and gives the test the world to work in. */
+export async function withHighlightWorld<T>(
+  browser: Browser,
+  server: PageServer,
+  path: string,
+  work: (world: IsolatedWorld, page: import('playwright').Page) => Promise<T>,
+): Promise<T> {
+  const guard = server.guard('127.0.0.1')
+  const { context } = await createGuardedContext(browser, guard)
+  try {
+    const page = await context.newPage()
+    await gotoGuarded(page, `${server.url}${path}`, guard, TEST_PAGE_TIMEOUT_MS)
+    return await work(await openHighlightWorld(page), page)
+  } finally {
+    await context.close()
+  }
+}
+
+export interface PlacedQuote {
+  placement: Placement
+  /** For each box, the words at its centre and just before it. Lower case. */
+  words: string[][]
+}
+
+const WORDS_UNDER_BOXES = String.raw`((boxes) => boxes.map((b) => {
+  const at = document.caretRangeFromPoint((b.left + b.right) / 2, (b.top + b.bottom) / 2)
+  const node = at && at.startContainer
+  if (!node || node.nodeType !== 3) return []
+  const text = node.data
+  const wordAround = (i) => {
+    let s = i, e = i
+    while (s > 0 && /[\p{L}\p{N}']/u.test(text[s - 1])) s -= 1
+    while (e < text.length && /[\p{L}\p{N}']/u.test(text[e])) e += 1
+    return text.slice(s, e).toLowerCase()
+  }
+  return [wordAround(at.startOffset), wordAround(Math.max(0, at.startOffset - 1))]
+}))`
+
+/** Where the box for a quote goes, and what text is under each box. Null when the quote is left out. */
+export async function placeQuote(world: IsolatedWorld, quote: string): Promise<PlacedQuote | null> {
+  const placement = await locateQuote(world, quote)
+  if (placement === null) return null
+  const words = (await world.evaluate(`${WORDS_UNDER_BOXES}(${JSON.stringify(placement.boxes)})`)) as string[][]
+  return { placement, words }
+}
+
+/** Every word under a box is a word of the quote: the box is on the quote, not on its neighbours. */
+export function wordsOfQuote(quote: string): Set<string> {
+  return new Set(quote.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [])
 }

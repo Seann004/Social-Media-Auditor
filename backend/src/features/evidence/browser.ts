@@ -11,7 +11,14 @@ import {
   type Route,
 } from 'playwright'
 import { logCaptureFailure } from './captureLog.js'
-import { MAX_REDIRECT_HOPS, MAX_RESPONSE_BYTES, NETWORK_IDLE_WAIT_MS, PAGE_TIMEOUT_MS, USER_AGENT } from './config.js'
+import {
+  BROWSER_CLOSE_TIMEOUT_MS,
+  MAX_REDIRECT_HOPS,
+  MAX_RESPONSE_BYTES,
+  NETWORK_IDLE_WAIT_MS,
+  PAGE_TIMEOUT_MS,
+  USER_AGENT,
+} from './config.js'
 import type { UrlGuard } from './urlGuard.js'
 
 // Playwright's Node-side requests wait 5 s on an address family before trying the next, which
@@ -397,4 +404,95 @@ export async function gotoGuarded(page: Page, url: string, guard: UrlGuard, time
   const finalVerdict = await guard.check(finalUrl)
   if (!finalVerdict.allowed) return blocked(finalVerdict.reason)
   return { response, finalUrl, blockedReason: null }
+}
+
+export function withinTimeout<T>(work: Promise<T>, timeoutMs: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new errors.TimeoutError(`${what} timed out after ${timeoutMs} ms`)), timeoutMs)
+  })
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * Like withinTimeout, and also ends when `aborted` resolves, with null. Both settle the timer, so
+ * nothing is left running when the work never answers, as on a connection that has gone silent.
+ */
+export function withinTimeoutOrAbort<T>(work: Promise<T>, timeoutMs: number, what: string, aborted: Promise<null>): Promise<T | null> {
+  let timer: NodeJS.Timeout | undefined
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new errors.TimeoutError(`${what} timed out after ${timeoutMs} ms`)), timeoutMs)
+  })
+  return Promise.race([work, expired, aborted]).finally(() => clearTimeout(timer))
+}
+
+export interface AbortWatch {
+  /** Resolves with null when the signal aborts, so that any wait can be raced against it. */
+  aborted: Promise<null>
+  /** Takes the listener off the signal. Call it when the run is over: a signal can outlive many runs. */
+  stop(): void
+}
+
+export function watchAbort(signal: AbortSignal): AbortWatch {
+  let onAbort: () => void = () => undefined
+  const aborted = new Promise<null>((resolve) => {
+    onAbort = () => resolve(null)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  return { aborted, stop: () => signal.removeEventListener('abort', onAbort) }
+}
+
+export interface RunContext extends GuardedContext {
+  /** Takes the abort listener off and closes the context, within BROWSER_CLOSE_TIMEOUT_MS. Never rejects. */
+  end(): Promise<void>
+}
+
+export interface RunContextOptions {
+  browser: Browser
+  guard: UrlGuard
+  signal: AbortSignal
+  aborted: Promise<null>
+  timeoutMs: number
+  /** For the log. */
+  logUrl: string
+}
+
+/**
+ * A guarded context for one run, or null when there is none to work with: the signal aborted, or
+ * the browser did not answer in time. A context that arrives late is closed. Aborting the signal
+ * closes it at once, which makes anything in flight in the browser give up. Call end() when done.
+ */
+export async function openRunContext(opts: RunContextOptions): Promise<RunContext | null> {
+  const { signal, logUrl } = opts
+  const opening = createGuardedContext(opts.browser, opts.guard)
+  try {
+    const opened = await withinTimeoutOrAbort(opening, opts.timeoutMs, 'Opening a browser context', opts.aborted)
+    if (opened !== null) return withEnd(opened, signal, logUrl)
+  } catch (err) {
+    if (!signal.aborted) logCaptureFailure('Could not open a browser context', logUrl, err)
+  }
+  // It may still arrive, and nobody else would close it.
+  void opening.then(({ context }) => context.close()).catch(() => undefined)
+  return null
+}
+
+function withEnd(opened: GuardedContext, signal: AbortSignal, logUrl: string): RunContext {
+  let closing: Promise<void> | null = null
+  const close = (): Promise<void> => {
+    closing ??= opened.context.close().catch((err: unknown) => {
+      if (!signal.aborted && !isClosedError(err)) logCaptureFailure('Could not close the browser context', logUrl, err)
+    })
+    return closing
+  }
+  signal.addEventListener('abort', close, { once: true })
+  return {
+    ...opened,
+    async end() {
+      signal.removeEventListener('abort', close)
+      await withinTimeout(close(), BROWSER_CLOSE_TIMEOUT_MS, 'Closing the browser context').catch((err: unknown) => {
+        // On an aborted run the caller has stopped caring, and a close that cannot answer is expected.
+        if (!signal.aborted) logCaptureFailure('Gave up closing the browser context', logUrl, err)
+      })
+    },
+  }
 }

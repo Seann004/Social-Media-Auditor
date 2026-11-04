@@ -33,6 +33,10 @@ export const MAX_HIGHLIGHTS_PER_SUGGESTION = 2
 export const JPEG_QUALITY = 70
 /** Context kept around a highlighted quote in its close-up, in CSS pixels. */
 export const HIGHLIGHT_PADDING_PX = 80
+/** How many places a quote is tried at before it is left out, when its words occur more than once. */
+export const HIGHLIGHT_MAX_OCCURRENCES = 5
+/** Extra tries at a picture when the page moved while it was being taken. */
+export const HIGHLIGHT_SHOT_RETRIES = 1
 
 // Links and sessions (seconds unless named otherwise)
 export const VIEWING_LINK_SECONDS = 300

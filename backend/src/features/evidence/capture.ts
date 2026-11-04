@@ -1,15 +1,17 @@
 import { createHash } from 'node:crypto'
-import { errors, type Browser, type BrowserContext, type Page } from 'playwright'
+import type { Browser, BrowserContext, Page } from 'playwright'
 import { classifyAccess } from './access.js'
 import {
-  createGuardedContext,
   gotoGuarded,
   isClosedError,
   isMainFrameNavigation,
   isTimeoutError,
+  openRunContext,
   PageTooLargeError,
+  watchAbort,
+  withinTimeout,
+  withinTimeoutOrAbort,
   withoutFragment,
-  type GuardedContext,
 } from './browser.js'
 import { logCaptureFailure } from './captureLog.js'
 import {
@@ -212,14 +214,6 @@ async function findRefusal(urls: string[], guard: UrlGuard, violations: string[]
   return null
 }
 
-function withinTimeout<T>(work: Promise<T>, timeoutMs: number, what: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new errors.TimeoutError(`${what} timed out after ${timeoutMs} ms`)), timeoutMs)
-  })
-  return Promise.race([work, expired]).finally(() => clearTimeout(timer))
-}
-
 async function takeScreenshot(page: Page, timeoutMs: number): Promise<Buffer | null> {
   try {
     return await page.screenshot({ type: 'jpeg', quality: JPEG_QUALITY, fullPage: true, timeout: timeoutMs })
@@ -313,11 +307,10 @@ async function visitPage(entry: QueueEntry, run: CaptureRun): Promise<Visit> {
 /** Nothing else stops a browser call that never answers, as on a connection that has gone silent. */
 function visitWithinDeadline(entry: QueueEntry, run: CaptureRun): Promise<Visit | null> {
   const deadlineMs = run.limits.pageTimeoutMs * VISIT_DEADLINE_PAGE_TIMEOUTS + BROWSER_CLOSE_TIMEOUT_MS
-  const visit = withinTimeout(visitPage(entry, run), deadlineMs, 'The visit').catch((err: unknown) => {
+  return withinTimeoutOrAbort(visitPage(entry, run), deadlineMs, 'The visit', run.aborted).catch((err: unknown) => {
     logCaptureFailure('Gave up on the page', entry.url, err)
     return { page: pageWithoutContent(entry.url, 'timeout', OUT_OF_TIME_DETAIL), links: [] }
   })
-  return Promise.race([visit, run.aborted])
 }
 
 function isBinaryFile(url: string): boolean {
@@ -373,20 +366,6 @@ async function crawl(opts: CaptureOptions, run: CaptureRun): Promise<void> {
   }
 }
 
-/** Null when there is no context to work with: the signal aborted, or the browser did not answer. */
-async function openContext(opts: CaptureOptions, timeoutMs: number, aborted: Promise<null>): Promise<GuardedContext | null> {
-  const opening = createGuardedContext(opts.browser, opts.guard)
-  try {
-    const opened = await withinTimeout(Promise.race([opening, aborted]), timeoutMs, 'Opening a browser context')
-    if (opened !== null) return opened
-  } catch (err) {
-    logCaptureFailure('Could not open a browser context', opts.startUrls[0] ?? 'no start url', err)
-  }
-  // It may still arrive, and nobody else would close it.
-  void opening.then(({ context }) => context.close()).catch(() => undefined)
-  return null
-}
-
 /**
  * Visits the start urls and their same-site links in one browser context, reporting each page
  * through onPage. A page that fails is reported with its status and the run carries on. If the
@@ -398,44 +377,40 @@ export async function capturePages(opts: CaptureOptions): Promise<void> {
   const { signal } = opts
   if (signal.aborted) return
 
-  const aborted = new Promise<null>((resolve) => {
-    signal.addEventListener('abort', () => resolve(null), { once: true })
-  })
-  const limits = { ...DEFAULT_CAPTURE_LIMITS, ...opts.limits }
-  const opened = await openContext(opts, limits.pageTimeoutMs, aborted)
-  if (opened === null) {
-    if (!signal.aborted) await reportUnavailable(startEntries(opts.startUrls).slice(0, limits.maxPages), opts, aborted)
-    return
-  }
-
-  const { context, violations } = opened
-  const run: CaptureRun = {
-    browser: opts.browser,
-    guard: opts.guard,
-    limits,
-    context,
-    violations,
-    robots: opts.respectRobots ? createRobotsChecker(opts.guard) : null,
-    signal,
-    aborted,
-  }
-
-  const logUrl = opts.startUrls[0] ?? 'no start url'
-  let closing: Promise<void> | null = null
-  const closeContext = (): Promise<void> => {
-    closing ??= context.close().catch((err: unknown) => {
-      if (!isClosedError(err)) logCaptureFailure('Could not close the browser context', logUrl, err)
-    })
-    return closing
-  }
-  // Closing the context is what makes anything in flight in the browser give up at once.
-  signal.addEventListener('abort', closeContext, { once: true })
+  const watch = watchAbort(signal)
+  const { aborted } = watch
   try {
-    await crawl(opts, run)
-  } finally {
-    signal.removeEventListener('abort', closeContext)
-    await withinTimeout(closeContext(), BROWSER_CLOSE_TIMEOUT_MS, 'Closing the browser context').catch((err: unknown) => {
-      logCaptureFailure('Gave up closing the browser context', logUrl, err)
+    const limits = { ...DEFAULT_CAPTURE_LIMITS, ...opts.limits }
+    const opened = await openRunContext({
+      browser: opts.browser,
+      guard: opts.guard,
+      signal,
+      aborted,
+      timeoutMs: limits.pageTimeoutMs,
+      logUrl: opts.startUrls[0] ?? 'no start url',
     })
+    if (opened === null) {
+      if (!signal.aborted) await reportUnavailable(startEntries(opts.startUrls).slice(0, limits.maxPages), opts, aborted)
+      return
+    }
+
+    const { context, violations } = opened
+    const run: CaptureRun = {
+      browser: opts.browser,
+      guard: opts.guard,
+      limits,
+      context,
+      violations,
+      robots: opts.respectRobots ? createRobotsChecker(opts.guard) : null,
+      signal,
+      aborted,
+    }
+    try {
+      await crawl(opts, run)
+    } finally {
+      await opened.end()
+    }
+  } finally {
+    watch.stop()
   }
 }

@@ -1,15 +1,37 @@
+import { getEventListeners } from 'node:events'
 import net from 'node:net'
 import { chromium, type Browser } from 'playwright'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { highlightOn, never } from './__fixtures__/highlightHelpers.js'
-import { html, quietLogUnlessTestFails, startPageServer, TEST_TIMEOUT_MS, withAlteredPages, type PageServer } from './__fixtures__/pages.js'
+import { highlightOn, isJpeg, never } from './__fixtures__/highlightHelpers.js'
+import { captureAll, html, quietLogUnlessTestFails, startPageServer, TEST_TIMEOUT_MS, withAlteredPages, type PageServer } from './__fixtures__/pages.js'
 import { closeBrowser, getBrowser, LOCKED_DOWN_BROWSER_ARGS } from './browser.js'
-import { BROWSER_CLOSE_TIMEOUT_MS } from './config.js'
+import { BROWSER_CLOSE_TIMEOUT_MS, MAX_RESPONSE_BYTES } from './config.js'
 
 vi.setConfig({ testTimeout: TEST_TIMEOUT_MS })
 
 const FIRST = 'First quoted sentence sits here.'
 const SECOND = 'Second quoted sentence sits there.'
+
+/** A browser whose contexts really close, and then report the given error. */
+function withContextCloseFailing(browser: Browser, failure: Error): Browser {
+  return new Proxy(browser, {
+    get(target, key) {
+      const value = Reflect.get(target, key) as unknown
+      if (key !== 'newContext') return typeof value === 'function' ? value.bind(target) : value
+      return async (...args: Parameters<Browser['newContext']>) => {
+        const context = await target.newContext(...args)
+        const close = context.close.bind(context)
+        context.close = async () => {
+          await close()
+          throw failure
+        }
+        return context
+      }
+    },
+  })
+}
+
+const timers = () => process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length
 
 let browser: Browser
 let server: PageServer
@@ -29,6 +51,16 @@ beforeEach(async () => {
   server = await startPageServer({
     '/two': html('Page', `<p>${FIRST}</p><p>${SECOND}</p>`),
     '/slow': () => undefined,
+    '/refresh': html(
+      'Page',
+      `${Array.from({ length: 40 }, (_, i) => `<p>Numbered sentence ${i} for the refresh race here.</p>`).join('')}`,
+      '<meta http-equiv="refresh" content="1;url=/other">',
+    ),
+    '/other': html('Other', '<p>A different page altogether.</p>'),
+    '/huge': (res) => {
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end(Buffer.alloc(MAX_RESPONSE_BYTES + 1, 'x'))
+    },
     '/watched': (res) => {
       onFirstRequest()
       res.writeHead(200, { 'content-type': 'text/html' })
@@ -106,6 +138,68 @@ describe('settling', () => {
     expect(log).not.toHaveBeenCalled()
   })
 
+  it('leaves no listener on the signal after a call', async () => {
+    const controller = new AbortController()
+
+    for (let call = 0; call < 3; call += 1) await highlightOn(browser, server, '/two', [FIRST], { signal: controller.signal })
+    await captureAll({ browser, guard: server.guard('127.0.0.1'), startUrls: [`${server.url}/two`], signal: controller.signal, limits: { maxDepth: 0 } })
+
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+  })
+
+  it('stops at the page moving itself, keeping the pictures already taken, long before the visit deadline', async () => {
+    const quotes = Array.from({ length: 40 }, (_, i) => `Numbered sentence ${i} for the refresh race here.`)
+    const started = Date.now()
+
+    const images = await highlightOn(browser, server, '/refresh', quotes)
+
+    expect(Date.now() - started).toBeLessThan(4_500)
+    for (const image of images.values()) expect(isJpeg(image)).toBe(true)
+    expect(browser.contexts()).toEqual([])
+  })
+
+  it('returns an empty map, and says why, for a page over the size limit', async () => {
+    const images = await highlightOn(browser, server, '/huge', [FIRST])
+
+    expect(images.size).toBe(0)
+    expect(vi.mocked(console.error).mock.calls.flat().join(' ')).toMatch(/larger than the 25 MB/)
+  })
+
+  it('does not log a close that fails only because the browser is already closing', async () => {
+    const closing = withContextCloseFailing(browser, new Error('browserContext.close: Target page, context or browser has been closed'))
+
+    await highlightOn(closing, server, '/two', [FIRST])
+
+    expect(vi.mocked(console.error).mock.calls.flat().join(' ')).not.toMatch(/Could not close/)
+  })
+
+  it('logs a close that fails for another reason', async () => {
+    const closing = withContextCloseFailing(browser, new Error('The connection broke'))
+
+    await highlightOn(closing, server, '/two', [FIRST])
+
+    expect(vi.mocked(console.error).mock.calls.flat().join(' ')).toMatch(/Could not close the browser context/)
+  })
+
+  it('closes a context that arrives after the open gave up', async () => {
+    const slow = new Proxy(browser, {
+      get(target, key) {
+        const value = Reflect.get(target, key) as unknown
+        if (key !== 'newContext') return typeof value === 'function' ? value.bind(target) : value
+        return async (...args: Parameters<Browser['newContext']>) => {
+          await new Promise((resolve) => setTimeout(resolve, 1_200))
+          return target.newContext(...args)
+        }
+      },
+    })
+
+    const images = await highlightOn(slow, server, '/two', [FIRST], { pageTimeoutMs: 300 })
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+
+    expect(images.size).toBe(0)
+    expect(browser.contexts()).toEqual([])
+  })
+
   it('gives up by itself on a page that never answers', async () => {
     const started = Date.now()
 
@@ -133,10 +227,15 @@ describe('when the browser dies', () => {
     expect((await highlightOn(doomed, server, '/two', [FIRST])).size).toBe(0)
   })
 
-  it('returns an empty map when it dies during the load', async () => {
+  it('returns an empty map when it dies during the load, and logs that it did', async () => {
     setTimeout(() => void doomed.close(), 300)
 
     expect((await highlightOn(doomed, server, '/slow', [FIRST])).size).toBe(0)
+    const logged = vi.mocked(console.error).mock.calls.flat().join(' ')
+    expect(logged).toContain(`${server.url}/slow`)
+    // Closing a context the dead browser already lost is not worth a line of its own.
+    expect(logged).not.toMatch(/Could not close|Gave up closing/)
+    expect(doomed.contexts()).toEqual([])
   })
 
   it('returns the images already taken when it dies between quotes', async () => {
@@ -162,6 +261,7 @@ describe('when the browser dies', () => {
     const images = await highlightOn(killer, server, '/two', [FIRST, SECOND])
 
     expect([...images.keys()]).toEqual([FIRST])
+    expect(doomed.contexts()).toEqual([])
   })
 })
 
@@ -244,9 +344,14 @@ describe('a browser connection that goes silent', () => {
       }, 300)
     }
 
+    const timersBefore = timers()
     await highlightOn(wedged, server, '/watched', [FIRST, SECOND], { signal: controller.signal, pageTimeoutMs: 2_000 })
 
     expect(Date.now() - abortedAt).toBeLessThan(BROWSER_CLOSE_TIMEOUT_MS + 2_000)
+    // Nothing is logged for a run that was aborted, and no timer is left to run the visit's deadline.
+    expect(vi.mocked(console.error)).not.toHaveBeenCalled()
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect(timers()).toBeLessThanOrEqual(timersBefore)
   })
 
   it('moves past a silent browser by itself, without any abort', async () => {
@@ -255,7 +360,7 @@ describe('a browser connection that goes silent', () => {
 
     const images = await highlightOn(wedged, server, '/watched', [FIRST, SECOND], { signal: never, pageTimeoutMs: 500 })
 
-    expect(images.size).toBeLessThanOrEqual(2)
+    for (const image of images.values()) expect(isJpeg(image)).toBe(true)
     expect(Date.now() - started).toBeLessThan(500 * 4 + BROWSER_CLOSE_TIMEOUT_MS * 2 + 2_000)
   })
 })

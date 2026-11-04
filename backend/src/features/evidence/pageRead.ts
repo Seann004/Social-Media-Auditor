@@ -35,7 +35,8 @@ export interface PageContent {
  * For an element with no box innerText falls back to textContent, so a wholly hidden body is
  * ruled out at the end.
  */
-export const READ_PAGE_SOURCE = String.raw`(() => {
+/** The deciding phase alone: reads everything and collects what to hide, without touching the page. */
+const DECIDE_SOURCE = String.raw`
   // A named form field shadows the property of that name on its form, so every DOM read and write
   // goes through the prototypes. Otherwise an input called "style" could cost a real page.
   const getter = (proto, name) => {
@@ -260,7 +261,11 @@ export const READ_PAGE_SOURCE = String.raw`(() => {
   }
 
   visit(root)
+`
 
+/** Deciding, then hiding, then reading. The hiding is what makes the read and the snapshot agree with what is shown. */
+export const READ_PAGE_SOURCE = String.raw`(() => {
+${DECIDE_SOURCE}
   // What is hidden already goes first, so that no later edit can reveal it through a selector.
   for (const el of hiddenByDisplay) pin(el, 'display', 'none')
   for (const [el, value] of hiddenByVisibility) pin(el, 'visibility', value)
@@ -286,6 +291,19 @@ export const READ_PAGE_SOURCE = String.raw`(() => {
       .map((anchor) => dom.anchorHref(anchor)),
   }
 })()`
+
+/**
+ * Only the deciding phase, for a caller that must leave the page as it was. What was decided is
+ * kept for it as sets of elements and text nodes the filter would hide, in `__evidenceHidden`.
+ */
+export const DECIDE_HIDDEN_SOURCE = String.raw`(() => {
+${DECIDE_SOURCE}
+  globalThis.__evidenceHidden = {
+    elements: new Set([...hiddenByDisplay, ...elementsToHide]),
+    textNodes: new Set(textNodesToHide),
+  }
+})()`
+
 
 const pageContentSchema = z.object({
   title: z.string(),
