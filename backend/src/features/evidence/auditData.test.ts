@@ -77,7 +77,10 @@ describe('createAuditData', () => {
       client: () =>
         fakeClient({
           Audit_Project: [{ projectId: 'p1', headAuditorId: 'head' }],
-          Project_Member: [{ projectId: 'p1', userId: 'aud' }],
+          Project_Member: [
+            { projectId: 'p1', userId: 'aud' },
+            { projectId: 'p1', userId: 'adm' },
+          ],
         }),
     })
 
@@ -86,6 +89,8 @@ describe('createAuditData', () => {
     expect(await audit.getProjectAccess('p1', 'aud', 'auditor')).toBe('auditor')
     expect(await audit.getProjectAccess('p1', 'stranger', 'auditor')).toBeNull()
     expect(await audit.getProjectAccess('p1', 'head', 'admin')).toBeNull()
+    // An admin is no member of the audit, even if a membership row exists for them.
+    expect(await audit.getProjectAccess('p1', 'adm', 'admin')).toBeNull()
   })
 
   it('reads the platform and submission status from the project, and null when the project is gone', async () => {

@@ -26,12 +26,20 @@ export interface RunnerDeps {
   assessBatch?: (input: AssessInput) => Promise<AssessOutput>
   /** For tests. Defaults to RUN_TIMEOUT_MS. */
   runTimeoutMs?: number
+  /** Waits between tries at an update that failed. For tests. Defaults to RUN_UPDATE_RETRY_DELAYS_MS. */
+  retryDelaysMs?: readonly number[]
 }
 
 export type ResolvedDeps = Required<Omit<RunnerDeps, 'runTimeoutMs'>>
 
+/** What the helpers that keep a run's status true need. A run that could not be read has only its id. */
+export interface RunHandle {
+  run: { id: string }
+  deps: Pick<ResolvedDeps, 'repo' | 'apiKey' | 'retryDelaysMs'>
+}
+
 /** What every phase of one run shares. */
-export interface RunCtx {
+export interface RunCtx extends RunHandle {
   run: EvidenceRun
   deps: ResolvedDeps
   signal: AbortSignal
@@ -64,14 +72,23 @@ export function categoryNameOf(key: string): string {
   return at < 0 ? key : key.slice(at + 2)
 }
 
-/** A text that is safe to log or show: no key, no bearer token. */
+function messageOf(err: unknown): string {
+  if (err instanceof Error) return err.message
+  // The database service throws the plain error objects of PostgREST.
+  if (typeof err === 'object' && err !== null && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message
+  }
+  return typeof err === 'string' ? err : 'an error without a message'
+}
+
+/** A text that is safe to log or show: no key, no bearer token, no stack. */
 export function safeMessage(err: unknown, apiKey: string): string {
-  let text = err instanceof Error ? err.message : String(err)
+  let text = messageOf(err)
   if (apiKey) text = text.split(apiKey).join('[redacted]')
   return text.replace(/gsk_[A-Za-z0-9_-]+/g, '[redacted]').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
 }
 
-export function logRunProblem(ctx: { run: { id: string }; deps: { apiKey: string } }, what: string, err: unknown): void {
+export function logRunProblem(ctx: RunHandle, what: string, err: unknown): void {
   console.error(`[evidence] ${what} (run ${ctx.run.id}):`, safeMessage(err, ctx.deps.apiKey))
 }
 
@@ -85,7 +102,7 @@ export function isGroqLimit(err: unknown): boolean {
 }
 
 /** True when the run row is gone, as after its project was deleted. A failing read is not taken for gone. */
-export async function isRunGone(ctx: Pick<RunCtx, 'run' | 'deps'>): Promise<boolean> {
+export async function isRunGone(ctx: RunHandle): Promise<boolean> {
   try {
     return (await ctx.deps.repo.getRun(ctx.run.id)) === null
   } catch {
@@ -94,12 +111,14 @@ export async function isRunGone(ctx: Pick<RunCtx, 'run' | 'deps'>): Promise<bool
 }
 
 /** Throws RunGoneError if the failure came from a run that is gone; otherwise does nothing. */
-export async function endIfRunGone(ctx: Pick<RunCtx, 'run' | 'deps'>): Promise<void> {
+export async function endIfRunGone(ctx: RunHandle): Promise<void> {
   if (await isRunGone(ctx)) throw new RunGoneError()
 }
 
-/** Updates the run. Returns false when it could not, unless the run is gone, which ends the job. */
-export async function updateRun(ctx: Pick<RunCtx, 'run' | 'deps'>, patch: RunPatch): Promise<boolean> {
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** Updates the run once. Returns false when it could not, unless the run is gone, which ends the job. */
+export async function updateRun(ctx: RunHandle, patch: RunPatch): Promise<boolean> {
   try {
     await ctx.deps.repo.updateRun(ctx.run.id, patch)
     return true
@@ -107,6 +126,40 @@ export async function updateRun(ctx: Pick<RunCtx, 'run' | 'deps'>, patch: RunPat
     await endIfRunGone(ctx)
     logRunProblem(ctx, 'Could not update the run', err)
     return false
+  }
+}
+
+/**
+ * Updates the run, trying again after each of the configured delays. For the updates that decide
+ * whether the project is locked: a run left in a working status keeps the project from starting
+ * another one until the server restarts. Returns false only when every try failed.
+ */
+export async function updateRunReliably(ctx: RunHandle, patch: RunPatch): Promise<boolean> {
+  const delays = ctx.deps.retryDelaysMs
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await ctx.deps.repo.updateRun(ctx.run.id, patch)
+      return true
+    } catch (err) {
+      await endIfRunGone(ctx)
+      if (attempt >= delays.length) {
+        logRunProblem(ctx, 'Could not update the run, so it may stay in its last status', err)
+        return false
+      }
+      await sleep(delays[attempt])
+    }
+  }
+}
+
+/** Reads the run, trying again after each of the configured delays. Rejects with the last error. */
+export async function readRunReliably(deps: RunHandle['deps'], runId: string): Promise<EvidenceRun | null> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await deps.repo.getRun(runId)
+    } catch (err) {
+      if (attempt >= deps.retryDelaysMs.length) throw err
+      await sleep(deps.retryDelaysMs[attempt])
+    }
   }
 }
 

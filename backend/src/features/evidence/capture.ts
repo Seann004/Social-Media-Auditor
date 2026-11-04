@@ -58,6 +58,8 @@ export interface CaptureOptions {
   guard: UrlGuard
   startUrls: string[]
   respectRobots: boolean
+  /** The run's own checker, so that robots.txt is read once per site for the whole run. Made here if not given. */
+  robots?: RobotsChecker
   signal: AbortSignal
   limits?: Partial<CaptureLimits>
   onPage: (page: CapturedPageData) => Promise<void>
@@ -414,7 +416,7 @@ export async function capturePages(opts: CaptureOptions): Promise<void> {
       limits,
       context,
       violations,
-      robots: opts.respectRobots ? createRobotsChecker(opts.guard) : null,
+      robots: opts.respectRobots ? (opts.robots ?? createRobotsChecker(opts.guard)) : null,
       signal,
       aborted,
     }

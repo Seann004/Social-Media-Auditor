@@ -57,6 +57,7 @@ export interface NewSuggestion {
   reason: string
   confidence: Confidence
   flags: ReviewFlag[]
+  passageIdsSent: string[]
   quotes: Omit<SuggestionQuote, 'id'>[]
 }
 

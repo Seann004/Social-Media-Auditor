@@ -10,10 +10,12 @@ import { startFixtureSite } from './site.js'
 
 const site = await startFixtureSite()
 try {
+  const guard = createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${site.port}`] })
   const quote = 'Teen accounts are private by default.'
   const images = await captureHighlights({
     browser: await getBrowser(),
-    guard: createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${site.port}`] }),
+    guard,
+    navigationGuard: guard,
     pageUrl: `${site.url}/privacy`,
     quotes: [quote, 'Not on the page at all.'],
     signal: new AbortController().signal,

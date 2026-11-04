@@ -85,6 +85,8 @@ export interface Suggestion {
   reason: string
   confidence: Confidence
   flags: ReviewFlag[]
+  /** Ids of the passages sent to the AI in the call that made this suggestion. Empty when no call was made. */
+  passageIdsSent: string[]
   quotes: SuggestionQuote[]
 }
 

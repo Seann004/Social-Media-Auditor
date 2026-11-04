@@ -2,10 +2,10 @@ import type { Browser } from 'playwright'
 import { assessBatch as defaultAssessBatch, planBatches, type AssessItem } from './assess.js'
 import { getBrowser } from './browser.js'
 import { capturePages } from './capture.js'
-import { MAX_TOKENS_PER_RUN, RUN_TIMEOUT_MS } from './config.js'
+import { MAX_TOKENS_PER_RUN, RUN_TIMEOUT_MS, RUN_UPDATE_RETRY_DELAYS_MS } from './config.js'
 import { captureHighlights } from './highlight.js'
 import { createRobotsChecker } from './robots.js'
-import { assessAndStore, type BatchContext } from './runnerAssess.js'
+import { assessAndStore, type BatchContext, type TokenMeter } from './runnerAssess.js'
 import { capturePhase } from './runnerCapture.js'
 import { autoMatchAnswers, carryForward, partialSummary, type StopReason } from './runnerFinish.js'
 import {
@@ -13,13 +13,16 @@ import {
   isGroqLimit,
   isRunGone,
   logRunProblem,
+  readRunReliably,
   RunAbortedError,
   RunFailure,
   RunGoneError,
   safeMessage,
   updateRun,
+  updateRunReliably,
   type ResolvedDeps,
   type RunCtx,
+  type RunHandle,
   type RunnerDeps,
 } from './runnerShared.js'
 import type { CapturedPage, EvidenceRun, Suggestion } from './types.js'
@@ -28,8 +31,10 @@ export type { RunnerDeps } from './runnerShared.js'
 
 const GENERIC_FAILURE = 'The run stopped unexpectedly. Start it again, or contact the project owner if it keeps happening.'
 const NO_PAGE_READ = 'No page could be read: every page needed a login, was blocked, or returned an error.'
+const PAGES_NOT_SAVED = 'The pages were captured but could not be saved, so there was nothing to assess. Start the run again.'
 const OUT_OF_TIME_NO_PAGE = 'The run ran out of time before any page could be read.'
-const CHECKLIST_UNREADABLE = 'The checklist of this project could not be read.'
+const CHECKLIST_UNREADABLE = 'The checklist of this project could not be read because the database did not answer. Start the run again later.'
+const COULD_NOT_START = 'The run could not be started because it could not be read from the database. Start it again.'
 
 interface Category {
   key: string
@@ -40,7 +45,6 @@ interface Progress {
   done: number
   unassessed: string[]
   stop: StopReason | null
-  tokensUsed: number
   created: Suggestion[]
 }
 
@@ -56,6 +60,7 @@ function resolve(deps: RunnerDeps): ResolvedDeps {
     capture: deps.capture ?? capturePages,
     highlights: deps.highlights ?? captureHighlights,
     assessBatch: deps.assessBatch ?? defaultAssessBatch,
+    retryDelaysMs: deps.retryDelaysMs ?? RUN_UPDATE_RETRY_DELAYS_MS,
   }
 }
 
@@ -71,14 +76,28 @@ function planCategories(items: AssessItem[]): Category[] {
   return categories
 }
 
-/** Which categories this run assesses: all, or for a re-assess of the unfinished, those the last result run left. */
+/**
+ * Which categories this run assesses: all of them, or for a re-assess of the unfinished, those the
+ * latest result run of this capture listed as not assessed, plus any category with an item that run
+ * has no suggestion for (a category that was switched off meanwhile, or an item added since).
+ */
 async function categoriesToAssess(ctx: RunCtx, items: AssessItem[]): Promise<Category[]> {
   const all = planCategories(items)
   const isReassess = ctx.run.capturedInRunId !== ctx.run.id
   if (!isReassess || ctx.run.scope !== 'unfinished') return all
-  const prior = await ctx.deps.repo.latestResultRun(ctx.run.projectId)
+  const { repo } = ctx.deps
+  const prior = await repo.latestResultRun(ctx.run.projectId)
   if (!prior || prior.capturedInRunId !== ctx.run.capturedInRunId) return all
+  let shown: Set<string>
+  try {
+    shown = new Set((await repo.listSuggestions(prior.id)).map((s) => s.itemId))
+  } catch (err) {
+    if (await isRunGone(ctx)) throw new RunGoneError()
+    logRunProblem(ctx, 'Could not read the earlier suggestions, so every category is assessed again', err)
+    return all
+  }
   const wanted = new Set(prior.unassessedCategories)
+  for (const item of items) if (!shown.has(item.id)) wanted.add(categoryKey(item))
   return all.filter((c) => wanted.has(c.key))
 }
 
@@ -97,19 +116,18 @@ async function stopForFailure(ctx: RunCtx, err: unknown): Promise<StopReason | n
   return null
 }
 
-async function assessCategories(ctx: RunCtx, categories: Category[], batch: BatchContext): Promise<Progress> {
-  const progress: Progress = { done: 0, unassessed: [], stop: null, tokensUsed: 0, created: [] }
+async function assessCategories(ctx: RunCtx, categories: Category[], batch: BatchContext, meter: TokenMeter): Promise<Progress> {
+  const progress: Progress = { done: 0, unassessed: [], stop: null, created: [] }
   for (const category of categories) {
     let complete = true
     for (const items of category.batches) {
-      progress.stop ??= stopBefore(ctx, progress.tokensUsed)
+      progress.stop ??= stopBefore(ctx, meter.used())
       if (progress.stop) {
         complete = false
         break
       }
       try {
-        const outcome = await assessAndStore(ctx, items, batch)
-        progress.tokensUsed += outcome.tokensUsed
+        const outcome = await assessAndStore(ctx, items, batch, meter)
         progress.created.push(...outcome.created)
         if (outcome.unassessed > 0) complete = false
       } catch (err) {
@@ -120,7 +138,7 @@ async function assessCategories(ctx: RunCtx, categories: Category[], batch: Batc
     }
     if (complete) progress.done += 1
     else progress.unassessed.push(category.key)
-    await updateRun(ctx, { categoriesDone: progress.done, tokensUsed: progress.tokensUsed })
+    await updateRun(ctx, { categoriesDone: progress.done, tokensUsed: meter.used() })
   }
   return progress
 }
@@ -137,12 +155,18 @@ async function loadChecklist(ctx: RunCtx): Promise<{ items: AssessItem[]; platfo
   }
 }
 
-async function fail(ctx: RunCtx, message: string): Promise<void> {
-  await updateRun(ctx, { status: 'failed', error: message, finishedAt: new Date().toISOString() })
-}
-
 function failedPagesOf(pages: CapturedPage[]): BatchContext['failedPages'] {
   return pages.filter((p) => p.accessStatus !== 'ok').map((p) => ({ url: p.url, status: p.accessStatus }))
+}
+
+function createMeter(): TokenMeter {
+  let used = 0
+  return {
+    used: () => used,
+    add(tokens) {
+      used += tokens
+    },
+  }
 }
 
 async function execute(ctx: RunCtx): Promise<void> {
@@ -153,8 +177,17 @@ async function execute(ctx: RunCtx): Promise<void> {
     model: ctx.deps.model,
   })
 
-  const pages = isCapture ? await capturePhase(ctx) : await ctx.deps.repo.listPages(ctx.run.capturedInRunId)
+  let pages: CapturedPage[]
+  let readableReported = 0
+  if (isCapture) {
+    const captured = await capturePhase(ctx)
+    pages = captured.pages
+    readableReported = captured.readableReported
+  } else {
+    pages = await ctx.deps.repo.listPages(ctx.run.capturedInRunId)
+  }
   if (!pages.some((p) => p.accessStatus === 'ok')) {
+    if (readableReported > 0) throw new RunFailure(PAGES_NOT_SAVED)
     throw new RunFailure(ctx.signal.aborted ? OUT_OF_TIME_NO_PAGE : NO_PAGE_READ)
   }
   await updateRun(ctx, { status: 'assessing', pagesTotal: pages.length, pagesDone: pages.length })
@@ -168,22 +201,25 @@ async function execute(ctx: RunCtx): Promise<void> {
     pages: new Map(pages.map((p) => [p.id, p])),
     failedPages: failedPagesOf(pages),
   }
-  const progress = await assessCategories(ctx, categories, batch)
+  const meter = createMeter()
+  const progress = await assessCategories(ctx, categories, batch, meter)
 
-  if (!isCapture) await carryForward(ctx, items)
+  const notKept = isCapture ? [] : await carryForward(ctx, items, new Set(progress.created.map((s) => s.itemId)))
+  const unassessed = [...progress.unassessed, ...notKept.filter((key) => !progress.unassessed.includes(key))]
   await autoMatchAnswers(ctx, progress.created)
 
-  const unassessed = progress.unassessed.length
-  const patch = {
-    status: unassessed === 0 ? ('completed' as const) : ('partial' as const),
-    unassessedCategories: progress.unassessed,
+  await updateRunReliably(ctx, {
+    status: unassessed.length === 0 ? 'completed' : 'partial',
+    unassessedCategories: unassessed,
     categoriesDone: progress.done,
-    tokensUsed: progress.tokensUsed,
-    error: unassessed === 0 ? null : partialSummary(progress.stop, unassessed),
+    tokensUsed: meter.used(),
+    error: unassessed.length === 0 ? null : partialSummary(progress.stop, unassessed.length, notKept.length),
     finishedAt: new Date().toISOString(),
-  }
-  // A run left in a working status would block its project until the server restarts.
-  if (!(await updateRun(ctx, patch))) await updateRun(ctx, patch)
+  })
+}
+
+async function fail(ctx: RunHandle, message: string): Promise<void> {
+  await updateRunReliably(ctx, { status: 'failed', error: message, finishedAt: new Date().toISOString() })
 }
 
 async function endAfterCrash(ctx: RunCtx, err: unknown): Promise<void> {
@@ -195,14 +231,31 @@ async function endAfterCrash(ctx: RunCtx, err: unknown): Promise<void> {
 
 async function startContext(run: EvidenceRun, deps: ResolvedDeps, signal: AbortSignal): Promise<RunCtx> {
   // Without a permission on record, robots.txt applies.
-  const permission = await deps.repo.getPermission(run.projectId).catch(() => null)
+  let granted = false
+  try {
+    granted = (await deps.repo.getPermission(run.projectId))?.granted === true
+  } catch (err) {
+    logRunProblem({ run, deps }, 'Could not read the permission, so robots.txt is respected', err)
+  }
   let started: Promise<Browser> | null = null
   return {
     run,
     deps,
     signal,
-    robots: permission?.granted === true ? null : createRobotsChecker(deps.guard),
+    robots: granted ? null : createRobotsChecker(deps.guard),
     browser: () => (started ??= deps.browserProvider()),
+  }
+}
+
+/** Reads the run, or ends it as failed when it cannot be read. Returns null when there is nothing to run. */
+async function readRun(runId: string, deps: ResolvedDeps): Promise<EvidenceRun | null> {
+  try {
+    return await readRunReliably(deps, runId)
+  } catch (err) {
+    const handle: RunHandle = { run: { id: runId }, deps }
+    logRunProblem(handle, 'Could not read the run', err)
+    await fail(handle, COULD_NOT_START)
+    return null
   }
 }
 
@@ -217,16 +270,18 @@ export async function runEvidenceJob(runId: string, deps: RunnerDeps): Promise<v
   const timer = setTimeout(() => controller.abort(), deps.runTimeoutMs ?? RUN_TIMEOUT_MS)
   let ctx: RunCtx | null = null
   try {
-    const run = await resolved.repo.getRun(runId)
+    const run = await readRun(runId, resolved)
     if (!run) return
     ctx = await startContext(run, resolved, controller.signal)
     await execute(ctx)
   } catch (err) {
     try {
       if (ctx) await endAfterCrash(ctx, err)
-      else console.error(`[evidence] Run ${runId} could not start:`, safeMessage(err, deps.apiKey))
+      else if (!(err instanceof RunGoneError)) console.error(`[evidence] Run ${runId} could not start:`, safeMessage(err, deps.apiKey))
     } catch (secondary) {
-      console.error(`[evidence] Run ${runId} could not be ended:`, safeMessage(secondary, deps.apiKey))
+      if (!(secondary instanceof RunGoneError)) {
+        console.error(`[evidence] Run ${runId} could not be ended:`, safeMessage(secondary, deps.apiKey))
+      }
     }
   } finally {
     clearTimeout(timer)

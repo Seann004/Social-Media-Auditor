@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { splitIntoPassages, extractControlLines } from './passages.js'
+import { MAX_CHARS_PER_PASSAGE, MAX_WORDS_PER_PASSAGE } from './config.js'
+import { splitIntoPassages, splitControlLines, extractControlLines } from './passages.js'
 import { isQuoteVerified, normaliseForMatch } from './quotes.js'
 import { classifyAccess } from './access.js'
 
@@ -22,16 +23,41 @@ function access(overrides: Partial<AccessInput> = {}) {
 }
 
 describe('splitIntoPassages', () => {
-  it('splits on paragraphs and sentences, never exceeding maxWords except for a single longer sentence', () => {
+  it('splits on paragraphs and sentences, and cuts a single sentence that is longer than maxWords', () => {
     const sentence = (n: number) => `${words(n)}.`
-    const text = `${sentence(6)} ${sentence(6)}\n\n${sentence(6)}\n\n${sentence(30)}`
+    const text = `${sentence(6)} ${sentence(6)}
+
+${sentence(6)}
+
+${sentence(30)}`
     const passages = splitIntoPassages(text, 10)
     expect(passages.length).toBeGreaterThan(1)
-    for (const p of passages) {
-      const count = p.split(/\s+/).length
-      if (count > 10) expect(count).toBe(30)
-    }
+    for (const p of passages) expect(p.split(/\s+/).length).toBeLessThanOrEqual(10)
     expect(passages.join(' ').split(/\s+/).length).toBe(48)
+  })
+
+  it('never makes a passage over the word or character cap, whatever the text looks like', () => {
+    const noSentenceEnd = words(5000)
+    const oneHugeWord = 'x'.repeat(18_000)
+    const spacedLongWords = Array.from({ length: 400 }, () => 'internationalization').join(' ')
+    for (const text of [noSentenceEnd, oneHugeWord, spacedLongWords, `${oneHugeWord}. Short one here.`]) {
+      const passages = splitIntoPassages(text)
+      expect(passages.length).toBeGreaterThan(0)
+      for (const p of passages) {
+        expect(p.split(/\s+/).length).toBeLessThanOrEqual(MAX_WORDS_PER_PASSAGE)
+        expect(p.length).toBeLessThanOrEqual(MAX_CHARS_PER_PASSAGE)
+      }
+      // Nothing is lost, only cut.
+      expect(passages.join('').replace(/\s+/g, '')).toBe(text.replace(/\s+/g, ''))
+    }
+  })
+
+  it('cuts a long run of control lines between lines', () => {
+    const lines = Array.from({ length: 400 }, (_, i) => `checkbox "Setting number ${i} for the account" [checked]`).join('\n')
+    const chunks = splitControlLines(lines)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(MAX_CHARS_PER_PASSAGE)
+    expect(chunks.join('\n')).toBe(lines)
   })
 
   it('returns [] for empty or whitespace-only text', () => {

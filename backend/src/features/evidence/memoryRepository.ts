@@ -200,6 +200,7 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
         reason: input.reason,
         confidence: input.confidence,
         flags: copy(input.flags),
+        passageIdsSent: [...input.passageIdsSent],
         quotes,
       }
       suggestions.push(row)

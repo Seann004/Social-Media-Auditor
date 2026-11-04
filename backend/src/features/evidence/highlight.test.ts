@@ -146,10 +146,12 @@ describe('captureHighlights', () => {
   it('returns an empty map when the page cannot be reached, and logs the cause without the query', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const port = await unusedPort()
+    const guard = createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${port}`] })
 
     const images = await captureHighlights({
       browser,
-      guard: createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${port}`] }),
+      guard,
+      navigationGuard: guard,
       pageUrl: `http://127.0.0.1:${port}/page?token=sekrit`,
       quotes: [QUOTE],
       signal: new AbortController().signal,
@@ -174,15 +176,18 @@ describe('a redirect to a blocked address', () => {
     await site.close()
   })
 
-  const highlightOnSite = (path: string, quotes: string[]) =>
-    captureHighlights({
+  const highlightOnSite = (path: string, quotes: string[]) => {
+    const siteGuard = createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${site.port}`] })
+    return captureHighlights({
       browser,
-      guard: createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${site.port}`] }),
+      guard: siteGuard,
+      navigationGuard: siteGuard,
       pageUrl: `${site.url}${path}`,
       quotes,
       signal: new AbortController().signal,
       pageTimeoutMs: TEST_PAGE_TIMEOUT_MS,
     })
+  }
 
   it.each(['/redirect-internal', '/redirect-chain', '/redirect-file'])('gives an empty map and never reaches the address: %s', async (path) => {
     const images = await highlightOnSite(path, ['internal secret', 'Words before refresh.'])
@@ -216,4 +221,56 @@ describe('code sent to the page', () => {
 
     expect(JSON.parse(stdout)).toMatchObject({ keys: [QUOTE], jpeg: true })
   }, 60_000)
+})
+
+describe('the two guards', () => {
+  let assets: PageServer
+  let host: PageServer
+
+  beforeEach(async () => {
+    assets = await startPageServer({
+      '/app.js': (res) => {
+        res.writeHead(200, { 'content-type': 'text/javascript' })
+        res.end(`document.getElementById('root').textContent = ${JSON.stringify(QUOTE)}`)
+      },
+    })
+    host = await startPageServer({
+      '/privacy': html('Page', `<div id="root"></div><script src="${assets.url}/app.js"></script>`),
+      '/plain': html('Page', `<p>${QUOTE}</p>`),
+    })
+  })
+
+  afterEach(async () => {
+    await assets.close()
+    await host.close()
+  })
+
+  const bothHosts = () => createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${host.port}`, `127.0.0.1:${assets.port}`] })
+  const hostOnly = () => {
+    const inner = bothHosts()
+    return { check: async (url: string) => (new URL(url).port === String(host.port) ? inner.check(url) : { allowed: false as const, reason: 'another site' }) }
+  }
+
+  it('lets the page load a script from another host, since that is what the capture did', async () => {
+    const images = await highlightOn(browser, host, '/privacy', [QUOTE], { guard: bothHosts(), navigationGuard: hostOnly() })
+
+    expect([...images.keys()]).toEqual([QUOTE])
+    expect(assets.hits('/app.js')).toBeGreaterThan(0)
+  })
+
+  it('holds the page itself, and any navigation, to the navigation guard', async () => {
+    const refuseAll = { check: async () => ({ allowed: false as const, reason: 'no' }) }
+
+    const images = await highlightOn(browser, host, '/plain', [QUOTE], { guard: bothHosts(), navigationGuard: refuseAll })
+
+    expect(images.size).toBe(0)
+    expect(host.hits('/plain')).toBe(0)
+  })
+
+  it('still holds sub-resources to the url guard', async () => {
+    const images = await highlightOn(browser, host, '/privacy', [QUOTE], { guard: createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${host.port}`] }), navigationGuard: hostOnly() })
+
+    expect(images.size).toBe(0)
+    expect(assets.hits('/app.js')).toBe(0)
+  })
 })

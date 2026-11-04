@@ -18,4 +18,9 @@ describe('001_evidence_assessment.sql', () => {
     expect(sql).toMatch(/'evidence-screenshots',\s*'evidence-screenshots',\s*false/)
     expect(sql).not.toMatch(/grant [^;]* to anon/i)
   })
+
+  it('records the passages sent with every suggestion (spec 7.5)', () => {
+    const table = sql.slice(sql.indexOf('create table if not exists "AI_Suggestion" ('), sql.indexOf('create table if not exists "AI_Suggestion_Quote"'))
+    expect(table).toMatch(/"passageIdsSent" jsonb not null default '\[\]'::jsonb/)
+  })
 })

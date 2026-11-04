@@ -175,6 +175,21 @@ describe('runEvidenceJob', () => {
     expect(s.flags.find((f) => f.type === 'inaccessible')?.reason).toContain('https://p.test/account')
   })
 
+  it('never names a page that was read as inaccessible', async () => {
+    const readable = await createWorld({
+      items: [{ ...DEFAULT_ITEMS[0], text: 'Zebra giraffe elephant policy?' }],
+      pages: [okPage(), loginPage()],
+    })
+    const run = await readable.run()
+    const [s] = await readable.suggestions(run.id)
+    expect(s.flags.find((f) => f.type === 'inaccessible')?.reason).not.toContain('https://p.test/privacy')
+
+    const allRead = await createWorld({ items: [{ ...DEFAULT_ITEMS[0], text: 'Zebra giraffe elephant policy?' }], pages: [okPage()] })
+    const clean = await allRead.run()
+    const [t] = await allRead.suggestions(clean.id)
+    expect(t.flags.map((f) => f.type)).toEqual(['missing_evidence'])
+  })
+
   it('sends the AI only the items that have passages, and still reports the rest as missing evidence', async () => {
     const items = [DEFAULT_ITEMS[0], { ...DEFAULT_ITEMS[1], text: 'Zebra giraffe elephant policy?' }]
     const world = await createWorld({ items })
@@ -564,7 +579,9 @@ describe('highlights', () => {
 
     await world.run()
 
-    const revisit = world.calls.highlights[0].guard
+    // Sub-resources get the url guard alone, as in the capture; only navigations get the site and robots rules.
+    expect(world.calls.highlights[0].guard).toBe(world.deps.guard)
+    const revisit = world.calls.highlights[0].navigationGuard
     expect((await revisit.check('https://p.test/privacy')).allowed).toBe(true)
     expect((await revisit.check('https://elsewhere.test/')).allowed).toBe(false)
     expect((await revisit.check('https://p.test/blocked')).allowed).toBe(false)
@@ -584,7 +601,7 @@ describe('highlights', () => {
 
       await world.run()
 
-      const revisit = world.calls.highlights[0].guard
+      const revisit = world.calls.highlights[0].navigationGuard
       expect((await revisit.check('https://p.test/privacy')).allowed).toBe(true)
       expect((await revisit.check('https://p.test/private')).allowed).toBe(false)
       expect((await revisit.check('https://p.test/privacy')).allowed).toBe(true)

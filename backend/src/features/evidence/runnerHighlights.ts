@@ -26,7 +26,8 @@ export async function takeHighlights(
       const browser = await ctx.browser()
       images = await ctx.deps.highlights({
         browser,
-        guard: highlightGuard(pageUrl, ctx.deps.guard, ctx.robots),
+        guard: ctx.deps.guard,
+        navigationGuard: highlightGuard(pageUrl, ctx.deps.guard, ctx.robots),
         pageUrl,
         quotes,
         signal: ctx.signal,

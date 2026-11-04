@@ -119,6 +119,36 @@ describe('createRobotsChecker', () => {
     expect(agents).toEqual([USER_AGENT])
   })
 
+  it('uses the robots checker it is given, and does not read robots.txt itself', async () => {
+    const paths: (string | undefined)[] = []
+    const server = await stub((req, res) => {
+      paths.push(req.url)
+      res.end('User-agent: *\nAllow: /')
+    })
+    const asked: string[] = []
+    const pages: CapturedPageData[] = []
+    await capturePages({
+      browser: await getBrowser(),
+      guard: allowing(server.port),
+      startUrls: [`${server.url}/page`],
+      respectRobots: true,
+      robots: {
+        isAllowed: async (url) => {
+          asked.push(url)
+          return { allowed: false, reason: 'robots.txt does not allow this page.' }
+        },
+      },
+      signal: new AbortController().signal,
+      onPage: async (page) => {
+        pages.push(page)
+      },
+    })
+
+    expect(asked).toEqual([`${server.url}/page`])
+    expect(pages[0]).toMatchObject({ accessStatus: 'blocked' })
+    expect(paths).toEqual([])
+  })
+
   it('stops a capture before it opens the page when robots.txt is broken', async () => {
     const paths: (string | undefined)[] = []
     const broken = await stub((req, res) => {

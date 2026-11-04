@@ -28,6 +28,8 @@ export const AI_TEMPERATURE = 0.1
 
 // Passages and highlights
 export const MAX_WORDS_PER_PASSAGE = 250
+/** About 1 000 tokens, so that any one passage fits the input budget of a call. */
+export const MAX_CHARS_PER_PASSAGE = 4_000
 export const MAX_PASSAGES_PER_ITEM = 5
 export const MAX_HIGHLIGHTS_PER_SUGGESTION = 2
 export const JPEG_QUALITY = 70
@@ -42,3 +44,6 @@ export const HIGHLIGHT_SHOT_RETRIES = 1
 export const VIEWING_LINK_SECONDS = 300
 export const ACCEPTED_EVIDENCE_LINK_SECONDS = 31_536_000
 export const SESSION_HOURS = 12
+
+// Keeping a run's status true: waits between tries at an update that failed (about a minute in all)
+export const RUN_UPDATE_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000, 20_000, 25_000]

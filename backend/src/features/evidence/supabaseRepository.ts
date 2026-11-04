@@ -78,6 +78,7 @@ function toSuggestion(row: Row, quotes: Row[]): Suggestion {
     reason: row.reason,
     confidence: row.confidence,
     flags: row.flags ?? [],
+    passageIdsSent: row.passageIdsSent ?? [],
     quotes: quotes.map(toQuote),
   }
 }
@@ -271,6 +272,7 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
             reason: input.reason,
             confidence: input.confidence,
             flags: input.flags,
+            passageIdsSent: input.passageIdsSent,
           })
           .select('*')
           .single(),

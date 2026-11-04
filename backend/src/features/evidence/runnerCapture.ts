@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { CapturedPageData } from './capture.js'
 import type { NewPassage } from './repository.js'
-import { extractControlLines, splitIntoPassages } from './passages.js'
+import { extractControlLines, splitControlLines, splitIntoPassages } from './passages.js'
 import type { CapturedPage } from './types.js'
 import { abortable, endIfRunGone, logRunProblem, RunAbortedError, RunFailure, updateRun, type RunCtx } from './runnerShared.js'
 
@@ -9,7 +9,9 @@ import { abortable, endIfRunGone, logRunProblem, RunAbortedError, RunFailure, up
 export function passagesOf(data: Pick<CapturedPageData, 'text' | 'accessibilitySnapshot'>): NewPassage[] {
   const passages: NewPassage[] = splitIntoPassages(data.text).map((text, position) => ({ position, kind: 'text', text }))
   const controls = data.accessibilitySnapshot ? extractControlLines(data.accessibilitySnapshot) : ''
-  if (controls) passages.push({ position: passages.length, kind: 'controls', text: controls })
+  for (const text of controls ? splitControlLines(controls) : []) {
+    passages.push({ position: passages.length, kind: 'controls', text })
+  }
   return passages
 }
 
@@ -58,11 +60,18 @@ async function storePage(ctx: RunCtx, data: CapturedPageData): Promise<boolean> 
   }
 }
 
+export interface CaptureOutcome {
+  /** The pages stored, which may be none. */
+  pages: CapturedPage[]
+  /** How many readable pages the capture reported, whether or not they could be stored. */
+  readableReported: number
+}
+
 /**
- * Captures the project's start urls and stores what was captured. Resolves with the pages stored,
- * which may be none. Throws RunFailure when nothing can be captured at all.
+ * Captures the project's start urls and stores what was captured. Throws RunFailure when nothing
+ * can be captured at all.
  */
-export async function capturePhase(ctx: RunCtx): Promise<CapturedPage[]> {
+export async function capturePhase(ctx: RunCtx): Promise<CaptureOutcome> {
   const { repo, capture, guard } = ctx.deps
   const source = await repo.getSource(ctx.run.projectId)
   if (!source || source.startUrls.length === 0) {
@@ -73,12 +82,13 @@ export async function capturePhase(ctx: RunCtx): Promise<CapturedPage[]> {
   try {
     browser = await abortable(ctx.browser(), ctx.signal)
   } catch (err) {
-    if (err instanceof RunAbortedError) return []
+    if (err instanceof RunAbortedError) return { pages: [], readableReported: 0 }
     logRunProblem(ctx, 'The browser could not be started', err)
     throw new RunFailure('The browser could not be started, so no pages were captured.')
   }
 
   let pagesDone = 0
+  let readableReported = 0
   try {
     await abortable(
       capture({
@@ -86,8 +96,10 @@ export async function capturePhase(ctx: RunCtx): Promise<CapturedPage[]> {
         guard,
         startUrls: source.startUrls,
         respectRobots: ctx.robots !== null,
+        robots: ctx.robots ?? undefined,
         signal: ctx.signal,
         onPage: async (data) => {
+          if (data.accessStatus === 'ok') readableReported += 1
           if (await storePage(ctx, data)) pagesDone += 1
           await updateRun(ctx, { pagesDone, pagesTotal: Math.max(pagesDone, ctx.run.pagesTotal) })
         },
@@ -98,5 +110,5 @@ export async function capturePhase(ctx: RunCtx): Promise<CapturedPage[]> {
     // Out of time: whatever was stored is kept, and the run decides what that is worth.
     if (!(err instanceof RunAbortedError)) throw err
   }
-  return repo.listPages(ctx.run.capturedInRunId)
+  return { pages: await repo.listPages(ctx.run.capturedInRunId), readableReported }
 }

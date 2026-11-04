@@ -129,6 +129,7 @@ export interface WorldOptions {
   repo?: EvidenceRepository & ScreenshotStore
   audit?: FakeAudit
   runTimeoutMs?: number
+  retryDelaysMs?: number[]
   browserProvider?: RunnerDeps['browserProvider']
 }
 
@@ -148,6 +149,8 @@ export async function createWorld(options: WorldOptions = {}): Promise<World> {
     apiKey: 'gsk_test_secret_key',
     model: 'test-model',
     runTimeoutMs: options.runTimeoutMs,
+    // No waiting between retries in a test.
+    retryDelaysMs: options.retryDelaysMs ?? [0, 0, 0],
     browserProvider:
       options.browserProvider ??
       (async () => {

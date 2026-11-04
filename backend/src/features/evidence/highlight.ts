@@ -15,7 +15,10 @@ import type { UrlGuard } from './urlGuard.js'
 
 export interface HighlightOptions {
   browser: Browser
+  /** For every request the page makes: the URL guard, as the capture's context had it. */
   guard: UrlGuard
+  /** For the page itself and anything it navigates to: the rules of a followed link. */
+  navigationGuard: UrlGuard
   pageUrl: string
   quotes: string[]
   signal: AbortSignal
@@ -113,7 +116,7 @@ async function visit(
 ): Promise<void> {
   const page = await context.newPage()
   page.on('popup', (popup) => void popup.close().catch(() => undefined))
-  const navigation = await gotoGuarded(page, opts.pageUrl, opts.guard, timeoutMs)
+  const navigation = await gotoGuarded(page, opts.pageUrl, opts.navigationGuard, timeoutMs)
   const status = navigation.response?.status()
   if (navigation.blockedReason !== null || status === undefined || status >= HTTP_ERROR_STATUS) return
 
@@ -129,7 +132,7 @@ async function visit(
   const world = await step(openHighlightWorld(page), 'Preparing the page', timeoutMs)
   for (const quote of quotes) {
     // The page may have moved itself since it was loaded.
-    if (!(await step(opts.guard.check(page.url()), 'Checking the address', shotMs)).allowed) return
+    if (!(await step(opts.navigationGuard.check(page.url()), 'Checking the address', shotMs)).allowed) return
     try {
       const image = await shootQuote(world, quote, step, shotMs)
       if (image !== null) results.set(quote, image)

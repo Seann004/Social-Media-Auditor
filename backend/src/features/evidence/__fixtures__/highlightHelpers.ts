@@ -14,9 +14,11 @@ export function highlightOn(
   quotes: string[],
   extra: Partial<HighlightOptions> = {},
 ): Promise<Map<string, Buffer>> {
+  const guard = extra.guard ?? server.guard('127.0.0.1')
   return captureHighlights({
     browser,
-    guard: server.guard('127.0.0.1'),
+    guard,
+    navigationGuard: extra.navigationGuard ?? guard,
     pageUrl: `${server.url}${path}`,
     quotes,
     signal: never,

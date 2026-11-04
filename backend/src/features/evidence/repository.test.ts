@@ -74,6 +74,7 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
     contentHash: 'abc',
   })
 
+  const SENT = [randomUUID(), randomUUID()]
   const suggestion = (runId: string, quoteCount = 1): NewSuggestion => ({
     runId,
     projectId: h.projectId,
@@ -82,6 +83,7 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
     reason: 'because',
     confidence: 'high',
     flags: [{ type: 'low_confidence', reason: 'r' }],
+    passageIdsSent: SENT,
     quotes: Array.from({ length: quoteCount }, (_, i) => ({
       passageId: null,
       pageId: null,
@@ -227,6 +229,7 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
     const run = await newRun()
     const saved = await h.repo.addSuggestion(suggestion(run.id, 2))
     expect(saved.quotes.length).toBe(2)
+    expect(saved.passageIdsSent).toEqual(SENT)
     expect(await h.repo.getSuggestion(saved.id)).toEqual(saved)
     expect(await h.repo.listSuggestions(run.id)).toEqual([saved])
     expect(await h.repo.getQuote(saved.quotes[0].id)).toEqual(saved.quotes[0])

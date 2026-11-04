@@ -41,6 +41,7 @@ describe('supabase repository without a database', () => {
         reason: '',
         confidence: 'low',
         flags: [],
+        passageIdsSent: [],
         quotes: [{ passageId: null, pageId: null, quoteText: 'q', verified: false, highlightScreenshotPath: null }],
       }),
     ).rejects.toThrow(/addSuggestion quotes: boom/)
@@ -75,5 +76,33 @@ describe('supabase repository without a database', () => {
 
     await createSupabaseScreenshotStore(admin).removeProject('p1')
     expect(removed.sort()).toEqual(['p1/run1/deep/two.jpg', 'p1/run1/one.jpg', 'p1/top.jpg'])
+  })
+
+  it('stores the passage ids sent with the suggestion, and reads them back', async () => {
+    const inserted: Record<string, unknown>[] = []
+    const row = { id: 's1', runId: 'r', projectId: 'p', itemId: 'i', reason: '', confidence: 'low', flags: [], passageIdsSent: ['a', 'b'] }
+    const admin = {
+      from: () => ({
+        insert: (value: Record<string, unknown>) => {
+          inserted.push(value)
+          return builder({ data: row, error: null }, [], 'insert')
+        },
+      }),
+    } as unknown as SupabaseClient
+
+    const saved = await createSupabaseRepository(admin).addSuggestion({
+      runId: 'r',
+      projectId: 'p',
+      itemId: 'i',
+      suggestedResult: null,
+      reason: '',
+      confidence: 'low',
+      flags: [],
+      passageIdsSent: ['a', 'b'],
+      quotes: [],
+    })
+
+    expect(inserted[0].passageIdsSent).toEqual(['a', 'b'])
+    expect(saved.passageIdsSent).toEqual(['a', 'b'])
   })
 })

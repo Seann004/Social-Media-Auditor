@@ -1,6 +1,6 @@
 import type { AssessedItem, AssessItem } from './assess.js'
 import { selectPassages } from './assess.js'
-import { MAX_HIGHLIGHTS_PER_SUGGESTION, MAX_PASSAGES_PER_ITEM } from './config.js'
+import { MAX_HIGHLIGHTS_PER_SUGGESTION, MAX_PASSAGES_PER_ITEM, MAX_TOKENS_PER_RUN } from './config.js'
 import { computeFlags } from './flags.js'
 import type { NewSuggestion } from './repository.js'
 import { isQuoteVerified } from './quotes.js'
@@ -16,9 +16,14 @@ export interface BatchContext {
   failedPages: { url: string; status: AccessStatus }[]
 }
 
+/** The tokens the run has used. A call is counted as soon as the AI has answered it. */
+export interface TokenMeter {
+  used(): number
+  add(tokens: number): void
+}
+
 export interface BatchOutcome {
   created: Suggestion[]
-  tokensUsed: number
   /** Items that were asked about and got no suggestion, so their category must be retried. */
   unassessed: number
 }
@@ -102,43 +107,27 @@ function withoutEvidence(ctx: RunCtx, item: AssessItem, batch: BatchContext): Ne
       quotes: [],
       failedPages: batch.failedPages,
     }),
+    passageIdsSent: [],
     quotes: [],
   }
 }
 
-/**
- * One batch: passages for each item, the AI, the quote check, the close-ups, the flags, and only
- * then the suggestion rows, so that a quote row is never edited afterwards. Throws when the batch
- * as a whole failed; the caller decides what that means for the run.
- */
-export async function assessAndStore(ctx: RunCtx, items: AssessItem[], batch: BatchContext): Promise<BatchOutcome> {
-  const { repo, assessBatch } = ctx.deps
-  const perItem: Passage[][] = []
-  for (const item of items) {
-    perItem.push(await repo.searchPassages(ctx.run.capturedInRunId, queryOf(item), MAX_PASSAGES_PER_ITEM))
-  }
-  const selected = selectPassages(perItem)
-  const sent = new Map(selected.map((p) => [p.id, p]))
-  const found = perItem.map((list) => list.filter((p) => sent.has(p.id)).length)
+interface Round {
+  selected: Passage[]
+  /** How many passages of each asked item went in the call. */
+  found: Map<string, number>
+  results: AssessedItem[]
+}
 
-  const askItems = items.filter((_, i) => found[i] > 0)
-  const output =
-    askItems.length === 0
-      ? { results: [] as AssessedItem[], missingItemIds: [] as string[], tokensUsed: 0 }
-      : await abortable(
-          assessBatch({ items: askItems, passages: selected, platform: batch.platform, apiKey: ctx.deps.apiKey, model: ctx.deps.model }),
-          ctx.signal,
-        )
-
-  const drafted = output.results.map((r) => draftQuotes(r, sent))
+/** Quote check, close-ups, flags, then the rows, so that a quote row is never edited afterwards. */
+async function storeRound(ctx: RunCtx, round: Round, batch: BatchContext): Promise<Suggestion[]> {
+  const sent = new Map(round.selected.map((p) => [p.id, p]))
+  const passageIdsSent = round.selected.map((p) => p.id)
+  const drafted = round.results.map((r) => draftQuotes(r, sent))
   const paths = await takeHighlights(ctx, batch.pages, collectByPage(drafted))
 
   const created: Suggestion[] = []
-  for (const item of items.filter((_, i) => found[i] === 0)) {
-    const stored = await storeSuggestion(ctx, withoutEvidence(ctx, item, batch))
-    if (stored) created.push(stored)
-  }
-  for (const [index, result] of output.results.entries()) {
+  for (const [index, result] of round.results.entries()) {
     const drafts = drafted[index]
     const candidates = new Set(highlightCandidates(drafts))
     const quotes = drafts.map((d, i) => ({
@@ -149,7 +138,6 @@ export async function assessAndStore(ctx: RunCtx, items: AssessItem[], batch: Ba
       highlightScreenshotPath:
         candidates.has(i) && d.passage ? (paths.get(highlightKey(d.passage.pageId, d.text)) ?? null) : null,
     }))
-    const position = items.findIndex((it) => it.id === result.itemId)
     const stored = await storeSuggestion(ctx, {
       runId: ctx.run.id,
       projectId: ctx.run.projectId,
@@ -164,16 +152,60 @@ export async function assessAndStore(ctx: RunCtx, items: AssessItem[], batch: Ba
         webAssessable: result.webAssessable,
         confidence: result.confidence,
         aiReason: result.reason,
-        passagesFound: found[position] ?? 0,
+        passagesFound: round.found.get(result.itemId) ?? 0,
         quotes: drafts.map((d) => ({ text: d.text, verified: d.verified })),
         failedPages: batch.failedPages,
       }),
+      passageIdsSent,
       quotes,
     })
     if (stored) created.push(stored)
   }
+  return created
+}
 
-  const answered = new Set(output.results.map((r) => r.itemId))
-  const unassessed = askItems.filter((it) => !answered.has(it.id)).length
-  return { created, tokensUsed: output.tokensUsed, unassessed }
+/**
+ * One batch: passages for each item, the AI, the quote check, the close-ups, the flags, and only
+ * then the suggestion rows. Items with search hits whose passages did not fit the call budget get
+ * a further call (never the no-text sentence), as long as the run has tokens left and each call
+ * can carry at least one of them. Throws when the batch as a whole failed; the caller decides what
+ * that means for the run.
+ */
+export async function assessAndStore(ctx: RunCtx, items: AssessItem[], batch: BatchContext, meter: TokenMeter): Promise<BatchOutcome> {
+  const { repo, assessBatch } = ctx.deps
+  const hits = new Map<string, Passage[]>()
+  for (const item of items) {
+    hits.set(item.id, await repo.searchPassages(ctx.run.capturedInRunId, queryOf(item), MAX_PASSAGES_PER_ITEM))
+  }
+
+  const created: Suggestion[] = []
+  for (const item of items.filter((it) => (hits.get(it.id) ?? []).length === 0)) {
+    const stored = await storeSuggestion(ctx, withoutEvidence(ctx, item, batch))
+    if (stored) created.push(stored)
+  }
+
+  let remaining = items.filter((it) => (hits.get(it.id) ?? []).length > 0)
+  let unassessed = 0
+  while (remaining.length > 0) {
+    if (meter.used() >= MAX_TOKENS_PER_RUN) break
+    const selected = selectPassages(remaining.map((it) => hits.get(it.id) as Passage[]))
+    const sentIds = new Set(selected.map((p) => p.id))
+    const found = new Map(remaining.map((it) => [it.id, (hits.get(it.id) as Passage[]).filter((p) => sentIds.has(p.id)).length]))
+    const asked = remaining.filter((it) => (found.get(it.id) ?? 0) > 0)
+    // Cannot happen while a passage always fits a call; stops a loop that would make no progress.
+    if (asked.length === 0) break
+
+    const output = await abortable(
+      assessBatch({ items: asked, passages: selected, platform: batch.platform, apiKey: ctx.deps.apiKey, model: ctx.deps.model }),
+      ctx.signal,
+    )
+    meter.add(output.tokensUsed)
+    created.push(...(await storeRound(ctx, { selected, found, results: output.results }, batch)))
+
+    const answered = new Set(output.results.map((r) => r.itemId))
+    unassessed += asked.filter((it) => !answered.has(it.id)).length
+    const askedIds = new Set(asked.map((it) => it.id))
+    remaining = remaining.filter((it) => !askedIds.has(it.id))
+  }
+  return { created, unassessed: unassessed + remaining.length }
 }
