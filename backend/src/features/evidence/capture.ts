@@ -162,21 +162,34 @@ function failedVisit(url: string, err: unknown, run: CaptureRun): Visit {
 }
 
 /**
- * What may be navigated to for this entry: the URL guard, then the site scope (a start url
- * may redirect anywhere, a followed link may not), then robots.txt. Applied to every redirect
- * hop by gotoGuarded, so a refused hop is never requested.
+ * What may be navigated to: the URL guard, then the site scope (null for no scope, as for a start
+ * url, which may redirect anywhere), then robots.txt. Applied to every redirect hop by
+ * gotoGuarded, so a refused hop is never requested.
  */
-function navigationGuard(entry: QueueEntry, run: CaptureRun): UrlGuard {
+function scopedGuard(guard: UrlGuard, robots: RobotsChecker | null, scope: { siteHost: string | null } | null): UrlGuard {
   return {
     async check(url: string): Promise<UrlCheckResult> {
-      const verdict = await run.guard.check(url)
+      const verdict = await guard.check(url)
       if (!verdict.allowed) return refuse(`The URL guard refused this address: ${verdict.reason}`)
-      if (entry.depth > 0 && !isSameSite(url, entry.siteHost)) return refuse(LEFT_SITE_DETAIL)
-      if (!run.robots) return { allowed: true }
-      const rules = await run.robots.isAllowed(url)
+      if (scope !== null && !isSameSite(url, scope.siteHost)) return refuse(LEFT_SITE_DETAIL)
+      if (!robots) return { allowed: true }
+      const rules = await robots.isAllowed(url)
       return rules.allowed ? { allowed: true } : refuse(rules.reason ?? ROBOTS_DISALLOWED_REASON)
     },
   }
+}
+
+function navigationGuard(entry: QueueEntry, run: CaptureRun): UrlGuard {
+  return scopedGuard(run.guard, run.robots, entry.depth > 0 ? { siteHost: entry.siteHost } : null)
+}
+
+/**
+ * The guard for revisiting a captured page to highlight a quote on it: the rules of a followed
+ * link, with the page's own site as the scope. Pass the run's robots checker, or null when the
+ * Head Auditor recorded permission.
+ */
+export function highlightGuard(pageUrl: string, guard: UrlGuard, robots: RobotsChecker | null): UrlGuard {
+  return scopedGuard(guard, robots, { siteHost: siteHostOf(pageUrl) })
 }
 
 interface MainFrameHistory {
