@@ -11,30 +11,6 @@ export interface PageContent {
   accessibilitySnapshot: string | null
 }
 
-/**
- * Hides what a person cannot see, then reads the page, all in one go. This is a heuristic against
- * accidental and lazy hidden text, not a defence against a determined page (ruling R17). Text
- * treated as data and the auditor's decision are the backstop. Keeping real text matters more
- * than catching one more trick, so accepted residuals include white-on-white, aria-hidden,
- * aria-label on a visible control, `filter:opacity(0)`, masks, nested opacity products, tiny
- * scales, small overflow boxes, and in-flow text in a collapsed wrapper with an escaping child.
- *
- * Sent as a source string, not a function: esbuild's keepNames under `npx tsx` can inject a
- * __name helper into functions, and the helper does not exist in the browser.
- *
- * Text is judged per text node, by the style that paints it, because a child can undo what its
- * parent does to colour or font size: `font-size:0` on a row with sized children is a common
- * layout trick. Opacity and clipping apply to a whole subtree, so those hide the element. An
- * element with no visible area of its own stays if anything inside it is visible, as with
- * `display:contents` or a zero-height parent of floats.
- *
- * Every element is read before anything is edited, because an edit can change what a selector
- * matches. `display:none` and `visibility:hidden` are then pinned inline first, so that no later
- * edit can reveal them. A `visibility:visible` child keeps its own value.
- *
- * For an element with no box innerText falls back to textContent, so a wholly hidden body is
- * ruled out at the end.
- */
 /** The deciding phase alone: reads everything and collects what to hide, without touching the page. */
 const DECIDE_SOURCE = String.raw`
   // A named form field shadows the property of that name on its form, so every DOM read and write
@@ -263,7 +239,30 @@ const DECIDE_SOURCE = String.raw`
   visit(root)
 `
 
-/** Deciding, then hiding, then reading. The hiding is what makes the read and the snapshot agree with what is shown. */
+/**
+ * Hides what a person cannot see, then reads the page, all in one go. This is a heuristic against
+ * accidental and lazy hidden text, not a defence against a determined page (ruling R17). Text
+ * treated as data and the auditor's decision are the backstop. Keeping real text matters more
+ * than catching one more trick, so accepted residuals include white-on-white, aria-hidden,
+ * aria-label on a visible control, `filter:opacity(0)`, masks, nested opacity products, tiny
+ * scales, small overflow boxes, and in-flow text in a collapsed wrapper with an escaping child.
+ *
+ * Sent as a source string, not a function: esbuild's keepNames under `npx tsx` can inject a
+ * __name helper into functions, and the helper does not exist in the browser.
+ *
+ * Text is judged per text node, by the style that paints it, because a child can undo what its
+ * parent does to colour or font size: `font-size:0` on a row with sized children is a common
+ * layout trick. Opacity and clipping apply to a whole subtree, so those hide the element. An
+ * element with no visible area of its own stays if anything inside it is visible, as with
+ * `display:contents` or a zero-height parent of floats.
+ *
+ * Every element is read before anything is edited, because an edit can change what a selector
+ * matches. `display:none` and `visibility:hidden` are then pinned inline first, so that no later
+ * edit can reveal them. A `visibility:visible` child keeps its own value.
+ *
+ * For an element with no box innerText falls back to textContent, so a wholly hidden body is
+ * ruled out at the end.
+ */
 export const READ_PAGE_SOURCE = String.raw`(() => {
 ${DECIDE_SOURCE}
   // What is hidden already goes first, so that no later edit can reveal it through a selector.
@@ -303,7 +302,6 @@ ${DECIDE_SOURCE}
     textNodes: new Set(textNodesToHide),
   }
 })()`
-
 
 const pageContentSchema = z.object({
   title: z.string(),

@@ -15,8 +15,8 @@ import { normaliseForMatch } from './quotes.js'
  * What the filter decided to hide is skipped, not edited: the page must stay as it was.
  *
  * A box is only drawn where it can be checked. The rects of a text range ignore clipping and
- * anything in front of the text, so each is hit-tested with elementFromPoint (the hit must be the
- * text's own element or inside it), and each overlay is read back and tested to be the topmost
+ * anything in front of the text, so each is tested with caretRangeFromPoint (the caret must land in the
+ * rect's own text node), and each overlay is read back and tested to be the topmost
  * thing at its centre. A placement that fails is retried with the quote higher and then lower on
  * the screen, then with the quote's next occurrence, and then the quote is left out. A quote left
  * out is a designed outcome; a box on other words is not.
@@ -35,8 +35,15 @@ export const HIGHLIGHT_SOURCE = String.raw`(() => {
 
   // A named form field shadows the property of that name on its form, so every DOM read goes
   // through the prototypes.
+  // Some browsers define a property on a parent prototype, so the chain is walked.
+  const descriptorOf = (proto, name) => {
+    for (let at = proto; at; at = Object.getPrototypeOf(at)) {
+      const found = Object.getOwnPropertyDescriptor(at, name)
+      if (found) return found
+    }
+  }
   const getter = (proto, name) => {
-    const { get } = Object.getOwnPropertyDescriptor(proto, name)
+    const { get } = descriptorOf(proto, name)
     return (target) => get.call(target)
   }
   const setter = (proto, name) => {
@@ -72,6 +79,8 @@ export const HIGHLIGHT_SOURCE = String.raw`(() => {
     createRange: method(Document.prototype, 'createRange'),
     createElement: method(Document.prototype, 'createElement'),
     elementFromPoint: method(Document.prototype, 'elementFromPoint'),
+    caretRangeFromPoint: method(Document.prototype, 'caretRangeFromPoint'),
+    startContainer: getter(Range.prototype, 'startContainer'),
     selectNodeContents: method(Range.prototype, 'selectNodeContents'),
     setStart: method(Range.prototype, 'setStart'),
     setEnd: method(Range.prototype, 'setEnd'),
@@ -298,17 +307,18 @@ export const HIGHLIGHT_SOURCE = String.raw`(() => {
     scrollBy({ left, top: anchorY - targetY, behavior: 'instant' })
   }
 
-  // The text's own element, or something inside it, is what is painted at the point.
+  // The caret at a point lands in this very text node. An element merely inside the text's parent
+  // (a cookie wall that is a child of the same container) does not pass.
   const isTextAt = (r, x, y) => {
-    const owner = dom.parentElement(r.node)
-    const hit = dom.elementFromPoint(document, x, y)
-    return Boolean(owner && hit && (hit === owner || dom.contains(owner, hit)))
+    const caret = dom.caretRangeFromPoint(document, x, y)
+    return Boolean(caret) && dom.startContainer(caret) === r.node
   }
+  // Sampled a little inside the ends, where a point on the edge could land in the neighbour.
   const isPaintedAsText = (r) => {
     const v = inViewPart(r)
     const middle = (v.top + v.bottom) / 2
-    const edge = Math.min(2, (v.right - v.left) / 2)
-    return [(v.left + v.right) / 2, v.left + edge, v.right - edge].every((x) => isTextAt(r, x, middle))
+    const inset = Math.min(3, (v.right - v.left) / 4)
+    return [(v.left + v.right) / 2, v.left + inset, v.right - inset].every((x) => isTextAt(r, x, middle))
   }
 
   const overlays = []

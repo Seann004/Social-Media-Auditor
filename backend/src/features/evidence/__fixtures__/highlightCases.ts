@@ -4,6 +4,7 @@ export const Q = 'The target quote about teen account privacy sits here.'
 
 const lorem = (n: number) =>
   Array.from({ length: n }, (_, i) => `<p>Filler sentence number ${i} says nothing of interest to anyone reading it today.</p>`).join('')
+const bare = (n: number) => Array.from({ length: n }, (_, i) => `Filler line ${i} of bare text.<br>`).join('')
 const BASE = '<style>body{margin:8px;font:16px/1.5 sans-serif}</style>'
 const page = (body: string, head = '') => html('Page', body, BASE + head)
 
@@ -130,6 +131,37 @@ export const PLACEMENT_CASES: Record<string, PlacementCase> = {
     'found',
     `<nav style="position:fixed;top:100px;right:-500px;width:400px">${Q}</nav><p>Unrelated first paragraph words.</p><p>${Q}</p>${lorem(10)}`,
   ),
+  // A cover inside the very element that holds the text: it is a descendant, so only the caret can tell.
+  'bare-body-text-with-wall': {
+    html: `<!doctype html><html><head><title>t</title>${BASE}</head><body>${bare(40)}${Q}<br>${bare(40)}<div style="position:fixed;inset:0;background:#fff;z-index:50;padding:40px">Cookie wall: choose to continue. Nothing else visible.</div></body></html>`,
+    quote: Q,
+    expect: 'absent',
+  },
+  'wrapper-text-with-wall': pageCase(
+    'absent',
+    `<div id="app">${bare(40)}${Q}<br>${bare(40)}<div style="position:fixed;left:10%;right:10%;top:10%;bottom:10%;background:#fff;border:2px solid;z-index:50;padding:40px">Cookie wall: choose to continue.</div></div>`,
+  ),
+  'wrapper-text-with-blank-wall': pageCase(
+    'absent',
+    `<div id="app">${bare(40)}${Q}<br>${bare(40)}<div style="position:fixed;inset:0;background:#fff;z-index:50"></div></div>`,
+  ),
+  // Ordinary text must still be found.
+  'keep-link': pageCase('found', `${lorem(20)}<p>Please <a href="#x">${Q}</a> and carry on.</p>${lorem(20)}`),
+  'keep-span-background': pageCase('found', `${lorem(20)}<p>Words <span style="background:#fe0;padding:2px 6px">${Q}</span> follow.</p>${lorem(20)}`),
+  'keep-label': pageCase('found', `${lorem(20)}<form><label><input type="checkbox"> ${Q}</label></form>${lorem(20)}`),
+  'keep-table-cell': pageCase('found', `${lorem(20)}<table><tr><th>Head</th><td>${Q}</td></tr></table>${lorem(20)}`),
+  'keep-flex-item': pageCase('found', `${lorem(20)}<div style="display:flex;gap:16px"><div>Left column words.</div><div>${Q}</div></div>${lorem(20)}`),
+  'keep-inline-block': pageCase('found', `${lorem(20)}<p>Before <span style="display:inline-block;border:1px solid">${Q}</span> after</p>${lorem(20)}`),
+  'keep-wrapping-inline': pageCase('found', `${lorem(20)}<div style="width:140px"><p>An <a href="#x">${Q}</a> then more.</p></div>${lorem(20)}`),
+  'keep-bold-in-sentence': pageCase('found', `${lorem(20)}<p>Start of the sentence, then <b>${Q}</b> and the end.</p>${lorem(20)}`),
+  'keep-quote-across-bold': pageCase('found', `${lorem(20)}<p>The target quote about <b>teen account</b> privacy sits here.</p>${lorem(20)}`),
+  'keep-bare-body-text': {
+    html: `<!doctype html><html><head><title>t</title>${BASE}</head><body>${bare(40)}${Q}<br>${bare(40)}</body></html>`,
+    quote: Q,
+    expect: 'found',
+  },
+  // Measured: the caret still lands in user-select:none text, so it is found.
+  'keep-user-select-none': pageCase('found', `${lorem(20)}<p style="user-select:none">${Q}</p>${lorem(20)}`),
   // The page changes size under the scroll.
   'content-visibility': pageCase(
     'either',
