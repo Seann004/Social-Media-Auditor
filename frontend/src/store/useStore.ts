@@ -108,6 +108,8 @@ function mapDbItem(i: db.DbChecklistItem): ChecklistItem {
 
 interface StoreState {
   isAuthenticated: boolean
+  /** Bearer token for the evidence API. Null until the backend issues one, or when it cannot. */
+  sessionToken: string | null
   users: User[]
   currentUserId: string
   guidelines: Guideline[]
@@ -120,6 +122,13 @@ interface StoreState {
 
   login: (userId: string, name: string, role: UserRole) => void
   logout: () => void
+  setSessionToken: (token: string | null) => void
+  /** Puts an answer the server applied into `responses`. Null findings keep what is stored. */
+  applyServerAnswer: (
+    projectId: string,
+    itemId: string,
+    answer: { status: ChecklistItemStatus; findings: string | null },
+  ) => void
   register: (email: string, name: string, role: UserRole, password?: string) => Promise<void>
   initFromDb: () => Promise<void>
 
@@ -185,6 +194,7 @@ export const useStore = create<StoreState>()(
   persist(
     (set, get) => ({
   isAuthenticated: false,
+  sessionToken: null,
   users: [],
   currentUserId: '',
   guidelines: [],
@@ -202,13 +212,40 @@ export const useStore = create<StoreState>()(
     set((state) => ({
       isAuthenticated: true,
       currentUserId: userId,
+      // A token belongs to the user it was issued for; LoginPage requests a fresh one after this.
+      sessionToken: null,
       users: state.users.some((u) => u.id === userId)
         ? state.users.map((u) => (u.id === userId ? loggedInUser : u))
         : [...state.users, loggedInUser],
     }))
   },
 
-  logout: () => set({ isAuthenticated: false, currentUserId: '', projects: [], responses: {}, checklistItems: [] }),
+  logout: () =>
+    set({ isAuthenticated: false, sessionToken: null, currentUserId: '', projects: [], responses: {}, checklistItems: [] }),
+
+  setSessionToken: (token) => set({ sessionToken: token }),
+
+  applyServerAnswer: (projectId, itemId, answer) =>
+    set((state) => {
+      const key = rkey(projectId, itemId)
+      const existing = state.responses[key]
+      const next: AuditResponse = existing
+        ? {
+            ...existing,
+            status: answer.status,
+            findings: answer.findings ?? existing.findings,
+          }
+        : {
+            id: `r_${Date.now()}`,
+            projectId,
+            checklistItemId: itemId,
+            status: answer.status,
+            findings: answer.findings ?? undefined,
+            auditorId: state.currentUserId,
+            updatedAt: new Date().toISOString().split('T')[0],
+          }
+      return { responses: { ...state.responses, [key]: next } }
+    }),
 
   register: async (email, name, role, password) => {
     const id = window.crypto.randomUUID()
@@ -227,6 +264,7 @@ export const useStore = create<StoreState>()(
       })
       set((state) => ({
         isAuthenticated: true,
+        sessionToken: null,
         currentUserId: id,
         users: [...state.users, { id, name, role, initials, color }],
         loading: false
@@ -570,6 +608,7 @@ export const useStore = create<StoreState>()(
       // Only persist auth — all other data is re-fetched from DB on login
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
+        sessionToken: state.sessionToken,
         currentUserId: state.currentUserId,
         users: state.users.filter((u) => u.id === state.currentUserId),
       }),

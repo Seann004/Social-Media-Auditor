@@ -1,6 +1,6 @@
 import type { AuditStatus, ChecklistItemStatus, Platform, Severity, SubmissionStatus, UserRole } from '../types'
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
+export const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
 
 // ─── DB row types ─────────────────────────────────────────────────────────────
 
@@ -112,6 +112,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error(errText || res.statusText)
   }
   return res.json()
+}
+
+/**
+ * Asks the backend for a session token. `hashedPassword` is the same SHA-256 value the login RPC receives.
+ * Rejects on any failure, so callers decide what a missing token means.
+ */
+export async function createSession(email: string, hashedPassword: string): Promise<string> {
+  const res = await request<{ token?: unknown }>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password: hashedPassword }),
+  })
+  if (typeof res.token !== 'string' || res.token === '') throw new Error('The server did not return a session token')
+  return res.token
 }
 
 // ─── Projects ─────────────────────────────────────────────────────────────────
