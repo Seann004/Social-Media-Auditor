@@ -22,13 +22,21 @@ export interface AppliedAnswer {
   evidenceImages: { url: string; name: string }[]
 }
 
-/** Task 11 settles what applying an answer needs. */
+export interface EvidenceImage {
+  url: string
+  name: string
+}
+
 export interface ApplyAnswerInput {
   projectId: string
   itemId: string
   userId: string
   guidelineId: string
-  status: AnswerStatus
+  result: AnswerStatus
+  /** Accept only: used when no auditor has written findings on the item. */
+  findingsIfEmpty?: string
+  /** Accept only: added after the photos already on the item. */
+  addImages?: EvidenceImage[]
 }
 
 export type ProjectAccess = 'head_auditor' | 'auditor'
@@ -46,6 +54,14 @@ export interface AuditData {
 export interface AuditDb {
   fetchProjectChecklistItems(projectId: string): Promise<DbChecklistItem[]>
   fetchAuditResults(projectId: string): Promise<DbAuditResult[]>
+  upsertAuditResult(
+    projectId: string,
+    itemId: string,
+    userId: string,
+    guidelineId: string,
+    result: ChecklistItemStatus,
+    notes?: string,
+  ): Promise<unknown>
 }
 
 export interface AuditDataOptions {
@@ -65,6 +81,44 @@ function adminClient(opts: AuditDataOptions): SupabaseClient {
   const client = (opts.client ?? getSupabaseAdmin)()
   if (!client) throw new Error('The Supabase service key is not configured.')
   return client
+}
+
+interface ResultRow {
+  resultId: string
+  userId: string
+  notes: string | null
+  findings: string | null
+  evidenceImages: EvidenceImage[] | null
+}
+
+/** The deciding auditor's row first, then the others in a fixed order. */
+function orderRows(rows: ResultRow[], userId: string): ResultRow[] {
+  return [...rows].sort((a, b) => {
+    if ((a.userId === userId) !== (b.userId === userId)) return a.userId === userId ? -1 : 1
+    return a.resultId < b.resultId ? -1 : a.resultId > b.resultId ? 1 : 0
+  })
+}
+
+/** Every distinct finding, kept in order and joined by a blank line, so nobody's text is lost. */
+function mergeFindings(rows: ResultRow[], fallback: string | undefined): string | null {
+  const distinct = [...new Set(rows.map((r) => r.findings?.trim() ?? '').filter((f) => f !== ''))]
+  if (distinct.length > 0) return distinct.join('\n\n')
+  return fallback?.trim() ? fallback : null
+}
+
+/** Existing photos first (once each, by link), then new ones that are not already there (by name). */
+function mergeImages(rows: ResultRow[], added: EvidenceImage[]): EvidenceImage[] {
+  const merged: EvidenceImage[] = []
+  for (const image of rows.flatMap((r) => r.evidenceImages ?? [])) {
+    if (!merged.some((m) => m.url === image.url)) merged.push(image)
+  }
+  const existingNames = new Set(merged.map((m) => m.name))
+  for (const image of added) {
+    if (existingNames.has(image.name)) continue
+    existingNames.add(image.name)
+    merged.push(image)
+  }
+  return merged
 }
 
 export function createAuditData(opts: AuditDataOptions = {}): AuditData {
@@ -143,8 +197,36 @@ export function createAuditData(opts: AuditDataOptions = {}): AuditData {
       return data ? ((data as { submissionStatus: SubmissionStatus }).submissionStatus ?? null) : null
     },
 
-    async applyAnswer() {
-      throw new Error('applyAnswer is not implemented yet (Task 11).')
+    async applyAnswer(input) {
+      const { projectId, itemId, userId, guidelineId, result } = input
+      const client = adminClient(opts)
+      const accepting = input.findingsIfEmpty !== undefined || input.addImages !== undefined
+
+      const read = await client
+        .from('Audit_Result')
+        .select('resultId,userId,notes,findings,evidenceImages')
+        .eq('projectId', projectId)
+        .eq('itemId', itemId)
+      if (read.error) throw new Error(`Could not read the answers for the item: ${read.error.message}`)
+      const rows = orderRows((read.data ?? []) as unknown as ResultRow[], userId)
+
+      // Makes sure the deciding auditor has a row, and keeps the notes they already wrote.
+      const own = rows.find((r) => r.userId === userId)
+      await (await db()).upsertAuditResult(projectId, itemId, userId, guidelineId, result, own?.notes ?? '')
+
+      const findings = accepting ? mergeFindings(rows, input.findingsIfEmpty) : null
+      const evidenceImages = accepting ? mergeImages(rows, input.addImages ?? []) : null
+      const patch = accepting ? { result, findings, evidenceImages } : { result }
+
+      const write = await client.from('Audit_Result').update(patch).eq('projectId', projectId).eq('itemId', itemId)
+      if (write.error) throw new Error(`Could not save the answer for the item: ${write.error.message}`)
+
+      return {
+        itemId,
+        status: result,
+        findings: accepting ? findings : (own?.findings ?? null),
+        evidenceImages: accepting ? (evidenceImages ?? []) : (own?.evidenceImages ?? []),
+      }
     },
   }
 }

@@ -109,11 +109,4 @@ describe('createAuditData', () => {
     const audit = createAuditData({ db: async () => db, client: () => null })
     await expect(audit.getProjectAccess('p1', 'u', 'auditor')).rejects.toThrow(/service/i)
   })
-
-  it('has no applyAnswer yet (Task 11)', async () => {
-    const audit = createAuditData({ db: async () => db, client: () => null })
-    await expect(
-      audit.applyAnswer({ projectId: 'p1', itemId: 'i1', userId: 'u', guidelineId: 'g1', status: 'compliant' }),
-    ).rejects.toThrow(/not implemented/i)
-  })
 })
