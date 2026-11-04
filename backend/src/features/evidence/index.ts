@@ -4,11 +4,11 @@ import { getSupabaseAdmin } from '../../config/supabaseAdmin.js'
 import { createAuthRouter, verifyLoginWithSupabase } from '../auth/routes.js'
 import { createSessions } from '../auth/session.js'
 import { createAuditData, type AuditData } from './auditData.js'
-import { MAX_ROUTE_PARAM_LENGTH } from './config.js'
+import { MAX_ROUTE_PARAM_LENGTH, ROUTE_ID_PATTERN } from './config.js'
 import { createRunQueue } from './queue.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import { createEvidenceRouter } from './routes.js'
-import { runEvidenceJob } from './runner.js'
+import { runEvidenceJob, type RunnerDeps } from './runner.js'
 import { createSupabaseRepository, createSupabaseScreenshotStore } from './supabaseRepository.js'
 import { createUrlGuard } from './urlGuard.js'
 
@@ -27,6 +27,8 @@ export interface EvidenceModuleOptions {
   screenshots?: ScreenshotStore
   audit?: AuditData
   requestsPerMinute?: number
+  /** For tests. Defaults to runEvidenceJob. */
+  runJob?: (runId: string, deps: RunnerDeps) => Promise<void>
 }
 
 type Env = Record<string, string | undefined>
@@ -36,7 +38,6 @@ export const NOT_CONFIGURED_MESSAGE =
 
 /** The same default as the older Groq routes in server.ts. */
 const DEFAULT_MODEL = 'llama-3.3-70b-versatile'
-const PROJECT_ID_PATTERN = /^[A-Za-z0-9-]+$/
 
 /** Every path of this module, so that an unconfigured server answers 503 on these and no others. */
 const EVIDENCE_PATHS = [
@@ -86,12 +87,13 @@ const disabled = (): EvidenceModule => ({
  */
 export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = {}): EvidenceModule {
   const secret = env.SESSION_SECRET
+  // A secret that is set but too short is a mistake to fix, whatever else is missing.
+  const sessions = secret ? createSessions(secret) : null
   const admin = secret && env.SUPABASE_SERVICE_ROLE_KEY ? (options.admin ?? getSupabaseAdmin)() : null
-  if (!secret || !env.SUPABASE_SERVICE_ROLE_KEY || (!admin && !(options.repo && options.screenshots && options.audit))) {
+  if (!sessions || !env.SUPABASE_SERVICE_ROLE_KEY || (!admin && !(options.repo && options.screenshots && options.audit))) {
     console.error(`[evidence] ${NOT_CONFIGURED_MESSAGE}. The evidence routes answer 503 until then.`)
     return disabled()
   }
-  const sessions = createSessions(secret)
 
   const repo = options.repo ?? createSupabaseRepository(admin as SupabaseClient)
   const screenshots = options.screenshots ?? createSupabaseScreenshotStore(admin as SupabaseClient)
@@ -104,7 +106,7 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
   if (!apiKey) console.error('[evidence] GROQ_API_KEY is not set: suggestions can be read but runs cannot start.')
 
   const queue = createRunQueue((runId) =>
-    runEvidenceJob(runId, { repo, screenshots, audit, guard: guard(), apiKey, model }),
+    (options.runJob ?? runEvidenceJob)(runId, { repo, screenshots, audit, guard: guard(), apiKey, model }),
   )
 
   return {
@@ -129,7 +131,7 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
       }
     },
     async removeProjectScreenshots(projectId) {
-      if (projectId.length > MAX_ROUTE_PARAM_LENGTH || !PROJECT_ID_PATTERN.test(projectId)) {
+      if (projectId.length > MAX_ROUTE_PARAM_LENGTH || !ROUTE_ID_PATTERN.test(projectId)) {
         console.error('[evidence] Not removing screenshots: the project id has an unexpected shape.')
         return
       }

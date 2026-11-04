@@ -1,6 +1,6 @@
 import { rateLimit } from 'express-rate-limit'
 import type { ErrorRequestHandler, NextFunction, Request, RequestHandler, Response } from 'express'
-import { API_RATE_WINDOW_MS, MAX_ROUTE_PARAM_LENGTH } from './config.js'
+import { API_RATE_WINDOW_MS, MAX_ROUTE_PARAM_LENGTH, ROUTE_ID_PATTERN } from './config.js'
 import type { ProjectAccess } from './auditData.js'
 
 export type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<void>
@@ -12,12 +12,10 @@ export function route(handler: AsyncHandler): RequestHandler {
   }
 }
 
-const PARAM_PATTERN = /^[A-Za-z0-9-]+$/
-
 /** Every route parameter must be a short id: letters, digits and dashes. Anything else is 400. */
 export const validParams: RequestHandler = (req, res, next) => {
   for (const value of Object.values(req.params)) {
-    if (typeof value !== 'string' || value.length === 0 || value.length > MAX_ROUTE_PARAM_LENGTH || !PARAM_PATTERN.test(value)) {
+    if (typeof value !== 'string' || value.length === 0 || value.length > MAX_ROUTE_PARAM_LENGTH || !ROUTE_ID_PATTERN.test(value)) {
       res.status(400).json({ error: 'Invalid request' })
       return
     }

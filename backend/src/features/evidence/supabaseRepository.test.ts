@@ -105,4 +105,51 @@ describe('supabase repository without a database', () => {
     expect(inserted[0].passageIdsSent).toEqual(['a', 'b'])
     expect(saved.passageIdsSent).toEqual(['a', 'b'])
   })
+
+  describe('an id that is not a uuid', () => {
+    const castError = { message: 'invalid input syntax for type uuid: "abc"', code: '22P02' }
+    const downError = { message: 'down', code: '08006' }
+    const repoWith = (error: unknown) =>
+      createSupabaseRepository({ from: () => builder({ data: null, error }, [], 'x') } as unknown as SupabaseClient)
+
+    it.each(['getRun', 'getPage', 'getSuggestion', 'getQuote'] as const)('%s treats a cast error as no row', async (method) => {
+      expect(await repoWith(castError)[method]('abc')).toBeNull()
+    })
+
+    it.each(['getRun', 'getPage', 'getSuggestion', 'getQuote'] as const)('%s still throws on any other error', async (method) => {
+      await expect(repoWith(downError)[method]('abc')).rejects.toThrow(/down/)
+    })
+  })
+
+  it('listPageSummaries asks for the view columns only', async () => {
+    const selected: string[] = []
+    const admin = {
+      from: () => ({
+        select: (columns: string) => {
+          selected.push(columns)
+          return builder({ data: [], error: null }, [], 'x')
+        },
+      }),
+    } as unknown as SupabaseClient
+    await createSupabaseRepository(admin).listPageSummaries('r')
+    expect(selected[0]).not.toMatch(/\*|text|accessibilitySnapshot|contentHash/)
+    expect(selected[0]).toContain('screenshotPath')
+  })
+
+  it('getSuggestedResults is one read of id and suggestedResult only', async () => {
+    const selected: string[] = []
+    let reads = 0
+    const admin = {
+      from: () => ({
+        select: (columns: string) => {
+          selected.push(columns)
+          reads += 1
+          return builder({ data: [{ id: 'a', suggestedResult: 'yes' }, { id: 'b', suggestedResult: null }], error: null }, [], 'x')
+        },
+      }),
+    } as unknown as SupabaseClient
+    expect(await createSupabaseRepository(admin).getSuggestedResults(['a', 'b'])).toEqual({ a: 'yes', b: null })
+    expect(reads).toBe(1)
+    expect(selected[0].replace(/\s/g, '')).toBe('id,suggestedResult')
+  })
 })

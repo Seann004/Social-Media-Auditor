@@ -18,6 +18,7 @@ import type {
   EvidenceRun,
   Passage,
   RunStatus,
+  SuggestedResult,
   Suggestion,
   SuggestionQuote,
 } from './types.js'
@@ -159,6 +160,21 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
     async listPages(capturedInRunId) {
       return copy(pages.filter((p) => p.runId === capturedInRunId))
     },
+    async listPageSummaries(capturedInRunId) {
+      return pages
+        .filter((p) => p.runId === capturedInRunId)
+        .map((p) => copy({
+          id: p.id,
+          url: p.url,
+          finalUrl: p.finalUrl,
+          httpStatus: p.httpStatus,
+          accessStatus: p.accessStatus,
+          accessDetail: p.accessDetail,
+          title: p.title,
+          screenshotPath: p.screenshotPath,
+          capturedAt: p.capturedAt,
+        }))
+    },
     async getPage(id) {
       const page = pages.find((p) => p.id === id)
       return page ? copy(page) : null
@@ -212,6 +228,11 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
     async getSuggestion(id) {
       const row = suggestions.find((s) => s.id === id)
       return row ? copy(row) : null
+    },
+    async getSuggestedResults(ids) {
+      const out: Record<string, SuggestedResult | null> = {}
+      for (const s of suggestions) if (ids.includes(s.id)) out[s.id] = s.suggestedResult
+      return out
     },
     async getQuote(id) {
       for (const s of suggestions) {

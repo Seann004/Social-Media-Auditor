@@ -59,6 +59,8 @@ export const STALE_RUN_MARGIN_MS = 300_000
 /** The queue runs one job at a time, so a queued run can wait a long time. Past this it is taken to be lost. */
 export const STALE_QUEUED_RUN_MS = 6 * 60 * 60 * 1000
 export const RUNS_WINDOW_MS = 24 * 60 * 60 * 1000
+/** How many lost runs one sweep fails before it gives up. */
+export const MAX_STALE_SWEEP = 10
 
 // API
 /** Per signed-in user. The page polls every 3 seconds and several tabs may be open. */
@@ -66,5 +68,7 @@ export const API_REQUESTS_PER_MINUTE = 300
 export const API_RATE_WINDOW_MS = 60_000
 export const MAX_BODY_SIZE = '64kb'
 export const MAX_ROUTE_PARAM_LENGTH = 64
+/** An id in a route: letters, digits and dashes. */
+export const ROUTE_ID_PATTERN = /^[A-Za-z0-9-]+$/
 export const MAX_URL_LENGTH = 2_048
 export const MAX_PERMISSION_NOTE_CHARS = 500

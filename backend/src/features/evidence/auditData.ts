@@ -121,6 +121,14 @@ function mergeImages(rows: ResultRow[], added: EvidenceImage[]): EvidenceImage[]
   return merged
 }
 
+/** Postgres: invalid text representation, as for an id that is not a uuid. Such an id matches no project. */
+const INVALID_TEXT_REPRESENTATION = '22P02'
+
+function noAccessOrThrow(error: { message: string; code?: string }): null {
+  if (error.code === INVALID_TEXT_REPRESENTATION) return null
+  throw new Error(`Could not check project access: ${error.message}`)
+}
+
 export function createAuditData(opts: AuditDataOptions = {}): AuditData {
   const db = () => (opts.db ?? loadDbService)()
 
@@ -171,7 +179,7 @@ export function createAuditData(opts: AuditDataOptions = {}): AuditData {
           .eq('projectId', projectId)
           .eq('headAuditorId', userId)
           .maybeSingle()
-        if (error) throw new Error(`Could not check project access: ${error.message}`)
+        if (error) return noAccessOrThrow(error)
         return data ? 'head_auditor' : null
       }
       if (role === 'auditor') {
@@ -181,7 +189,7 @@ export function createAuditData(opts: AuditDataOptions = {}): AuditData {
           .eq('projectId', projectId)
           .eq('userId', userId)
           .maybeSingle()
-        if (error) throw new Error(`Could not check project access: ${error.message}`)
+        if (error) return noAccessOrThrow(error)
         return data ? 'auditor' : null
       }
       return null

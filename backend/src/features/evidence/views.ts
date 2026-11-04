@@ -1,7 +1,7 @@
 import type { EvidenceRepository } from './repository.js'
 import { latestDecisionPerItem } from './decisions.js'
 import { categoryNameOf } from './runnerShared.js'
-import type { AccessStatus, AnswerStatus, CapturedPage, Decision, EvidenceRun, Suggestion, SuggestedResult } from './types.js'
+import type { AccessStatus, AnswerStatus, Decision, EvidenceRun, PageSummary, Suggestion, SuggestedResult } from './types.js'
 
 /** A run as the browser sees it: categories by name, never by key. */
 export type RunView = Omit<EvidenceRun, 'unassessedCategories'> & { unassessedCategories: string[] }
@@ -48,7 +48,7 @@ export function toRunView(run: EvidenceRun): RunView {
   return { ...run, unassessedCategories: names }
 }
 
-export function toPageView(page: CapturedPage): PageView {
+export function toPageView(page: PageSummary): PageView {
   return {
     id: page.id,
     url: page.url,
@@ -62,7 +62,7 @@ export function toPageView(page: CapturedPage): PageView {
   }
 }
 
-export function toSuggestionView(suggestion: Suggestion, pages: Map<string, CapturedPage>): SuggestionView {
+export function toSuggestionView(suggestion: Suggestion, pages: Map<string, PageSummary>): SuggestionView {
   const { quotes, passageIdsSent: _sent, ...rest } = suggestion
   return {
     ...rest,
@@ -81,7 +81,7 @@ export function toSuggestionView(suggestion: Suggestion, pages: Map<string, Capt
   }
 }
 
-export function toDecisionView(decision: Decision, suggestion: Suggestion): DecisionView {
+export function toDecisionView(decision: Decision, suggestedResult: SuggestedResult | null): DecisionView {
   return {
     id: decision.id,
     suggestionId: decision.suggestionId,
@@ -92,17 +92,24 @@ export function toDecisionView(decision: Decision, suggestion: Suggestion): Deci
     overrideReason: decision.overrideReason,
     origin: decision.origin,
     decidedAt: decision.decidedAt,
-    suggestedResult: suggestion.suggestedResult,
+    suggestedResult,
   }
 }
 
-/** The latest decision for each item. One whose suggestion cannot be found is left out. */
-export async function latestDecisionViews(repo: EvidenceRepository, projectId: string): Promise<DecisionView[]> {
+/**
+ * The latest decision for each item. The suggested results come from the suggestions already loaded,
+ * and one batched read fetches the rest. A decision whose suggestion cannot be found is left out.
+ */
+export async function latestDecisionViews(
+  repo: EvidenceRepository,
+  projectId: string,
+  known: readonly Suggestion[],
+): Promise<DecisionView[]> {
   const latest = [...latestDecisionPerItem(await repo.listDecisions(projectId)).values()]
-  const views: DecisionView[] = []
-  for (const decision of latest) {
-    const suggestion = await repo.getSuggestion(decision.suggestionId)
-    if (suggestion) views.push(toDecisionView(decision, suggestion))
+  const results = new Map<string, SuggestedResult | null>(known.map((s) => [s.id, s.suggestedResult]))
+  const missing = [...new Set(latest.map((d) => d.suggestionId).filter((id) => !results.has(id)))]
+  if (missing.length > 0) {
+    for (const [id, result] of Object.entries(await repo.getSuggestedResults(missing))) results.set(id, result)
   }
-  return views
+  return latest.flatMap((d) => (results.has(d.suggestionId) ? [toDecisionView(d, results.get(d.suggestionId) ?? null)] : []))
 }

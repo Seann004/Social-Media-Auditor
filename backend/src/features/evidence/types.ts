@@ -57,6 +57,12 @@ export interface CapturedPage {
   capturedAt: string
 }
 
+/** What a page is shown with: no text, no snapshot, no hash. */
+export type PageSummary = Pick<
+  CapturedPage,
+  'id' | 'url' | 'finalUrl' | 'httpStatus' | 'accessStatus' | 'accessDetail' | 'title' | 'screenshotPath' | 'capturedAt'
+>
+
 export interface Passage {
   id: string
   pageId: string

@@ -1,4 +1,4 @@
-import express, { Router, type Request, type RequestHandler, type Response } from 'express'
+import express, { Router, type RequestHandler, type Response } from 'express'
 import { z } from 'zod'
 import { requireSession, type Sessions } from '../auth/session.js'
 import type { AuditData, ProjectAccess } from './auditData.js'
@@ -15,8 +15,8 @@ import { DecisionError, recordDecision } from './decisions.js'
 import type { RunQueue } from './queue.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import { createProjectLock, isAllowed, jsonErrorHandler, route, userLimiter, validParams } from './routeSupport.js'
-import { startReassess, startRun, type RunStartDeps, type StartOutcome } from './runStart.js'
-import type { CapturedPage, EvidenceRun, Suggestion } from './types.js'
+import { startReassess, startRun, sweepStaleRuns, type RunStartDeps, type StartOutcome } from './runStart.js'
+import type { CapturedPage, PageSummary, Suggestion } from './types.js'
 import type { UrlGuard } from './urlGuard.js'
 import { latestDecisionViews, toDecisionView, toPageView, toRunView, toSuggestionView } from './views.js'
 
@@ -75,7 +75,7 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
   const runDeps: RunStartDeps = { repo, audit, queue: deps.queue, acquire }
 
   /** The caller's access to a project, checked against the allowed values. Answers 403 itself when it fails. */
-  async function authorise(req: Request, res: Response, projectId: string, allowed: readonly ProjectAccess[]): Promise<boolean> {
+  async function authorise(res: Response, projectId: string, allowed: readonly ProjectAccess[]): Promise<boolean> {
     const { userId, role } = sessionOf(res)
     const access = await audit.getProjectAccess(projectId, userId, role)
     if (isAllowed(access, allowed)) return true
@@ -85,7 +85,7 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
 
   const onProject = (allowed: readonly ProjectAccess[]): RequestHandler =>
     route(async (req, res, next) => {
-      if (await authorise(req, res, req.params.id, allowed)) next()
+      if (await authorise(res, req.params.id, allowed)) next()
     })
 
   const answerStart = (res: Response, outcome: StartOutcome): void => {
@@ -114,7 +114,8 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
       const refusals = await Promise.all(
         body.data.startUrls.map(async (url, i) => {
           const verdict = await deps.guard().check(url)
-          return verdict.allowed ? null : `Address ${i + 1} was refused: ${verdict.reason}.`
+          // One message for every refusal: the reason would tell whether an internal name exists.
+          return verdict.allowed ? null : `Address ${i + 1} was refused: use a public http or https address.`
         }),
       )
       const first = refusals.find((r) => r !== null)
@@ -175,8 +176,10 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
     ...common,
     onProject(BOTH),
     route(async (req, res) => {
+      // A lost run is failed here too, so the page that polls can offer a new run.
+      await sweepStaleRuns(runDeps, req.params.id)
       const run = await repo.latestRun(req.params.id)
-      const pages = run ? await repo.listPages(run.capturedInRunId) : []
+      const pages = run ? await repo.listPageSummaries(run.capturedInRunId) : []
       res.json({ run: run ? toRunView(run) : null, pages: pages.map(toPageView) })
     }),
   )
@@ -191,9 +194,10 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
         res.json({ run: null, suggestions: [], decisions: [] })
         return
       }
-      const pages = new Map<string, CapturedPage>((await repo.listPages(run.capturedInRunId)).map((p) => [p.id, p]))
-      const suggestions = (await repo.listSuggestions(run.id)).map((s) => toSuggestionView(s, pages))
-      res.json({ run: toRunView(run), suggestions, decisions: await latestDecisionViews(repo, req.params.id) })
+      const pages = new Map<string, PageSummary>((await repo.listPageSummaries(run.capturedInRunId)).map((p) => [p.id, p]))
+      const found = await repo.listSuggestions(run.id)
+      const decisions = await latestDecisionViews(repo, req.params.id, found)
+      res.json({ run: toRunView(run), suggestions: found.map((s) => toSuggestionView(s, pages)), decisions })
     }),
   )
 
@@ -204,7 +208,7 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
     route(async (req, res) => {
       const suggestion = await repo.getSuggestion(req.params.id)
       if (!suggestion) return notFound(res)
-      if (!(await authorise(req, res, suggestion.projectId, AUDITOR_ONLY))) return
+      if (!(await authorise(res, suggestion.projectId, AUDITOR_ONLY))) return
       const body = decisionBody.safeParse(req.body)
       if (!body.success) return invalid(res)
       await decide(res, suggestion, body.data)
@@ -217,7 +221,7 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
         { ...body, suggestionId: suggestion.id, userId: sessionOf(res).userId },
         { repo, audit, screenshots: deps.screenshots },
       )
-      res.json({ decision: toDecisionView(done.decision, suggestion), answer: done.answer })
+      res.json({ decision: toDecisionView(done.decision, suggestion.suggestedResult), answer: done.answer })
     } catch (err) {
       if (!(err instanceof DecisionError)) throw err
       res.status(err.status).json({ error: err.message })
@@ -226,13 +230,13 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
 
   /** The project a captured page belongs to: the run that captured it. Null when either is gone. */
   async function projectOfPage(page: CapturedPage): Promise<string | null> {
-    const run: EvidenceRun | null = await repo.getRun(page.runId)
+    const run = await repo.getRun(page.runId)
     return run ? run.projectId : null
   }
 
-  async function signFor(req: Request, res: Response, projectId: string | null, path: string | null): Promise<void> {
+  async function signFor(res: Response, projectId: string | null, path: string | null): Promise<void> {
     if (projectId === null) return notFound(res)
-    if (!(await authorise(req, res, projectId, BOTH))) return
+    if (!(await authorise(res, projectId, BOTH))) return
     if (path === null) return notFound(res)
     res.json({ url: await deps.screenshots.signedUrl(path, VIEWING_LINK_SECONDS) })
   }
@@ -243,7 +247,7 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
     route(async (req, res) => {
       const page = await repo.getPage(req.params.id)
       if (!page) return notFound(res)
-      await signFor(req, res, await projectOfPage(page), page.screenshotPath)
+      await signFor(res, await projectOfPage(page), page.screenshotPath)
     }),
   )
 
@@ -255,7 +259,7 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
       if (!quote) return notFound(res)
       const page = quote.pageId ? await repo.getPage(quote.pageId) : null
       if (!page) return notFound(res)
-      await signFor(req, res, await projectOfPage(page), quote.highlightScreenshotPath ?? page.screenshotPath)
+      await signFor(res, await projectOfPage(page), quote.highlightScreenshotPath ?? page.screenshotPath)
     }),
   )
 

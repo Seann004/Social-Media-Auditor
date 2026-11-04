@@ -110,7 +110,8 @@ app.patch('/api/projects/:id', async (req, res) => {
 app.delete('/api/projects/:id', async (req, res) => {
   try {
     await db.deleteProject(req.params.id)
-    await evidence.removeProjectScreenshots(req.params.id) // best effort: logs, never throws
+    // Best effort and never rejects, so the answer does not wait for it.
+    void evidence.removeProjectScreenshots(req.params.id)
     res.json({ success: true })
   } catch (error) {
     console.error('Error deleting project:', error)

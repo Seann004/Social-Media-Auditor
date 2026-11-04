@@ -398,3 +398,170 @@ describe('errors', () => {
     expect((await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.auditor))).status).toBe(200)
   })
 })
+
+describe('review round 1', () => {
+  it('a Head Auditor is let in by role, and a head role cannot ride on an auditor membership', async () => {
+    const { world, seeded } = await setup()
+    const headWithMemberRow = { userId: USERS.auditor.userId, role: 'head_auditor' }
+    const res = await request(world.app)
+      .post(`/api/suggestions/${seeded.suggestionId}/decision`)
+      .set(world.auth(headWithMemberRow))
+      .send({ decision: 'accepted', origin: 'card' })
+    expect(res.status).toBe(403)
+    const head = await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.head))
+    expect(head.status).toBe(200)
+  })
+
+  it('checks access before it says a screenshot row has no picture', async () => {
+    const { world } = await setup()
+    const run = await world.repo.createRun({ projectId: P2, startedBy: 'u-aud2', scope: 'all' })
+    const bare = await world.repo.addPage(run.id, { url: 'https://example.com/x', finalUrl: null, httpStatus: 200, accessStatus: 'ok', accessDetail: null, title: null, text: null, accessibilitySnapshot: null, screenshotPath: null, contentHash: null })
+    const res = await request(world.app).get(`/api/evidence/screenshots/page/${bare.id}`).set(world.auth(USERS.auditor))
+    expect(res.status).toBe(403)
+  })
+
+  it('a page view has exactly these keys, so nothing new can leak through', async () => {
+    const { world } = await setup()
+    const res = await request(world.app).get(`/api/projects/${P1}/evidence-runs/latest`).set(world.auth(USERS.auditor))
+    expect(Object.keys(res.body.pages[0]).sort()).toEqual(
+      ['accessDetail', 'accessStatus', 'capturedAt', 'finalUrl', 'hasScreenshot', 'httpStatus', 'id', 'title', 'url'],
+    )
+  })
+
+  it('uses the final address of a page when it has one', async () => {
+    const world = makeWorld()
+    await seedResult(world.repo, P1, 'completed', 'https://example.com/privacy/final')
+    const res = await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.auditor))
+    expect(res.body.suggestions[0].quotes[0].pageUrl).toBe('https://example.com/privacy/final')
+  })
+
+  it('after a re-assess, latest and suggestions still read the pages of the capture run', async () => {
+    const { world, seeded } = await setup()
+    const re = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'unfinished', capturedInRunId: seeded.runId })
+    const original = (await world.repo.listSuggestions(seeded.runId))[0]
+    await world.repo.addSuggestion({ ...original, runId: re.id, passageIdsSent: [], quotes: original.quotes.map(({ id: _id, ...q }) => q) })
+    await world.repo.updateRun(re.id, { status: 'completed' })
+    const latest = await request(world.app).get(`/api/projects/${P1}/evidence-runs/latest`).set(world.auth(USERS.auditor))
+    expect(latest.body.run.id).toBe(re.id)
+    expect(latest.body.pages.map((p: { id: string }) => p.id)).toEqual([seeded.pageId])
+    const res = await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.auditor))
+    expect(res.body.run.id).toBe(re.id)
+    expect(res.body.suggestions[0].quotes[0]).toMatchObject({ pageUrl: 'https://example.com/privacy', pageTitle: 'Privacy' })
+  })
+
+  it('saves the source with the signed-in user as its creator', async () => {
+    const { world } = await setup()
+    await request(world.app).post(`/api/projects/${P1}/evidence-sources`).set(world.auth(USERS.auditor)).send({ startUrls: ['https://example.com/z'] })
+    expect((await world.repo.getSource(P1))?.createdBy).toBe(USERS.auditor.userId)
+  })
+
+  it('allows a busy user well past ten requests a minute with the default limit', async () => {
+    const { world } = await setup()
+    for (let i = 0; i < 40; i += 1) {
+      const res = await request(world.app).get(`/api/projects/${P1}/evidence-runs/latest`).set(world.auth(USERS.auditor))
+      expect(res.status).toBe(200)
+    }
+  })
+
+  it('refuses every start address with the same words, so internal names cannot be probed', async () => {
+    const { world } = await setup()
+    const messages = new Set<string>()
+    for (const bad of ['http://127.0.0.1/', 'http://localhost/', 'http://intranet.example.org/', 'http://unknown-host.invalid/', 'ftp://example.com/', 'https://u:p@example.com/', 'nope']) {
+      const res = await request(world.app).post(`/api/projects/${P1}/evidence-sources`).set(world.auth(USERS.auditor)).send({ startUrls: [bad] })
+      expect(res.status).toBe(400)
+      messages.add(res.body.error)
+    }
+    expect(messages.size).toBe(1)
+  })
+
+  it('treats an id Postgres cannot cast as missing, not as a server error', async () => {
+    const { world } = await setup()
+    vi.spyOn(world.repo, 'getSuggestion').mockResolvedValue(null)
+    const res = await request(world.app).post('/api/suggestions/not-a-uuid/decision').set(world.auth(USERS.auditor)).send({ decision: 'accepted', origin: 'card' })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('a failing database in every route family', () => {
+  const SECRET_TEXT = 'SECRET-DB relation "Evidence_Run" key=eyJhbGciOi'
+
+  function brokenRepo(world: World): World['repo'] {
+    const entries = Object.entries(world.repo).map(([name, fn]) => [
+      name,
+      typeof fn === 'function'
+        ? async () => {
+            throw new Error(SECRET_TEXT)
+          }
+        : fn,
+    ])
+    return Object.fromEntries(entries) as World['repo']
+  }
+
+  const calls: { name: string; send: (w: World) => request.Test }[] = [
+    { name: 'list sources', send: (w) => request(w.app).get(`/api/projects/${P1}/evidence-sources`).set(w.auth(USERS.auditor)) },
+    { name: 'save sources', send: (w) => request(w.app).post(`/api/projects/${P1}/evidence-sources`).set(w.auth(USERS.auditor)).send({ startUrls: ['https://example.com/'] }) },
+    { name: 'start a run', send: (w) => request(w.app).post(`/api/projects/${P1}/evidence-runs`).set(w.auth(USERS.auditor)) },
+    { name: 're-assess', send: (w) => request(w.app).post(`/api/projects/${P1}/evidence-runs/r-1/reassess`).set(w.auth(USERS.auditor)).send({}) },
+    { name: 'latest', send: (w) => request(w.app).get(`/api/projects/${P1}/evidence-runs/latest`).set(w.auth(USERS.auditor)) },
+    { name: 'suggestions', send: (w) => request(w.app).get(`/api/projects/${P1}/suggestions`).set(w.auth(USERS.auditor)) },
+    { name: 'permission', send: (w) => request(w.app).put(`/api/projects/${P1}/evidence-permission`).set(w.auth(USERS.head)).send({ granted: true }) },
+    { name: 'decision', send: (w) => request(w.app).post('/api/suggestions/s-1/decision').set(w.auth(USERS.auditor)).send({ decision: 'accepted', origin: 'card' }) },
+    { name: 'page screenshot', send: (w) => request(w.app).get('/api/evidence/screenshots/page/x-1').set(w.auth(USERS.auditor)) },
+    { name: 'quote screenshot', send: (w) => request(w.app).get('/api/evidence/screenshots/quote/x-1').set(w.auth(USERS.auditor)) },
+  ]
+
+  it.each(calls)('$name answers a generic 500 and logs the cause', async ({ send }) => {
+    const errors = vi.mocked(console.error)
+    errors.mockClear()
+    const world = makeWorld({ repo: brokenRepo(makeWorld()) })
+    const res = await send(world)
+    expect(res.status).toBe(500)
+    expect(res.body).toEqual({ error: 'Something went wrong' })
+    expect(res.text).not.toMatch(/SECRET|Evidence_Run|eyJ/)
+    expect(errors.mock.calls.map((c) => c.map(String).join(' ')).join('\n')).toContain('SECRET-DB')
+  })
+})
+
+describe('a failure deep inside a route is not leaked either', () => {
+  const SECRET_TEXT = 'SECRET-DB deep failure key=eyJhbGciOi'
+
+  it.each([
+    ['decision', (w: World) => vi.spyOn(w.audit, 'applyAnswer').mockRejectedValue(new Error(SECRET_TEXT)), (w: World, s: Seeded) => request(w.app).post(`/api/suggestions/${s.suggestionId}/decision`).set(w.auth(USERS.auditor)).send({ decision: 'accepted', origin: 'card' })],
+    ['start', (w: World) => vi.spyOn(w.repo, 'createRun').mockRejectedValue(new Error(SECRET_TEXT)), (w: World) => request(w.app).post(`/api/projects/${P1}/evidence-runs`).set(w.auth(USERS.auditor))],
+    ['re-assess', (w: World) => vi.spyOn(w.repo, 'createRun').mockRejectedValue(new Error(SECRET_TEXT)), (w: World, s: Seeded) => request(w.app).post(`/api/projects/${P1}/evidence-runs/${s.runId}/reassess`).set(w.auth(USERS.auditor)).send({})],
+  ])('%s answers a generic 500', async (_name, breakIt, send) => {
+    const { world, seeded } = await setup()
+    breakIt(world)
+    const res = await send(world, seeded)
+    expect(res.status).toBe(500)
+    expect(res.body).toEqual({ error: 'Something went wrong' })
+    expect(res.text).not.toMatch(/SECRET|eyJ/)
+  })
+})
+
+describe('the polled routes read only the page columns they show', () => {
+  it('latest and suggestions never read whole pages', async () => {
+    const { world } = await setup()
+    const whole = vi.spyOn(world.repo, 'listPages')
+    const summaries = vi.spyOn(world.repo, 'listPageSummaries')
+    await request(world.app).get(`/api/projects/${P1}/evidence-runs/latest`).set(world.auth(USERS.auditor))
+    await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.auditor))
+    expect(whole).not.toHaveBeenCalled()
+    expect(summaries).toHaveBeenCalledTimes(2)
+  })
+
+  it('suggestions fetch the suggested results of other runs in one batch, not one by one', async () => {
+    const { world, seeded } = await setup()
+    const older = await seedResult(world.repo, P1)
+    const base = { projectId: P1, userId: 'u-aud', decision: 'accepted' as const, finalResult: 'compliant' as const, overrideReason: null, origin: 'card' as const }
+    await world.repo.addDecision({ ...base, suggestionId: older.suggestion.id, itemId: 'item-5' })
+    await world.repo.addDecision({ ...base, suggestionId: seeded.suggestionId, itemId: 'item-1' })
+    const one = vi.spyOn(world.repo, 'getSuggestion')
+    const batch = vi.spyOn(world.repo, 'getSuggestedResults')
+    const res = await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.auditor))
+    expect(res.body.decisions).toHaveLength(2)
+    expect(one).not.toHaveBeenCalled()
+    expect(batch).toHaveBeenCalledTimes(1)
+    expect(batch).toHaveBeenCalledWith([seeded.suggestionId])
+  })
+})

@@ -179,6 +179,28 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
     expect((await h.repo.listPages(run.id)).map((p) => p.id)).toEqual([page.id])
   })
 
+  it('listPageSummaries returns only what the views need, in capture order', async () => {
+    const run = await newRun()
+    const a = await h.repo.addPage(run.id, { ...pageInput('https://example.com/a'), screenshotPath: 'p/a.jpg', accessibilitySnapshot: { big: true } })
+    const b = await h.repo.addPage(run.id, pageInput('https://example.com/b'))
+    const summaries = await h.repo.listPageSummaries(run.id)
+    expect(summaries.map((p) => p.id)).toEqual([a.id, b.id])
+    expect(Object.keys(summaries[0]).sort()).toEqual(
+      ['accessDetail', 'accessStatus', 'capturedAt', 'finalUrl', 'httpStatus', 'id', 'screenshotPath', 'title', 'url'].sort(),
+    )
+    expect(summaries[0].screenshotPath).toBe('p/a.jpg')
+    expect(await h.repo.listPageSummaries(randomUUID())).toEqual([])
+  })
+
+  it('getSuggestedResults reads the result of many suggestions at once and skips unknown ids', async () => {
+    const run = await newRun()
+    const a = await h.repo.addSuggestion({ ...suggestion(run.id), suggestedResult: 'no' })
+    const missing = randomUUID()
+    const got = await h.repo.getSuggestedResults([a.id, missing])
+    expect(got).toEqual({ [a.id]: 'no' })
+    expect(await h.repo.getSuggestedResults([])).toEqual({})
+  })
+
   it('addPassages returns the saved passages', async () => {
     const run = await newRun()
     const page = await h.repo.addPage(run.id, pageInput())

@@ -4,6 +4,7 @@ import type {
   Confidence,
   Decision,
   EvidenceRun,
+  PageSummary,
   Passage,
   ReviewFlag,
   RunScope,
@@ -98,6 +99,8 @@ export interface EvidenceRepository {
 
   addPage(runId: string, page: NewPage): Promise<CapturedPage>
   listPages(capturedInRunId: string): Promise<CapturedPage[]>
+  /** Only the columns a view needs, for the polled routes. The runner reads whole pages with listPages. */
+  listPageSummaries(capturedInRunId: string): Promise<PageSummary[]>
   getPage(id: string): Promise<CapturedPage | null>
 
   addPassages(pageId: string, passages: NewPassage[]): Promise<Passage[]>
@@ -108,6 +111,8 @@ export interface EvidenceRepository {
   addSuggestion(input: NewSuggestion): Promise<Suggestion>
   listSuggestions(runId: string): Promise<Suggestion[]>
   getSuggestion(id: string): Promise<Suggestion | null>
+  /** The suggested result of each known id, in one read. Unknown ids are left out. */
+  getSuggestedResults(ids: string[]): Promise<Record<string, SuggestedResult | null>>
   getQuote(id: string): Promise<SuggestionQuote | null>
 
   addDecision(input: NewDecision): Promise<Decision>

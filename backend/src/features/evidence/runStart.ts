@@ -2,6 +2,7 @@ import type { AuditData } from './auditData.js'
 import {
   LOCKED_SUBMISSION_STATUSES,
   MAX_RUNS_PER_PROJECT_PER_DAY,
+  MAX_STALE_SWEEP,
   RUNS_WINDOW_MS,
   RUN_TIMEOUT_MS,
   STALE_QUEUED_RUN_MS,
@@ -25,7 +26,6 @@ export type StartOutcome =
   | { ok: false; status: 400 | 404 | 409 | 429; error: string }
 
 const STALE_ERROR = 'This run was lost: the server stopped hearing from it. Start a new run.'
-const MAX_STALE_SWEEP = 10
 
 const refuse = (status: 400 | 404 | 409 | 429, error: string): StartOutcome => ({ ok: false, status, error })
 
@@ -42,7 +42,7 @@ function isStale(run: EvidenceRun, now: number): boolean {
  * The run that really is still going, if any. A run whose last update was lost would otherwise lock
  * the project for good, so one past its bound is failed here and no longer counts.
  */
-async function liveActiveRun(deps: RunStartDeps, projectId: string): Promise<EvidenceRun | null> {
+export async function sweepStaleRuns(deps: Pick<RunStartDeps, 'repo' | 'now'>, projectId: string): Promise<EvidenceRun | null> {
   const now = (deps.now ?? Date.now)()
   for (let i = 0; i < MAX_STALE_SWEEP; i += 1) {
     const active = await deps.repo.activeRun(projectId)
@@ -73,7 +73,7 @@ async function createAndQueue(deps: RunStartDeps, plan: NewRunPlan, prepare: () 
     }
     const prepared = await prepare()
     if (prepared.refusal) return prepared.refusal
-    if (await liveActiveRun(deps, plan.projectId)) return refuse(409, 'A run is already in progress for this project.')
+    if (await sweepStaleRuns(deps, plan.projectId)) return refuse(409, 'A run is already in progress for this project.')
     const since = new Date((deps.now ?? Date.now)() - RUNS_WINDOW_MS).toISOString()
     if ((await deps.repo.countRunsSince(plan.projectId, since)) >= MAX_RUNS_PER_PROJECT_PER_DAY) {
       return refuse(429, `This project has used its ${MAX_RUNS_PER_PROJECT_PER_DAY} runs for today. Try again tomorrow.`)

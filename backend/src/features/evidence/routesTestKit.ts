@@ -60,8 +60,10 @@ export function makeAudit(): FakeAudit {
     async getPlatform() {
       return 'Example'
     },
-    async getProjectAccess(projectId, userId) {
-      return ACCESS.get(`${userId}|${projectId}`) ?? null
+    async getProjectAccess(projectId, userId, role) {
+      // As in production: the role decides which table is asked, so a wrong role finds nothing.
+      const access = ACCESS.get(`${userId}|${projectId}`)
+      return access !== undefined && access === role ? access : null
     },
     async getSubmissionStatus(projectId) {
       return submission.has(projectId) ? (submission.get(projectId) ?? null) : null
@@ -128,11 +130,12 @@ export async function seedResult(
   repo: EvidenceRepository,
   projectId: string,
   status: 'completed' | 'partial' = 'completed',
+  finalUrl: string | null = null,
 ): Promise<{ run: EvidenceRun; suggestion: Suggestion; pageId: string; quoteId: string }> {
   const run = await repo.createRun({ projectId, startedBy: 'u-aud', scope: 'all' })
   const page = await repo.addPage(run.id, {
     url: 'https://example.com/privacy',
-    finalUrl: null,
+    finalUrl,
     httpStatus: 200,
     accessStatus: 'ok',
     accessDetail: null,

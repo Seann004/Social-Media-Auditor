@@ -111,3 +111,27 @@ describe('createAuditData', () => {
     await expect(audit.getProjectAccess('p1', 'u', 'auditor')).rejects.toThrow(/service/i)
   })
 })
+
+describe('getProjectAccess with an id that is not a uuid', () => {
+  const failing = (code: string) =>
+    ({
+      from: () => {
+        const query = {
+          select: () => query,
+          eq: () => query,
+          maybeSingle: async () => ({ data: null, error: { message: 'invalid input syntax for type uuid', code } }),
+        }
+        return query
+      },
+    }) as never
+
+  it.each(['head_auditor', 'auditor'])('is no access for a %s when Postgres cannot cast the id', async (role) => {
+    const audit = createAuditData({ client: () => failing('22P02'), db: async () => db })
+    expect(await audit.getProjectAccess('abc', 'u1', role)).toBeNull()
+  })
+
+  it.each(['head_auditor', 'auditor'])('still throws for a %s on any other error', async (role) => {
+    const audit = createAuditData({ client: () => failing('08006'), db: async () => db })
+    await expect(audit.getProjectAccess('abc', 'u1', role)).rejects.toThrow(/project access/)
+  })
+})

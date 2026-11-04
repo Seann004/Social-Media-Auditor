@@ -17,6 +17,7 @@ import type {
   CapturedPage,
   Decision,
   EvidenceRun,
+  PageSummary,
   Passage,
   Suggestion,
   SuggestionQuote,
@@ -30,7 +31,16 @@ const REMOVE_CHUNK = 100
 
 interface DbResult<T> {
   data: T | null
-  error: { message: string } | null
+  error: { message: string; code?: string } | null
+}
+
+/** Postgres: invalid text representation, as when an id that is not a uuid is compared with a uuid column. */
+const INVALID_TEXT_REPRESENTATION = '22P02'
+
+/** Like unwrap, for a read by id: an id Postgres cannot cast cannot match a row, so it is no row. */
+function unwrapById<T>(op: string, res: DbResult<T>): T | null {
+  if (res.error?.code === INVALID_TEXT_REPRESENTATION) return null
+  return unwrap(op, res)
 }
 
 /** Throws with the operation name when Supabase reports an error. */
@@ -186,7 +196,7 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
       return toRun(row)
     },
     async getRun(id) {
-      const row = unwrap('getRun', await admin.from('Evidence_Run').select('*').eq('id', id).maybeSingle())
+      const row = unwrapById('getRun', await admin.from('Evidence_Run').select('*').eq('id', id).maybeSingle())
       return row ? toRun(row) : null
     },
     latestRun: (projectId) => latestWhere('latestRun', projectId),
@@ -231,8 +241,19 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
       )
       return (rows ?? []) as CapturedPage[]
     },
+    async listPageSummaries(capturedInRunId) {
+      const rows = unwrap(
+        'listPageSummaries',
+        await admin
+          .from('Evidence_Page')
+          .select('id, url, finalUrl, httpStatus, accessStatus, accessDetail, title, screenshotPath, capturedAt')
+          .eq('runId', capturedInRunId)
+          .order('capturedAt', { ascending: true }),
+      )
+      return (rows ?? []) as PageSummary[]
+    },
     async getPage(id) {
-      const row = unwrap('getPage', await admin.from('Evidence_Page').select('*').eq('id', id).maybeSingle())
+      const row = unwrapById('getPage', await admin.from('Evidence_Page').select('*').eq('id', id).maybeSingle())
       return (row as CapturedPage | null) ?? null
     },
 
@@ -304,12 +325,17 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
       return rows.map((r: Row) => toSuggestion(r, quotes.filter((q) => q.suggestionId === r.id)))
     },
     async getSuggestion(id) {
-      const row: Row | null = unwrap('getSuggestion', await admin.from('AI_Suggestion').select('*').eq('id', id).maybeSingle())
+      const row: Row | null = unwrapById('getSuggestion', await admin.from('AI_Suggestion').select('*').eq('id', id).maybeSingle())
       if (!row) return null
       return toSuggestion(row, await quotesFor('getSuggestion quotes', [row.id]))
     },
+    async getSuggestedResults(ids) {
+      if (ids.length === 0) return {}
+      const rows: Row[] = unwrap('getSuggestedResults', await admin.from('AI_Suggestion').select('id, suggestedResult').in('id', ids)) ?? []
+      return Object.fromEntries(rows.map((r) => [r.id, r.suggestedResult ?? null]))
+    },
     async getQuote(id) {
-      const row = unwrap(
+      const row = unwrapById(
         'getQuote',
         await admin.from('AI_Suggestion_Quote').select('*').eq('id', id).maybeSingle(),
       )

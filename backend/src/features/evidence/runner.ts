@@ -272,6 +272,8 @@ export async function runEvidenceJob(runId: string, deps: RunnerDeps): Promise<v
   try {
     const run = await readRun(runId, resolved)
     if (!run) return
+    // A run failed as lost, or already taken by a job, stays as it is.
+    if (run.status !== 'queued') return
     ctx = await startContext(run, resolved, controller.signal)
     await execute(ctx)
   } catch (err) {

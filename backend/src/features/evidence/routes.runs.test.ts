@@ -228,10 +228,13 @@ describe('re-assess', () => {
 
   it.each(['queued', 'capturing', 'assessing', 'failed'] as const)('a %s run cannot be re-assessed (409)', async (status) => {
     const world = makeWorld()
-    await seedResult(world.repo, P1)
-    const run = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'all' })
+    const seed = await seedResult(world.repo, P1)
+    // Same capture as the latest results, so only its own status can be the reason.
+    const run = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'unfinished', capturedInRunId: seed.run.id })
     await world.repo.updateRun(run.id, { status })
-    expect((await post(world, path(run.id), {})).status).toBe(409)
+    const res = await post(world, path(run.id), {})
+    expect(res.status).toBe(409)
+    expect(res.body.error).toMatch(/finished run/i)
   })
 
   it('refuses a run whose pages are not the latest results (409)', async () => {
@@ -251,5 +254,71 @@ describe('re-assess', () => {
     world.audit.submission.set(P1, 'not_submitted')
     expect((await post(world, path(seed.run.id), {})).status).toBe(202)
     expect((await post(world, path(seed.run.id), {})).status).toBe(409)
+  })
+})
+
+describe('review round 1', () => {
+  const setAge = (world: World, id: string, patch: Record<string, string>) => world.repo.updateRun(id, patch as never)
+
+  it('the poll returns a lost run as failed with its error, so the UI can start again', async () => {
+    const world = makeWorld()
+    await withSource(world)
+    const run = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'all' })
+    await world.repo.updateRun(run.id, { status: 'assessing', startedAt: ago(2 * 24 * 60 * 60 * 1000) })
+    const latest = () => request(world.app).get(`${START}/latest`).set(world.auth(USERS.auditor))
+    const res = await latest()
+    expect(res.body.run).toMatchObject({ id: run.id, status: 'failed', error: expect.stringMatching(/lost/i) })
+    expect(res.body.run.finishedAt).toBeTruthy()
+    expect((await latest()).body.run.status).toBe('failed')
+    expect((await post(world, START)).status).toBe(202)
+  })
+
+  it('the poll leaves a live run alone', async () => {
+    const world = makeWorld()
+    const run = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'all' })
+    await world.repo.updateRun(run.id, { status: 'assessing', startedAt: ago(60_000) })
+    const res = await request(world.app).get(`${START}/latest`).set(world.auth(USERS.auditor))
+    expect(res.body.run.status).toBe('assessing')
+  })
+
+  it('the bound is the run timeout plus the margin: just under blocks, just past frees', async () => {
+    const bound = RUN_TIMEOUT_MS + STALE_RUN_MARGIN_MS
+    const world = makeWorld()
+    await withSource(world)
+    const run = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'all' })
+    await world.repo.updateRun(run.id, { status: 'capturing', startedAt: ago(bound - 5_000) })
+    expect((await post(world, START)).status).toBe(409)
+    await world.repo.updateRun(run.id, { startedAt: ago(bound + 5_000) })
+    expect((await post(world, START)).status).toBe(202)
+  })
+
+  it('frees the project when more than one lost run is in the way', async () => {
+    const world = makeWorld()
+    await withSource(world)
+    const old = ago(STALE_QUEUED_RUN_MS + 60_000)
+    const first = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'all' })
+    await setAge(world, first.id, { status: 'queued', createdAt: old })
+    const second = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'all' })
+    await world.repo.updateRun(second.id, { status: 'capturing', startedAt: old })
+    expect((await post(world, START)).status).toBe(202)
+    expect((await world.repo.getRun(first.id))?.status).toBe('failed')
+    expect((await world.repo.getRun(second.id))?.status).toBe('failed')
+  })
+
+  it('counts only the last 24 hours toward the daily limit', async () => {
+    const world = makeWorld()
+    await withSource(world)
+    for (let i = 0; i < MAX_RUNS_PER_PROJECT_PER_DAY; i += 1) {
+      const run = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'all' })
+      await setAge(world, run.id, { status: 'completed', createdAt: ago(25 * 60 * 60 * 1000) })
+    }
+    expect((await post(world, START)).status).toBe(202)
+  })
+
+  it('a rejected audit may be run on again', async () => {
+    const world = makeWorld()
+    await withSource(world)
+    world.audit.submission.set(P1, 'rejected')
+    expect((await post(world, START)).status).toBe(202)
   })
 })
