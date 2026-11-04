@@ -19,6 +19,7 @@ export interface Sessions {
 const claimsSchema = z.object({
   sub: z.string().min(1),
   role: z.string().min(1),
+  exp: z.number(),
 })
 
 /** Signs and checks session tokens. Throws if the secret is too short to be safe. */
@@ -63,7 +64,7 @@ export function requireSession(sessions: Sessions | null): RequestHandler {
       res.status(503).json({ error: 'Sessions are not configured on this server' })
       return
     }
-    const match = /^bearer\s+(\S+)$/i.exec(req.headers.authorization ?? '')
+    const match = /^bearer ([^\s]+)$/i.exec(req.headers.authorization ?? '')
     const session = match ? sessions.verify(match[1]) : null
     if (!session) {
       res.status(401).json({ error: 'Authentication required' })

@@ -12,7 +12,6 @@ const HASH = 'a'.repeat(64)
 function makeApp(verifyLogin: VerifyLogin, secret: string | null = SECRET) {
   const sessions = secret === null ? null : createSessions(secret)
   const app = express()
-  app.use(express.json())
   app.use(createAuthRouter({ verifyLogin, sessions }))
   app.get('/protected', requireSession(sessions), (_req, res) => {
     res.json({ session: res.locals.session })
@@ -103,6 +102,75 @@ describe('login', () => {
   })
 })
 
+describe('login limiter', () => {
+  const attempt = (app: express.Express, password = HASH) =>
+    request(app).post('/auth/login').send({ email: 'a@b.co', password })
+
+  it('does not count successful logins', async () => {
+    const { app } = makeApp(async () => USER)
+    for (let i = 0; i < 11; i++) expect((await attempt(app)).status).toBe(200)
+  })
+
+  it('does not count malformed bodies or 503s', async () => {
+    let fail = true
+    const { app } = makeApp(async () => {
+      if (fail) throw new Error('down')
+      return null
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    for (let i = 0; i < 11; i++) expect((await request(app).post('/auth/login').send({})).status).toBe(400)
+    for (let i = 0; i < 11; i++) expect((await attempt(app)).status).toBe(503)
+    fail = false
+    expect((await attempt(app)).status).toBe(401)
+  })
+
+  it('blocks the 11th wrong password before verifyLogin is called', async () => {
+    const verifyLogin = vi.fn(async () => null)
+    const { app } = makeApp(verifyLogin)
+    for (let i = 0; i < 10; i++) expect((await attempt(app)).status).toBe(401)
+    expect((await attempt(app)).status).toBe(429)
+    expect(verifyLogin).toHaveBeenCalledTimes(10)
+  })
+})
+
+describe('bad bodies', () => {
+  it('answers malformed JSON with a plain 400 and no detail', async () => {
+    const { app } = makeApp(async () => USER)
+    const res = await request(app).post('/auth/login').set('Content-Type', 'application/json').send('{bad')
+    expect(res.status).toBe(400)
+    expect(res.type).toBe('application/json')
+    expect(Object.keys(res.body)).toEqual(['error'])
+    expect(res.text).not.toMatch(/at |node_modules|SyntaxError/)
+  })
+
+  it('answers an oversize body with a plain 413 and no detail', async () => {
+    const { app } = makeApp(async () => USER)
+    const res = await request(app).post('/auth/login').send({ email: 'a@b.co', password: 'p'.repeat(500_000) })
+    expect(res.status).toBe(413)
+    expect(Object.keys(res.body)).toEqual(['error'])
+    expect(res.text).not.toMatch(/node_modules|\.js:/)
+  })
+})
+
+describe('log hygiene', () => {
+  it('logs only a plain domain, else "unknown"', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { app } = makeApp(async () => {
+      throw new Error('down')
+    })
+    const secretish = 'hunter2-my-password@' + 'x'.repeat(100)
+    await request(app).post('/auth/login').send({ email: secretish, password: HASH })
+    await request(app).post('/auth/login').send({ email: 'a@evil.com\nFAKE LOG LINE', password: HASH })
+    await request(app).post('/auth/login').send({ email: 'a@School.Edu', password: HASH })
+    const lines = err.mock.calls.map((c) => String(c[0]))
+    expect(lines[0]).toContain('unknown')
+    expect(lines[0]).not.toContain('xxxx')
+    expect(lines[1]).toContain('unknown')
+    expect(lines[1]).not.toContain('FAKE')
+    expect(lines[2]).toContain('school.edu')
+  })
+})
+
 describe('tokens', () => {
   const sessions = createSessions(SECRET)
   const claims = { role: 'auditor' }
@@ -125,6 +193,7 @@ describe('tokens', () => {
     expect(sessions.verify(jwt.sign(claims, SECRET, { subject: 'u-1', expiresIn: 60, algorithm: 'HS512' }))).toBeNull()
     expect(sessions.verify(jwt.sign(claims, SECRET, { expiresIn: 60 }))).toBeNull()
     expect(sessions.verify(jwt.sign({}, SECRET, { subject: 'u-1', expiresIn: 60 }))).toBeNull()
+    expect(sessions.verify(jwt.sign({ ...claims }, SECRET, { subject: 'u-1', noTimestamp: true }))).toBeNull()
     expect(sessions.verify('not-a-token')).toBeNull()
     expect(sessions.verify('')).toBeNull()
   })
@@ -165,6 +234,22 @@ describe('requireSession', () => {
       bodies.push(r.body)
     }
     expect(new Set(bodies.map((b) => JSON.stringify(b))).size).toBe(1)
+  })
+
+  it('rejects odd Authorization shapes', async () => {
+    const { app, sessions } = makeApp(async () => USER)
+    const t = sessions!.sign({ userId: 'u-1', role: 'auditor' })
+    for (const header of [`Bearer  ${t}`, `Bearer	${t}`, `Bearer ${t} ${t}`]) {
+      const r = await request(app).get('/protected').set('Authorization', header)
+      expect(r.status, header.slice(0, 12)).toBe(401)
+    }
+  })
+
+  it('gives the same 401 body for a wrong password and an unknown email from separate fakes', async () => {
+    const wrong = await request(makeApp(async () => null).app).post('/auth/login').send({ email: 'a@b.co', password: HASH })
+    const unknown = await request(makeApp(async () => null).app).post('/auth/login').send({ email: 'z@q.co', password: 'zz' })
+    expect(wrong.status).toBe(401)
+    expect(wrong.body).toEqual(unknown.body)
   })
 
   it('accepts a case-insensitive scheme and sets only the token claims', async () => {

@@ -1,4 +1,4 @@
-import { Router } from 'express'
+import express, { Router, type ErrorRequestHandler } from 'express'
 import { rateLimit } from 'express-rate-limit'
 import { z } from 'zod'
 import type { Sessions } from './session.js'
@@ -50,9 +50,29 @@ export async function verifyLoginWithSupabase(
   return { userId, userName, role }
 }
 
+const DOMAIN_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/
+const MAX_DOMAIN_LENGTH = 64
+const MAX_BODY = '4kb'
+
+/** Only a plain domain is safe to log; anything else the user typed is not. */
 function emailDomain(email: string): string {
-  const at = email.lastIndexOf('@')
-  return at >= 0 ? email.slice(at + 1) : 'unknown'
+  const domain = email.slice(email.lastIndexOf('@') + 1)
+  return email.includes('@') && domain.length <= MAX_DOMAIN_LENGTH && DOMAIN_PATTERN.test(domain)
+    ? domain
+    : 'unknown'
+}
+
+/** Body-parser failures get a plain answer: no stack, no path, nothing from the request. */
+const bodyErrorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  const status = typeof err?.status === 'number' ? err.status : 500
+  if (status === 413) {
+    res.status(413).json({ error: 'Request too large' })
+  } else if (status >= 400 && status < 500) {
+    res.status(400).json({ error: 'Invalid request' })
+  } else {
+    console.error('Login request failed unexpectedly')
+    res.status(500).json({ error: 'Something went wrong' })
+  }
 }
 
 export function createAuthRouter(deps: { verifyLogin: VerifyLogin; sessions: Sessions | null }): Router {
@@ -62,12 +82,15 @@ export function createAuthRouter(deps: { verifyLogin: VerifyLogin; sessions: Ses
     limit: LOGIN_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
+    // Only a wrong-credentials 401 counts, so people sharing a network address can all sign in.
+    skipSuccessfulRequests: true,
+    requestWasSuccessful: (_req, res) => res.statusCode !== 401,
     handler: (_req, res) => {
       res.status(429).json({ error: 'Too many login attempts. Try again later.' })
     },
   })
 
-  router.post('/auth/login', limiter, async (req, res) => {
+  router.post('/auth/login', limiter, express.json({ limit: MAX_BODY }), async (req, res) => {
     const { sessions, verifyLogin } = deps
     if (!sessions) {
       res.status(503).json({ error: 'Sessions are not configured on this server' })
@@ -96,5 +119,6 @@ export function createAuthRouter(deps: { verifyLogin: VerifyLogin; sessions: Ses
     res.json({ token, userId: user.userId, userName: user.userName, role: user.role })
   })
 
+  router.use(bodyErrorHandler)
   return router
 }
