@@ -95,3 +95,32 @@ export function provenance(input: { decision: DecisionView | null; currentStatus
     reason: decision.overrideReason ?? '',
   }
 }
+
+/** True when the AI marked the suggestion for human review. A suggestion with no result can still be flagged. */
+export function isFlagged(suggestion: { flags: readonly unknown[] }): boolean {
+  return suggestion.flags.length > 0
+}
+
+/** The key the page uses for a category: guideline plus category name, since two guidelines can share a name. */
+export function categoryKey(guidelineId: string, category: string): string {
+  return `${guidelineId}__${category}`
+}
+
+/** Flagged suggestions per categoryKey. Suggestions whose item is not in `items` are not counted. */
+export function flaggedCountsByCategory(
+  suggestions: Iterable<{ itemId: string; flags: readonly unknown[] }>,
+  items: readonly { id: string; guidelineId: string; category: string }[],
+): Map<string, number> {
+  const keyByItem = new Map(items.map((item) => [item.id, categoryKey(item.guidelineId, item.category)]))
+  const counts = new Map<string, number>()
+  for (const suggestion of suggestions) {
+    const key = keyByItem.get(suggestion.itemId)
+    if (key !== undefined && isFlagged(suggestion)) counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return counts
+}
+
+/** Whether the item has an answer a person gave (not blank, not just flagged for review). */
+export function hasAnswer(status: ChecklistItemStatus | undefined): boolean {
+  return answerOf(status) !== undefined
+}

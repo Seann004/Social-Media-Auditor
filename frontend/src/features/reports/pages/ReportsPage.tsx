@@ -20,6 +20,8 @@ import type { DbAuditReport, DbComplianceScore, DbAuditResult, DbChecklistItem }
 import type { SubmissionStatus } from '../../../types'
 import ScoreRing from '../../audits/components/ScoreRing'
 import StatusBadge from '../../audits/components/StatusBadge'
+import ProvenanceBadge from '../../evidence/components/ProvenanceBadge'
+import { useReportDecisions } from '../../evidence/useReportDecisions'
 
 const PLATFORM_COLOR: Record<string, string> = {
   TikTok: 'bg-slate-800', Instagram: 'bg-pink-500', Facebook: 'bg-blue-600',
@@ -147,6 +149,9 @@ export default function ReportsPage() {
       setLoadingScores(false)
     }
   }
+
+  // Fetched on its own: the report is complete without it and never waits for it.
+  const decisionsByItem = useReportDecisions(selectedReport?.projectId ?? null)
 
   const itemById = useMemo(
     () => new Map(reportChecklistItems.map((ci) => [ci.itemId, ci])),
@@ -383,6 +388,7 @@ export default function ReportsPage() {
                                     {item?.category}{r.result === 'partially' ? ' · Partially compliant' : ' · Non-compliant'}
                                   </p>
                                   {r.findings && <p className="text-[11px] text-rose-600 mt-1 leading-relaxed">{r.findings}</p>}
+                                  {decisionsByItem && <div className="mt-1"><ProvenanceBadge decision={decisionsByItem.get(r.itemId) ?? null} currentStatus={r.result} /></div>}
                                 </li>
                               )
                             })}
@@ -494,6 +500,7 @@ export default function ReportsPage() {
                           <p className="font-medium text-gray-800">{item?.itemName || item?.itemDescription || 'Checklist item'}</p>
                           <p className="text-gray-500">{item?.category}{r.result === 'partially' ? ' · Partially compliant' : ' · Non-compliant'}</p>
                           {r.findings && <p className="text-red-700 mt-0.5">{r.findings}</p>}
+                          {decisionsByItem && <div className="mt-0.5"><ProvenanceBadge decision={decisionsByItem.get(r.itemId) ?? null} currentStatus={r.result} /></div>}
                         </li>
                       )
                     })}

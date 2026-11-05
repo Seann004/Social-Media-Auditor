@@ -37,6 +37,9 @@ import { useEvidence } from '../../evidence/useEvidence'
 import EvidencePanel from '../../evidence/components/EvidencePanel'
 import ItemSuggestion from '../../evidence/components/ItemSuggestion'
 import OverrideDialog from '../../evidence/components/OverrideDialog'
+import FlaggedFilterToggle from '../../evidence/components/FlaggedFilterToggle'
+import ProvenanceBadge from '../../evidence/components/ProvenanceBadge'
+import { categoryKey, flaggedCountsByCategory, isFlagged } from '../../evidence/state'
 import { pageUpdateAfterDecision } from '../../evidence/decidedAnswer'
 import type { AppliedAnswer } from '../../evidence/types'
 import { useResponseFlow } from '../../evidence/useResponseFlow'
@@ -346,6 +349,15 @@ export default function AuditPage() {
     () => checklistItems.filter((ci) => responses[`${id}__${ci.id}`]?.status === 'needs_review'),
     [checklistItems, responses, id],
   )
+  const [onlyFlaggedByAi, setOnlyFlaggedByAi] = useState(false)
+  const flaggedByAiCounts = useMemo(
+    () => flaggedCountsByCategory(aiEvidence.suggestionsByItem.values(), checklistItems),
+    [aiEvidence.suggestionsByItem, checklistItems],
+  )
+  const flaggedByAiIn = (guidelineId: string, category: string) => flaggedByAiCounts.get(categoryKey(guidelineId, category)) ?? 0
+  const hasSuggestions = aiEvidence.suggestionsByItem.size > 0
+  // The AI-review filter only narrows what is listed; scores, progress and Submit do not use it
+  const filteringByAi = onlyFlaggedByAi && hasSuggestions
   const [showFlaggedList, setShowFlaggedList] = useState(false)
   const [flaggedNavTarget, setFlaggedNavTarget] = useState<{ itemId: string; guidelineId: string; category: string } | null>(null)
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null)
@@ -353,6 +365,7 @@ export default function AuditPage() {
 
   function goToFlaggedItem(item: ChecklistItem) {
     setShowFlaggedList(false)
+    setOnlyFlaggedByAi(false) // the target may not be one the AI flagged
     setActiveTab('checklist')
     setFlaggedNavTarget({ itemId: item.id, guidelineId: item.guidelineId, category: item.category })
     if (item.guidelineId !== activeGuidelineTab) {
@@ -523,7 +536,13 @@ export default function AuditPage() {
 
   const headAuditor = users.find((u) => u.id === project.headAuditorId)
   const auditors = project.auditorIds.map((uid) => users.find((u) => u.id === uid)).filter(Boolean) as typeof users
-  const categoryItems = guidelineItems.filter((ci) => ci.category === selectedCategory)
+  const itemsInCategory = guidelineItems.filter((ci) => ci.category === selectedCategory)
+  const categoryItems = filteringByAi
+    ? itemsInCategory.filter((ci) => {
+        const suggestion = aiEvidence.suggestionsByItem.get(ci.id)
+        return suggestion !== undefined && isFlagged(suggestion)
+      })
+    : itemsInCategory
 
   // Map project cloned guidelineIds back to original IDs for comparison
   const projectOriginalGuidelineIds = (project.guidelineIds ?? []).map((gid) => {
@@ -1160,7 +1179,7 @@ helpText: newItemHelp.trim() || undefined,
                     const cs = sub.catScore
                     return (
                       <option key={sub.originalCategory} value={sub.originalCategory}>
-                        {sub.subcategoryName}{!sub.enabled && isHeadAuditor ? ' (Deactivated)' : cs.applicable > 0 ? ` — ${cs.percentage.toFixed(0)}%` : ''}
+                        {sub.subcategoryName}{!sub.enabled && isHeadAuditor ? ' (Deactivated)' : cs.applicable > 0 ? ` — ${cs.percentage.toFixed(0)}%` : ''}{flaggedByAiIn(sub.guidelineId, sub.originalCategory) > 0 ? ` (${flaggedByAiIn(sub.guidelineId, sub.originalCategory)} flagged)` : ''}
                       </option>
                     )
                   })}
@@ -1246,6 +1265,12 @@ helpText: newItemHelp.trim() || undefined,
                                     className={['flex-1 text-left py-2 pr-2.5 text-slate-600 focus:outline-none', isHeadAuditor ? 'pl-1' : 'pl-2.5', !sub.enabled && isHeadAuditor ? 'opacity-50' : ''].join(' ')}>
                                     <div className="flex items-center justify-between mb-0.5">
                                       <span className={`text-xs font-medium leading-tight ${active ? 'text-slate-800 font-semibold' : 'text-slate-600'}`}>{sub.subcategoryName}</span>
+                                      {flaggedByAiIn(sub.guidelineId, sub.originalCategory) > 0 && (
+                                        <span aria-label={`${flaggedByAiIn(sub.guidelineId, sub.originalCategory)} flagged`} title="Suggestions needing human review"
+                                          className="ml-auto mr-1 rounded-full bg-blue-50 px-1.5 text-[10px] font-medium text-blue-700 tabular-nums">
+                                          {flaggedByAiIn(sub.guidelineId, sub.originalCategory)}
+                                        </span>
+                                      )}
                                       {active && <CaretRight size={10} className="text-slate-400 shrink-0" />}
                                     </div>
                                     {sub.enabled && (
@@ -1298,7 +1323,8 @@ helpText: newItemHelp.trim() || undefined,
                         : 'Select a category'}
                     </h2>
                     <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-xs text-slate-400 font-sans tabular-nums">{categoryItems.length} item{categoryItems.length !== 1 ? 's' : ''}</span>
+                      {hasSuggestions && <FlaggedFilterToggle active={filteringByAi} onToggle={() => setOnlyFlaggedByAi((on) => !on)} />}
+                      <span className="text-xs text-slate-400 font-sans tabular-nums">{itemsInCategory.length} item{itemsInCategory.length !== 1 ? 's' : ''}</span>
                       {isHeadAuditor && selectedCategory && (
                         <button type="button" onClick={() => setShowAddItemModal(true)}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors">
@@ -1337,6 +1363,12 @@ helpText: newItemHelp.trim() || undefined,
                 {loading ? (
                   <div className="flex items-center justify-center py-20">
                     <Spinner size={28} className="animate-spin text-slate-300" />
+                  </div>
+                ) : categoryItems.length === 0 && filteringByAi && itemsInCategory.length > 0 ? (
+                  <div className="py-12 text-center">
+                    <p className="text-slate-500 text-sm">No flagged suggestions in this category.</p>
+                    <button type="button" onClick={() => setOnlyFlaggedByAi(false)}
+                      className="mt-2 text-xs font-medium text-blue-600 hover:text-blue-700">Show all items</button>
                   </div>
                 ) : categoryItems.length === 0 ? (
                   <div className="py-12 text-center">
@@ -1523,6 +1555,7 @@ helpText: newItemHelp.trim() || undefined,
                                   : currentStatus === 'not_applicable' ? 'N/A'
                                   : 'Flagged'}
                               </span>
+                              <ProvenanceBadge decision={aiEvidence.decisionsByItem.get(ci.id) ?? null} currentStatus={currentStatus} />
                             </div>
                           )}
 
