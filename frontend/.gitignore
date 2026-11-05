@@ -141,3 +141,8 @@ vite.config.ts.timestamp-*
 
 .claude
 .mcp.json
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
