@@ -137,6 +137,7 @@ create table if not exists "AI_Suggestion_Decision" (
 );
 alter table "AI_Suggestion_Decision" enable row level security;
 create index if not exists "idx_ai_decision_item" on "AI_Suggestion_Decision"("projectId", "itemId", "decidedAt" desc);
+create index on "AI_Suggestion"("originSuggestionId");
 
 -- Full-text search over a run's passages. Terms are OR-ed because an AND search
 -- on a whole checklist question finds nothing. An empty query returns no rows.
