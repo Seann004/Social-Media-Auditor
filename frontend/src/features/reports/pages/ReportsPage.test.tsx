@@ -36,10 +36,13 @@ const reply = (decisions: unknown[]) => ({ run: makeRun(), suggestions: [], deci
 function setup(role = 'head_auditor') {
   useStore.setState({ currentUserId: 'u1', sessionToken: 't', users: [{ id: 'u1', name: 'A', email: 'a@x', role }], guidelines: [] } as never)
 }
+/** The on-screen pane; the print view is always in the DOM, so it cannot show what the screen shows. */
+const screenPane = (container: HTMLElement) => within(container.querySelector('.print\\:hidden') as HTMLElement)
 async function openReport() {
-  render(<MemoryRouter><ReportsPage /></MemoryRouter>)
+  const { container } = render(<MemoryRouter><ReportsPage /></MemoryRouter>)
   await userEvent.click(await screen.findByRole('button', { name: /Proj/ }))
   await screen.findAllByText('Needs a policy')
+  return container
 }
 
 beforeEach(() => {
@@ -63,8 +66,8 @@ describe('ReportsPage provenance badges', () => {
   it('renders the report before the badges arrive, then adds them', async () => {
     let resolve!: (v: never) => void
     getSuggestions.mockReturnValue(new Promise<never>((r) => { resolve = r }))
-    await openReport()
-    expect(screen.getAllByText('Needs a policy').length).toBeGreaterThan(0)
+    const container = await openReport()
+    expect(screenPane(container).getAllByText('Needs a policy').length).toBeGreaterThan(0)
     expect(screen.queryByText('Manual')).toBeNull()
     expect(screen.queryByText(/AI suggested/)).toBeNull()
     await act(async () => resolve(reply([makeDecision({ itemId: 'i1', suggestedResult: 'no', finalResult: 'non_compliant' })])))
@@ -77,10 +80,11 @@ describe('ReportsPage provenance badges', () => {
     ['unexpected', () => Promise.reject(new Error('boom'))],
   ])('a failed suggestions fetch (%s) leaves the report rendering with no badges', async (_name, fail) => {
     getSuggestions.mockImplementation(fail as never)
-    await openReport()
+    const container = await openReport()
     await waitFor(() => expect(getSuggestions).toHaveBeenCalled())
     await act(async () => { await new Promise((r) => setTimeout(r, 10)) })
-    expect(screen.getAllByText('Needs a contact').length).toBeGreaterThan(0)
+    expect(screenPane(container).getAllByText('Needs a contact').length).toBeGreaterThan(0)
+    expect(screenPane(container).getByRole('heading', { name: 'Proj' })).toBeInTheDocument()
     expect(screen.queryByText('Manual')).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
   })
@@ -111,5 +115,36 @@ describe('ReportsPage provenance badges', () => {
     await waitFor(() => expect(screen.getAllByText('Manual')).toHaveLength(2))
     const failing = screen.getAllByText('Needs a contact')[0].closest('li') as HTMLElement
     expect(within(failing).getByText('Manual')).toBeInTheDocument()
+  })
+
+  describe('switching reports', () => {
+    const OTHER = { ...REPORT, projectId: 'p2', projectTitle: 'Other' }
+    const pick = async (name: RegExp) => { await userEvent.click(screen.getByRole('button', { name })); await screen.findAllByText('Needs a policy') }
+    beforeEach(() => vi.mocked(db.fetchAuditReports).mockResolvedValue([REPORT, OTHER] as never))
+
+    it('does not show the previous reports badges while the next one loads', async () => {
+      getSuggestions.mockImplementation((id) =>
+        id === 'p1' ? Promise.resolve(reply([makeDecision({ itemId: 'i1', suggestedResult: 'no', finalResult: 'non_compliant' })])) : new Promise<never>(() => undefined))
+      render(<MemoryRouter><ReportsPage /></MemoryRouter>)
+      await userEvent.click(await screen.findByRole('button', { name: /Proj/ }))
+      await waitFor(() => expect(screen.getAllByText('AI suggested No · accepted').length).toBeGreaterThan(0))
+      await pick(/Other/)
+      expect(screen.queryByText(/AI suggested/)).toBeNull()
+      expect(screen.queryByText('Manual')).toBeNull()
+    })
+
+    it('ignores a late answer for the report that is no longer selected', async () => {
+      let lateA!: (v: never) => void
+      getSuggestions.mockImplementation((id) =>
+        id === 'p1' ? new Promise<never>((r) => { lateA = r }) : Promise.resolve(reply([])))
+      render(<MemoryRouter><ReportsPage /></MemoryRouter>)
+      await userEvent.click(await screen.findByRole('button', { name: /Proj/ }))
+      await screen.findAllByText('Needs a policy')
+      await pick(/Other/)
+      await waitFor(() => expect(screen.getAllByText('Manual').length).toBeGreaterThan(0))
+      await act(async () => lateA(reply([makeDecision({ itemId: 'i1', suggestedResult: 'no', finalResult: 'non_compliant' })])))
+      expect(screen.queryByText(/AI suggested/)).toBeNull()
+      expect(screen.getAllByText('Manual').length).toBeGreaterThan(0)
+    })
   })
 })

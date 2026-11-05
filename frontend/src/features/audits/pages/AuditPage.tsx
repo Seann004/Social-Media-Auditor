@@ -1177,9 +1177,10 @@ helpText: newItemHelp.trim() || undefined,
                 <optgroup key={section.sectionName} label={section.sectionName}>
                   {section.subcategories.map((sub) => {
                     const cs = sub.catScore
+                    const flaggedByAi = flaggedByAiIn(sub.guidelineId, sub.originalCategory)
                     return (
                       <option key={sub.originalCategory} value={sub.originalCategory}>
-                        {sub.subcategoryName}{!sub.enabled && isHeadAuditor ? ' (Deactivated)' : cs.applicable > 0 ? ` — ${cs.percentage.toFixed(0)}%` : ''}{flaggedByAiIn(sub.guidelineId, sub.originalCategory) > 0 ? ` (${flaggedByAiIn(sub.guidelineId, sub.originalCategory)} flagged)` : ''}
+                        {sub.subcategoryName}{!sub.enabled && isHeadAuditor ? ' (Deactivated)' : cs.applicable > 0 ? ` — ${cs.percentage.toFixed(0)}%` : ''}{flaggedByAi > 0 ? ` (${flaggedByAi} flagged by AI)` : ''}
                       </option>
                     )
                   })}
@@ -1231,6 +1232,7 @@ helpText: newItemHelp.trim() || undefined,
                         <ul className="pl-2 space-y-1 border-l border-slate-200 ml-1.5 list-none">
                           {section.subcategories.map((sub) => {
                             const active = sub.originalCategory === selectedCategory
+                            const flaggedByAi = flaggedByAiIn(sub.guidelineId, sub.originalCategory)
                             const barColor = sub.catScore.percentage >= 80 ? 'bg-emerald-500' : sub.catScore.percentage >= 60 ? 'bg-amber-400' : sub.catScore.percentage > 0 ? 'bg-rose-400' : 'bg-slate-300'
 
                             return (
@@ -1265,10 +1267,10 @@ helpText: newItemHelp.trim() || undefined,
                                     className={['flex-1 text-left py-2 pr-2.5 text-slate-600 focus:outline-none', isHeadAuditor ? 'pl-1' : 'pl-2.5', !sub.enabled && isHeadAuditor ? 'opacity-50' : ''].join(' ')}>
                                     <div className="flex items-center justify-between mb-0.5">
                                       <span className={`text-xs font-medium leading-tight ${active ? 'text-slate-800 font-semibold' : 'text-slate-600'}`}>{sub.subcategoryName}</span>
-                                      {flaggedByAiIn(sub.guidelineId, sub.originalCategory) > 0 && (
-                                        <span aria-label={`${flaggedByAiIn(sub.guidelineId, sub.originalCategory)} flagged`} title="Suggestions needing human review"
+                                      {flaggedByAi > 0 && (
+                                        <span aria-label={`${flaggedByAi} flagged by AI`} title="Suggestions needing human review"
                                           className="ml-auto mr-1 rounded-full bg-blue-50 px-1.5 text-[10px] font-medium text-blue-700 tabular-nums">
-                                          {flaggedByAiIn(sub.guidelineId, sub.originalCategory)}
+                                          {flaggedByAi}
                                         </span>
                                       )}
                                       {active && <CaretRight size={10} className="text-slate-400 shrink-0" />}

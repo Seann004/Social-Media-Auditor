@@ -83,16 +83,16 @@ describe('flagged filter, counts and provenance on the audit page', () => {
   it('shows the flagged count per category, only when above zero', async () => {
     setup({ role: 'head_auditor' }); mount()
     await toggle()
-    expect(screen.getByRole('option', { name: /Alpha.*1 flagged/ })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: /Beta.*1 flagged/ })).toBeInTheDocument()
-    expect(screen.getByLabelText('1 flagged')).toBeInTheDocument() // Alpha is expanded in the side navigation; Beta is collapsed
+    expect(screen.getByRole('option', { name: /Alpha.*1 flagged by AI/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Beta.*1 flagged by AI/ })).toBeInTheDocument()
+    expect(screen.getByLabelText('1 flagged by AI')).toBeInTheDocument() // Alpha is expanded in the side navigation; Beta is collapsed
   })
 
   it('shows no count for a category without flagged suggestions', async () => {
     setup(); sugg.mockResolvedValue(reply([FLAGGED_I1, PLAIN_I2])); mount()
     await toggle()
-    expect(screen.getByRole('option', { name: /Alpha.*1 flagged/ })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: /^Beta/ }).textContent).not.toMatch(/flagged/)
+    expect(screen.getByRole('option', { name: /Alpha.*1 flagged by AI/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /^Beta/ }).textContent).not.toMatch(/flagged by AI/)
   })
 
   it('says so when the category has nothing flagged, and lets the auditor turn the filter off', async () => {
@@ -106,18 +106,41 @@ describe('flagged filter, counts and provenance on the audit page', () => {
   })
 
   it('leaves progress and Submit alone while it is on', async () => {
-    const all = { p1__i1: resp('i1', 'compliant'), p1__i2: resp('i2', 'compliant'), p1__i3: resp('i3', 'compliant') }
-    setup({ responses: all }); mount()
+    // i2 is unflagged and unanswered: it is hidden by the filter but still blocks Submit
+    setup({ responses: { p1__i1: resp('i1', 'compliant'), p1__i3: resp('i3', 'compliant') } }); mount()
     const submit = () => screen.getByRole('button', { name: /Submit for Review/ })
-    await screen.findByText('Item one')
-    expect(submit()).toBeEnabled()
+    await screen.findByText('Item two')
+    expect(submit()).toBeDisabled()
     const progress = () => screen.getAllByText(/^\d+\/\d+$/).map((e) => e.textContent)
     const before = progress()
     expect(before.length).toBeGreaterThan(0)
     await userEvent.click(await toggle())
     expect(screen.queryByText('Item two')).toBeNull()
-    expect(submit()).toBeEnabled()
+    expect(submit()).toBeDisabled()
     expect(progress()).toEqual(before)
+  })
+
+  it('enables Submit with the filter on once every item is answered', async () => {
+    setup({ responses: { p1__i1: resp('i1', 'compliant'), p1__i2: resp('i2', 'compliant'), p1__i3: resp('i3', 'compliant') } }); mount()
+    await userEvent.click(await toggle())
+    expect(screen.getByRole('button', { name: /Submit for Review/ })).toBeEnabled()
+  })
+
+  it('keeps the header item count unfiltered', async () => {
+    setup(); mount()
+    await screen.findByText('2 items')
+    await userEvent.click(await toggle())
+    expect(screen.getByText('2 items')).toBeInTheDocument()
+  })
+
+  it('jumping to an unflagged needs_review item turns the filter off so the item shows', async () => {
+    setup({ responses: { p1__i2: resp('i2', 'needs_review') } }); mount()
+    await userEvent.click(await toggle())
+    expect(screen.queryByText('Item two')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /1 Flagged/ }))
+    await userEvent.click(screen.getByText('Item two'))
+    expect(await screen.findByText('Item two')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Flagged by AI only/ })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('answers the flagged items through the same controls while filtering', async () => {
