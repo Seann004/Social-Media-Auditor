@@ -1,7 +1,7 @@
 import type { EvidenceRepository } from './repository.js'
 import { latestDecisionPerItem } from './decisions.js'
 import { categoryNameOf } from './runnerShared.js'
-import type { AccessStatus, AnswerStatus, Decision, EvidenceRun, PageSummary, Suggestion, SuggestedResult } from './types.js'
+import type { AccessStatus, AnswerStatus, Decision, EvidenceRun, PageSummary, Suggestion, SuggestedResult, SuggestionSummary } from './types.js'
 
 /** A run as the browser sees it: categories by name, never by key. */
 export type RunView = Omit<EvidenceRun, 'unassessedCategories'> & { unassessedCategories: string[] }
@@ -28,7 +28,7 @@ export interface QuoteView {
   hasHighlight: boolean
 }
 
-export type SuggestionView = Omit<Suggestion, 'quotes' | 'passageIdsSent'> & { quotes: QuoteView[] }
+export type SuggestionView = Omit<Suggestion, 'quotes' | 'passageIdsSent' | 'originSuggestionId'> & { quotes: QuoteView[] }
 
 export interface DecisionView {
   id: string
@@ -63,7 +63,7 @@ export function toPageView(page: PageSummary): PageView {
 }
 
 export function toSuggestionView(suggestion: Suggestion, pages: Map<string, PageSummary>): SuggestionView {
-  const { quotes, passageIdsSent: _sent, ...rest } = suggestion
+  const { quotes, passageIdsSent: _sent, originSuggestionId: _origin, ...rest } = suggestion
   return {
     ...rest,
     quotes: quotes.map((q) => {
@@ -96,9 +96,28 @@ export function toDecisionView(decision: Decision, suggestedResult: SuggestedRes
   }
 }
 
+/** The suggestion first assessed: all the copies carried forward from it share this. */
+const lineOf = (id: string, summary: SuggestionSummary): string => summary.originSuggestionId ?? id
+
 /**
- * The latest decision for each item. The suggested results come from the suggestions already loaded,
- * and one batched read fetches the rest. A decision whose suggestion cannot be found is left out.
+ * What is known of the suggestions decided on without a read: the current ones, and what they are
+ * copies of. A copy says what its origin said, and an origin is the start of its own line.
+ */
+function summariesWithin(current: readonly Suggestion[]): Map<string, SuggestionSummary> {
+  const known = new Map<string, SuggestionSummary>()
+  for (const s of current) {
+    known.set(s.id, { suggestedResult: s.suggestedResult, originSuggestionId: s.originSuggestionId })
+    if (s.originSuggestionId) known.set(s.originSuggestionId, { suggestedResult: s.suggestedResult, originSuggestionId: null })
+  }
+  return known
+}
+
+/**
+ * The latest decision for each item. A decision made on an earlier copy of the current suggestion
+ * counts as made on the current one, so it is given the current id. On a suggestion that was really
+ * assessed again it keeps its own id, and the card tells the auditor what changed. The current
+ * suggestions answer most of this, and one batched read fetches the rest. A decision whose suggestion
+ * cannot be found is left out.
  */
 export async function latestDecisionViews(
   repo: EvidenceRepository,
@@ -106,10 +125,17 @@ export async function latestDecisionViews(
   known: readonly Suggestion[],
 ): Promise<DecisionView[]> {
   const latest = [...latestDecisionPerItem(await repo.listDecisions(projectId)).values()]
-  const results = new Map<string, SuggestedResult | null>(known.map((s) => [s.id, s.suggestedResult]))
-  const missing = [...new Set(latest.map((d) => d.suggestionId).filter((id) => !results.has(id)))]
+  const summaries = summariesWithin(known)
+  const missing = [...new Set(latest.map((d) => d.suggestionId).filter((id) => !summaries.has(id)))]
   if (missing.length > 0) {
-    for (const [id, result] of Object.entries(await repo.getSuggestedResults(missing))) results.set(id, result)
+    for (const [id, summary] of Object.entries(await repo.getSuggestionSummaries(missing))) summaries.set(id, summary)
   }
-  return latest.flatMap((d) => (results.has(d.suggestionId) ? [toDecisionView(d, results.get(d.suggestionId) ?? null)] : []))
+  const currentOf = new Map(known.map((s) => [s.itemId, s]))
+  return latest.flatMap((d) => {
+    const decidedOn = summaries.get(d.suggestionId)
+    if (!decidedOn) return []
+    const current = currentOf.get(d.itemId)
+    const sameLine = current !== undefined && lineOf(d.suggestionId, decidedOn) === lineOf(current.id, current)
+    return [toDecisionView(sameLine ? { ...d, suggestionId: current.id } : d, decidedOn.suggestedResult)]
+  })
 }

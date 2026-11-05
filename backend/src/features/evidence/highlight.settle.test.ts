@@ -57,6 +57,12 @@ beforeEach(async () => {
       '<meta http-equiv="refresh" content="1;url=/other">',
     ),
     '/other': html('Other', '<p>A different page altogether.</p>'),
+    '/restless': html(
+      'Page',
+      `<p>${FIRST}</p>`,
+      // Scripts are off during a highlight, so only an animation can keep the words moving.
+      '<style>@keyframes drift { from { margin-top: 0 } to { margin-top: 200px } } p { animation: drift 0.3s linear infinite }</style>',
+    ),
     '/huge': (res) => {
       res.writeHead(200, { 'content-type': 'text/html' })
       res.end(Buffer.alloc(MAX_RESPONSE_BYTES + 1, 'x'))
@@ -72,6 +78,27 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks()
   await server.close()
+})
+
+describe('giving up on a close-up', () => {
+  const logged = () => vi.mocked(console.error).mock.calls.map((args) => args.join(' '))
+
+  it('logs that it gave up when the page will not hold still, naming the page and not the quote', async () => {
+    const images = await highlightOn(browser, server, '/restless', [FIRST])
+
+    expect(images.has(FIRST)).toBe(false)
+    const lines = logged().filter((line) => line.includes('/restless'))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatch(/kept moving/)
+    expect(lines[0]).not.toContain(FIRST)
+  })
+
+  it('logs nothing for a quote that is simply not on the page', async () => {
+    const images = await highlightOn(browser, server, '/two', ['A sentence that is nowhere on this page.'])
+
+    expect(images.size).toBe(0)
+    expect(logged()).toEqual([])
+  })
 })
 
 describe('settling', () => {

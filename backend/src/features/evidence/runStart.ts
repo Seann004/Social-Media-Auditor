@@ -10,11 +10,12 @@ import {
 } from './config.js'
 import type { RunQueue } from './queue.js'
 import type { EvidenceRepository } from './repository.js'
+import { unfinishedCategories } from './runPlan.js'
 import type { EvidenceRun, RunScope } from './types.js'
 
 export interface RunStartDeps {
   repo: EvidenceRepository
-  audit: Pick<AuditData, 'getSubmissionStatus'>
+  audit: Pick<AuditData, 'getSubmissionStatus' | 'listChecklistItems'>
   queue: RunQueue
   acquire: (projectId: string) => (() => void) | null
   /** For tests. Defaults to the clock. */
@@ -26,6 +27,8 @@ export type StartOutcome =
   | { ok: false; status: 400 | 404 | 409 | 429; error: string }
 
 const STALE_ERROR = 'This run was lost: the server stopped hearing from it. Start a new run.'
+const RUN_IN_PROGRESS = 'A run is already in progress for this project.'
+const NOTHING_UNFINISHED = 'Nothing is unfinished.'
 
 const refuse = (status: 400 | 404 | 409 | 429, error: string): StartOutcome => ({ ok: false, status, error })
 
@@ -73,7 +76,7 @@ async function createAndQueue(deps: RunStartDeps, plan: NewRunPlan, prepare: () 
     }
     const prepared = await prepare()
     if (prepared.refusal) return prepared.refusal
-    if (await sweepStaleRuns(deps, plan.projectId)) return refuse(409, 'A run is already in progress for this project.')
+    if (await sweepStaleRuns(deps, plan.projectId)) return refuse(409, RUN_IN_PROGRESS)
     const since = new Date((deps.now ?? Date.now)() - RUNS_WINDOW_MS).toISOString()
     if ((await deps.repo.countRunsSince(plan.projectId, since)) >= MAX_RUNS_PER_PROJECT_PER_DAY) {
       return refuse(429, `This project has used its ${MAX_RUNS_PER_PROJECT_PER_DAY} runs for today. Try again tomorrow.`)
@@ -101,6 +104,18 @@ export function startRun(deps: RunStartDeps, projectId: string, userId: string):
 }
 
 /**
+ * A refusal when a re-assess of the unfinished would do nothing, so that it costs none of the day's
+ * runs. A run in progress may yet leave something unfinished, so that is what the auditor is told then.
+ * When the earlier suggestions cannot be read this rejects, and no run is created.
+ */
+async function refusalIfNothingUnfinished(deps: RunStartDeps, projectId: string, capturedInRunId: string): Promise<StartOutcome | null> {
+  if (await sweepStaleRuns(deps, projectId)) return refuse(409, RUN_IN_PROGRESS)
+  const items = await deps.audit.listChecklistItems(projectId)
+  const planned = await unfinishedCategories(deps.repo, { projectId, capturedInRunId }, items, (err) => Promise.reject(err))
+  return planned.length === 0 ? refuse(409, NOTHING_UNFINISHED) : null
+}
+
+/**
  * A run that assesses again from the pages an earlier run captured. It has no pages of its own, so it
  * points at the pages of the run it was made from. Only the latest results can be re-assessed: an old
  * tab would otherwise show suggestions from pages that are no longer the current ones.
@@ -121,6 +136,10 @@ export function startReassess(
     const latest = await deps.repo.latestResultRun(projectId)
     if (!latest || latest.capturedInRunId !== from.capturedInRunId) {
       return { refusal: refuse(409, 'A newer run has replaced these results. Reload the page and assess again from the latest run.') }
+    }
+    if (scope === 'unfinished') {
+      const refusal = await refusalIfNothingUnfinished(deps, projectId, from.capturedInRunId)
+      if (refusal) return { refusal }
     }
     return { capturedInRunId: from.capturedInRunId }
   })

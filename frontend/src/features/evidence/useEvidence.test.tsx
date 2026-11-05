@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useStore } from '../../store/useStore'
 import * as api from './api'
 import { EvidenceApiError } from './api'
 import { makeDecision, makePage, makeRun, makeSuggestion } from './testFixtures'
@@ -37,6 +38,7 @@ const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync
 
 beforeEach(() => {
   vi.useFakeTimers()
+  useStore.setState({ sessionToken: null })
   getLatestRun.mockReset()
   getSuggestions.mockReset()
   getSuggestions.mockResolvedValue(sugg())
@@ -169,6 +171,24 @@ describe('useEvidence', () => {
     expect(result.current.error?.status).toBe(401)
     await tick(30_000)
     expect(getLatestRun).toHaveBeenCalledTimes(2)
+  })
+
+  it('loads again when the session token arrives, ending the 401 a missing token caused', async () => {
+    const noToken = new EvidenceApiError(401, 'You are not signed in to the evidence service.')
+    getLatestRun.mockRejectedValue(noToken)
+    getSuggestions.mockRejectedValue(noToken)
+    const { result } = renderHook(() => useEvidence('p1', { enabled: true }))
+    await settle()
+    expect(result.current.error?.status).toBe(401)
+    getLatestRun.mockResolvedValue(latest(makeRun()))
+    getSuggestions.mockResolvedValue(sugg())
+
+    act(() => useStore.getState().setSessionToken('tok'))
+    await settle()
+
+    expect(result.current.error).toBeNull()
+    expect(result.current.run?.id).toBe('run-1')
+    expect([...result.current.suggestionsByItem.keys()]).toEqual(['a', 'b'])
   })
 
   it('keeps the older summary when the latest call fails', async () => {

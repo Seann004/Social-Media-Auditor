@@ -468,6 +468,20 @@ describe('review round 1', () => {
     expect(res.body.suggestions[0].quotes[0]).toMatchObject({ pageUrl: 'https://example.com/privacy', pageTitle: 'Privacy' })
   })
 
+  it('points a decision at the carried copy, and never sends where a copy came from', async () => {
+    const { world, seeded } = await setup()
+    const re = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'unfinished', capturedInRunId: seeded.runId })
+    const original = (await world.repo.listSuggestions(seeded.runId))[0]
+    await world.repo.addDecision({ suggestionId: original.id, projectId: P1, itemId: original.itemId, userId: 'u-aud', decision: 'accepted', finalResult: 'compliant', overrideReason: null, origin: 'card' })
+    const copy = await world.repo.addSuggestion({ ...original, runId: re.id, originSuggestionId: original.id, quotes: original.quotes.map(({ id: _id, ...q }) => q) })
+    await world.repo.updateRun(re.id, { status: 'completed' })
+    const res = await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.auditor))
+    expect(res.body.suggestions[0].id).toBe(copy.id)
+    expect(res.body.decisions[0].suggestionId).toBe(copy.id)
+    expect(JSON.stringify(res.body)).not.toContain('originSuggestionId')
+    expect(JSON.stringify(res.body)).not.toContain(original.id)
+  })
+
   it('saves the source with the signed-in user as its creator', async () => {
     const { world } = await setup()
     await request(world.app).post(`/api/projects/${P1}/evidence-sources`).set(world.auth(USERS.auditor)).send({ startUrls: ['https://example.com/z'] })
@@ -576,7 +590,7 @@ describe('the polled routes read only the page columns they show', () => {
     await world.repo.addDecision({ ...base, suggestionId: older.suggestion.id, itemId: 'item-5' })
     await world.repo.addDecision({ ...base, suggestionId: seeded.suggestionId, itemId: 'item-1' })
     const one = vi.spyOn(world.repo, 'getSuggestion')
-    const batch = vi.spyOn(world.repo, 'getSuggestedResults')
+    const batch = vi.spyOn(world.repo, 'getSuggestionSummaries')
     const res = await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.auditor))
     expect(res.body.decisions).toHaveLength(2)
     expect(one).not.toHaveBeenCalled()

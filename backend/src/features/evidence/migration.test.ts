@@ -19,6 +19,11 @@ describe('001_evidence_assessment.sql', () => {
     expect(sql).not.toMatch(/grant [^;]* to anon/i)
   })
 
+  it('records which suggestion a carried copy came from, and a fresh suggestion has none', () => {
+    const table = sql.slice(sql.indexOf('create table if not exists "AI_Suggestion" ('), sql.indexOf('create table if not exists "AI_Suggestion_Quote"'))
+    expect(table).toMatch(/"originSuggestionId" uuid references "AI_Suggestion"\("id"\) on delete set null/)
+  })
+
   it('records the passages sent with every suggestion (spec 7.5)', () => {
     const table = sql.slice(sql.indexOf('create table if not exists "AI_Suggestion" ('), sql.indexOf('create table if not exists "AI_Suggestion_Quote"'))
     expect(table).toMatch(/"passageIdsSent" jsonb not null default '\[\]'::jsonb/)

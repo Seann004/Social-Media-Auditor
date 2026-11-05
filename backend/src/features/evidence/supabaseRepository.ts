@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { PROMPT_VERSION } from './config.js'
+import { PROMPT_VERSION, SUPABASE_READ_PAGE_SIZE } from './config.js'
 import type {
   EvidencePermission,
   EvidenceRepository,
@@ -58,6 +58,21 @@ function required<T>(op: string, res: DbResult<T>): NonNullable<T> {
 // Rows use the same camelCase names as our types; only nullable columns need mapping.
 type Row = Record<string, any>
 
+/**
+ * Every row of a read, one page at a time, because PostgREST quietly stops at its row cap. The read
+ * must have a total order, or a row can fall between two pages. A page that fails fails the whole read.
+ */
+async function readAllRows(op: string, readPage: (from: number, to: number) => PromiseLike<DbResult<Row[]>>): Promise<Row[]> {
+  const rows: Row[] = []
+  for (let from = 0; ; from += SUPABASE_READ_PAGE_SIZE) {
+    const page = unwrap(op, await readPage(from, from + SUPABASE_READ_PAGE_SIZE - 1)) ?? []
+    rows.push(...page)
+    if (page.length < SUPABASE_READ_PAGE_SIZE) return rows
+  }
+}
+
+const byId = (a: Row, b: Row): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+
 function toRun(row: Row): EvidenceRun {
   return {
     ...(row as EvidenceRun),
@@ -89,6 +104,7 @@ function toSuggestion(row: Row, quotes: Row[]): Suggestion {
     confidence: row.confidence,
     flags: row.flags ?? [],
     passageIdsSent: row.passageIdsSent ?? [],
+    originSuggestionId: row.originSuggestionId ?? null,
     quotes: quotes.map(toQuote),
   }
 }
@@ -111,8 +127,8 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
 
   async function quotesFor(op: string, suggestionIds: string[]): Promise<Row[]> {
     if (suggestionIds.length === 0) return []
-    return (
-      unwrap(op, await admin.from('AI_Suggestion_Quote').select('*').in('suggestionId', suggestionIds)) ?? []
+    return readAllRows(op, (from, to) =>
+      admin.from('AI_Suggestion_Quote').select('*').in('suggestionId', suggestionIds).order('id').range(from, to),
     )
   }
 
@@ -294,6 +310,7 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
             confidence: input.confidence,
             flags: input.flags,
             passageIdsSent: input.passageIdsSent,
+            originSuggestionId: input.originSuggestionId ?? null,
           })
           .select('*')
           .single(),
@@ -313,7 +330,7 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
         }
         throw new Error(`addSuggestion quotes: ${message}`)
       }
-      return toSuggestion(suggestionRow, quoteRes.data)
+      return toSuggestion(suggestionRow, [...quoteRes.data].sort(byId))
     },
     async listSuggestions(runId) {
       const rows: Row[] =
@@ -329,10 +346,12 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
       if (!row) return null
       return toSuggestion(row, await quotesFor('getSuggestion quotes', [row.id]))
     },
-    async getSuggestedResults(ids) {
+    async getSuggestionSummaries(ids) {
       if (ids.length === 0) return {}
-      const rows: Row[] = unwrap('getSuggestedResults', await admin.from('AI_Suggestion').select('id, suggestedResult').in('id', ids)) ?? []
-      return Object.fromEntries(rows.map((r) => [r.id, r.suggestedResult ?? null]))
+      const rows: Row[] = unwrap('getSuggestionSummaries', await admin.from('AI_Suggestion').select('id, suggestedResult, originSuggestionId').in('id', ids)) ?? []
+      return Object.fromEntries(
+        rows.map((r) => [r.id, { suggestedResult: r.suggestedResult ?? null, originSuggestionId: r.originSuggestionId ?? null }]),
+      )
     },
     async getQuote(id) {
       const row = unwrapById(
@@ -350,15 +369,16 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
       return row as Decision
     },
     async listDecisions(projectId) {
-      const rows = unwrap(
-        'listDecisions',
-        await admin
+      const rows = await readAllRows('listDecisions', (from, to) =>
+        admin
           .from('AI_Suggestion_Decision')
           .select('*')
           .eq('projectId', projectId)
-          .order('decidedAt', { ascending: true }),
+          .order('decidedAt', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
       )
-      return (rows ?? []) as Decision[]
+      return rows as Decision[]
     },
   }
 }

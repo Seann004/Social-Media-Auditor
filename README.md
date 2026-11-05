@@ -234,7 +234,7 @@ All set in `backend/src/features/evidence/config.ts`:
 
 - Public webpage text only. Nothing behind a login, no test accounts, no app screens.
 - Links to PDFs and other files are not followed.
-- Text inside closed shadow roots is not read (open ones are).
+- Page text is the page's `innerText`, which leaves out everything inside shadow roots, open or closed. Only the control lines, from the page snapshot, see into open shadow roots.
 - Hidden text is filtered out by a heuristic (display, visibility, size, opacity and similar). It catches the common tricks, not every possible one.
 - A close-up of a quote is left out when the quote cannot be boxed truthfully on the page. The full-page screenshot is shown instead.
 - DNS rebinding and very large compressed responses are accepted residual risks in this version.

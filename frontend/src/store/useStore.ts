@@ -271,6 +271,7 @@ export const useStore = create<StoreState>()(
         users: [...state.users, { id, name, role, initials, color }],
         loading: false
       }))
+      if (hashedPassword) requestSessionToken(email.trim().toLowerCase(), hashedPassword, id)
     } catch (err) {
       console.error('Registration failed:', err)
       set({ loading: false, dbError: err instanceof Error ? err.message : String(err) })
@@ -620,3 +621,18 @@ export const useStore = create<StoreState>()(
     }
   )
 )
+
+/**
+ * Obtains the backend session token without ever delaying or failing the sign-in: the caller does not
+ * wait for it, every failure leaves the token null, and a token that arrives after the user logged
+ * out (or another user signed in) is discarded.
+ */
+export function requestSessionToken(email: string, hashedPassword: string, userId: string): void {
+  Promise.resolve()
+    .then(() => db.createSession(email, hashedPassword))
+    .then((token) => {
+      const { isAuthenticated, currentUserId, setSessionToken } = useStore.getState()
+      if (isAuthenticated && currentUserId === userId) setSessionToken(token)
+    })
+    .catch(() => {})
+}

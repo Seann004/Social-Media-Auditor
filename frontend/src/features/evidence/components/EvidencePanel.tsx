@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { ArrowsClockwiseIcon as ArrowsClockwise, PlayIcon as Play, RobotIcon as Robot } from '@phosphor-icons/react'
+import { useStore } from '../../../store/useStore'
 import { EvidenceApiError, getSources, reassess, saveSources, setPermission, startRun } from '../api'
 import type { EvidencePermission, RunScope } from '../types'
 import type { UseEvidenceResult } from '../useEvidence'
@@ -52,6 +53,7 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const { run, pages, resultRun, suggestionsByItem, refresh } = evidence
+  const sessionToken = useStore((s) => s.sessionToken)
 
   useEffect(() => {
     let alive = true
@@ -74,7 +76,8 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
     return () => {
       alive = false
     }
-  }, [projectId, sourcesTry])
+    // Again when the session token arrives: a load made before it got a 401, as useEvidence did.
+  }, [projectId, sourcesTry, sessionToken])
 
   // Any successful load or poll replaces these objects: a blocking action error is over by then.
   useEffect(() => {
@@ -110,8 +113,11 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
   const running = run !== null && ACTIVE.includes(run.status)
   const canStart = !locked && sourcesState === 'ok' && !busy && !running
 
-  /** Runs one action once at a time. A 409 means a run is already going: show it. */
-  async function perform(action: () => Promise<unknown>): Promise<void> {
+  /**
+   * Runs one action once at a time. A 409 from starting a run means one is already going, and the
+   * refresh shows it. With `sayConflict` the 409 means something else, so its sentence is shown.
+   */
+  async function perform(action: () => Promise<unknown>, sayConflict = false): Promise<void> {
     if (busyRef.current) return
     busyRef.current = true
     setBusy(true)
@@ -124,7 +130,7 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
       if (isBlocking(error)) {
         blocked = true
         setActionError(error)
-      } else if (error.status !== 409) setMessage(error.message)
+      } else if (sayConflict || error.status !== 409) setMessage(error.message)
     }
     try {
       if (!blocked) await refresh()
@@ -144,7 +150,7 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
       await startRun(projectId)
     })
 
-  const onReassess = (scope: RunScope) => perform(() => reassess(projectId, resultRun!.id, scope))
+  const onReassess = (scope: RunScope) => perform(() => reassess(projectId, resultRun!.id, scope), true)
 
   /** Resolves to an error sentence to show beside the control, or null when saved. */
   const onSavePermission = async (granted: boolean, note: string | undefined): Promise<string | null> => {

@@ -99,6 +99,7 @@ describe('captureHighlights', () => {
   it('puts a quote at the bottom of a long page in view', async () => {
     const images = await highlightOn(browser, server, '/long', [BOTTOM])
 
+    expect(images.has(BOTTOM)).toBe(true)
     const facts = await describeImage(browser, images.get(BOTTOM)!)
     expect(facts.yellow).toBeGreaterThan(500)
     expect(facts.height).toBeLessThan(VIEWPORT.height)

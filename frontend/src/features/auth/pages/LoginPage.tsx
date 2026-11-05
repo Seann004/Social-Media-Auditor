@@ -8,11 +8,10 @@ import {
   CheckIcon,
   XIcon,
 } from '@phosphor-icons/react'
-import { useStore } from '../../../store/useStore'
+import { requestSessionToken, useStore } from '../../../store/useStore'
 import { supabase } from '../../../lib/supabase'
 import type { UserRole } from '../../../types'
 import { hashPassword } from '../../../lib/crypto'
-import { createSession } from '../../../lib/db'
 
 const PASSWORD_RULES = [
   { label: 'At least 8 characters', test: (p: string) => p.length >= 8 },
@@ -23,21 +22,6 @@ const PASSWORD_RULES = [
 
 function passwordValid(p: string) {
   return PASSWORD_RULES.every((r) => r.test(p))
-}
-
-/**
- * Obtains the backend session token without ever delaying or failing the login: the caller does not
- * wait for it, every failure leaves the token null, and a token that arrives after the user logged
- * out (or another user signed in) is discarded.
- */
-function requestSessionToken(email: string, hashedPassword: string, userId: string): void {
-  Promise.resolve()
-    .then(() => createSession(email, hashedPassword))
-    .then((token) => {
-      const { isAuthenticated, currentUserId, setSessionToken } = useStore.getState()
-      if (isAuthenticated && currentUserId === userId) setSessionToken(token)
-    })
-    .catch(() => {})
 }
 
 export default function LoginPage() {

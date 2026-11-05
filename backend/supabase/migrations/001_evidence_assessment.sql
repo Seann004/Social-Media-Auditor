@@ -101,6 +101,8 @@ create table if not exists "AI_Suggestion" (
   "flags" jsonb not null default '[]'::jsonb,
   -- ids of the passages sent to the AI in the call that made this suggestion (spec 7.5)
   "passageIdsSent" jsonb not null default '[]'::jsonb,
+  -- on a copy carried forward by a re-assess: the suggestion first assessed. Null when this run assessed it.
+  "originSuggestionId" uuid references "AI_Suggestion"("id") on delete set null,
   "createdAt" timestamptz not null default now(),
   unique ("runId", "itemId")
 );

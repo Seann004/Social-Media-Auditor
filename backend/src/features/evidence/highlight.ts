@@ -86,13 +86,14 @@ async function photograph(world: IsolatedWorld, placement: Placement, step: Step
 }
 
 /** Null when the quote is left out. A picture taken while the page moved is discarded and taken again. */
-async function shootQuote(world: IsolatedWorld, quote: string, step: Step, timeoutMs: number): Promise<Buffer | null> {
+async function shootQuote(world: IsolatedWorld, quote: string, pageUrl: string, step: Step, timeoutMs: number): Promise<Buffer | null> {
   for (let attempt = 0; attempt <= HIGHLIGHT_SHOT_RETRIES; attempt += 1) {
     const placement = await step(locateQuote(world, quote), 'Placing the highlight', timeoutMs)
     if (placement === null) return null
     const image = await photograph(world, placement, step, timeoutMs)
     if (await step(isStillPlaced(world), 'Checking the highlight', timeoutMs)) return image
   }
+  logCaptureFailure('Left a quote out of the close-ups', pageUrl, 'The page kept moving while its picture was taken.')
   return null
 }
 
@@ -134,7 +135,7 @@ async function visit(
     // The page may have moved itself since it was loaded.
     if (!(await step(opts.navigationGuard.check(page.url()), 'Checking the address', shotMs)).allowed) return
     try {
-      const image = await shootQuote(world, quote, step, shotMs)
+      const image = await shootQuote(world, quote, opts.pageUrl, step, shotMs)
       if (image !== null) results.set(quote, image)
     } finally {
       // The next quote's picture must not show this one's box.

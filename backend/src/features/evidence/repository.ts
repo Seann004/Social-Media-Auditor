@@ -11,6 +11,7 @@ import type {
   SuggestedResult,
   Suggestion,
   SuggestionQuote,
+  SuggestionSummary,
 } from './types.js'
 
 export interface EvidenceSource {
@@ -59,6 +60,8 @@ export interface NewSuggestion {
   confidence: Confidence
   flags: ReviewFlag[]
   passageIdsSent: string[]
+  /** Only for a copy carried forward. Defaults to null: the run assessed it itself. */
+  originSuggestionId?: string | null
   quotes: Omit<SuggestionQuote, 'id'>[]
 }
 
@@ -111,8 +114,8 @@ export interface EvidenceRepository {
   addSuggestion(input: NewSuggestion): Promise<Suggestion>
   listSuggestions(runId: string): Promise<Suggestion[]>
   getSuggestion(id: string): Promise<Suggestion | null>
-  /** The suggested result of each known id, in one read. Unknown ids are left out. */
-  getSuggestedResults(ids: string[]): Promise<Record<string, SuggestedResult | null>>
+  /** The summary of each known id, in one read. Unknown ids are left out. */
+  getSuggestionSummaries(ids: string[]): Promise<Record<string, SuggestionSummary>>
   getQuote(id: string): Promise<SuggestionQuote | null>
 
   addDecision(input: NewDecision): Promise<Decision>

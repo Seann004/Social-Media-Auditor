@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useStore } from '../../store/useStore'
 import { EvidenceApiError, getLatestRun, getSuggestions } from './api'
 import type {
   DecisionView,
@@ -58,6 +59,8 @@ function toApiError(err: unknown): EvidenceApiError {
 
 export function useEvidence(projectId: string, options: { enabled: boolean }): UseEvidenceResult {
   const { enabled } = options
+  // The token arrives after login without blocking it. A load made before then got a 401, which stops polling.
+  const sessionToken = useStore((s) => s.sessionToken)
   const [snapshot, setSnapshot] = useState<Snapshot>(() => emptySnapshot(projectId))
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
   const [error, setError] = useState<EvidenceApiError | null>(null)
@@ -191,7 +194,7 @@ export function useEvidence(projectId: string, options: { enabled: boolean }): U
       if (timer !== undefined) clearTimeout(timer)
       refreshRef.current = () => Promise.resolve()
     }
-  }, [projectId, enabled])
+  }, [projectId, enabled, sessionToken])
 
   const refresh = useCallback((): Promise<void> => refreshRef.current(), [])
   const current = snapshot.projectId === projectId ? snapshot : emptySnapshot(projectId)

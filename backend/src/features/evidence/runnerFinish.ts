@@ -22,8 +22,9 @@ export function partialSummary(stop: StopReason | null, unassessed: number, notK
 /**
  * Copies the suggestions an earlier run of the same capture made for items this run has none for,
  * so that what the screen showed before is still shown after a re-assess. Rows are copied as they
- * are, screenshot paths and the list of passages sent included: nothing is uploaded again. Items no
- * longer on the checklist are left out. The copies are not counted as assessed by this run.
+ * are, screenshot paths and the list of passages sent included: nothing is uploaded again. Each copy
+ * names the suggestion first assessed, so that a decision made on any copy still counts for it. Items
+ * no longer on the checklist are left out. The copies are not counted as assessed by this run.
  *
  * Returns the keys of the categories that lost a suggestion because a copy failed, so that the run
  * can list them as not assessed and Re-assess can bring them back.
@@ -55,6 +56,7 @@ export async function carryForward(ctx: RunCtx, items: AssessItem[], ownItemIds:
         confidence: old.confidence,
         flags: old.flags,
         passageIdsSent: old.passageIdsSent,
+        originSuggestionId: old.originSuggestionId ?? old.id,
         quotes: old.quotes.map(({ id: _id, ...quote }) => quote),
       })
     } catch (err) {

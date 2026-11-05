@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import { EvidenceApiError } from '../api'
+import { useStore } from '../../../store/useStore'
 import { makePage, makeRun, makeSuggestion } from '../testFixtures'
 import type { LatestRunResponse, SourcesResponse, SuggestionsResponse } from '../types'
 import { useEvidence } from '../useEvidence'
@@ -57,6 +58,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  useStore.setState({ sessionToken: null })
   Object.values(m).forEach((fn) => fn.mockReset())
   m.getSources.mockResolvedValue(sources())
   m.getLatestRun.mockResolvedValue(latest(null))
@@ -226,6 +228,18 @@ describe('EvidencePanel', () => {
     expect(m.reassess).toHaveBeenCalledWith('p1', 'run-9', 'all')
   })
 
+  it('shows the sentence of the server when there is nothing unfinished, and keeps the button', async () => {
+    const user = userEvent.setup()
+    const result = makeRun({ id: 'run-9' })
+    m.getLatestRun.mockResolvedValue(latest(result))
+    m.getSuggestions.mockResolvedValue(results({ run: result }))
+    m.reassess.mockRejectedValue(new EvidenceApiError(409, 'Nothing is unfinished.'))
+    render(<Harness />)
+    await user.click(await screen.findByRole('button', { name: /re-assess unfinished/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Nothing is unfinished.')
+    expect(screen.getByRole('button', { name: /re-assess unfinished/i })).toBeInTheDocument()
+  })
+
   it('has no Re-assess before a result run exists', async () => {
     render(<Harness />)
     await screen.findByLabelText(/website links/i)
@@ -275,6 +289,23 @@ describe('EvidencePanel', () => {
     render(<Harness />)
     expect(await screen.findByText('Please sign out and sign in again to use AI evidence assessment.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^run/i })).toBeNull()
+  })
+
+  it('recovers by itself when the session token arrives after the panel opened', async () => {
+    const noToken = new EvidenceApiError(401, 'x')
+    m.getLatestRun.mockRejectedValue(noToken)
+    m.getSuggestions.mockRejectedValue(noToken)
+    m.getSources.mockRejectedValue(noToken)
+    render(<Harness />)
+    expect(await screen.findByText('Please sign out and sign in again to use AI evidence assessment.')).toBeInTheDocument()
+    m.getLatestRun.mockResolvedValue(latest(null))
+    m.getSuggestions.mockResolvedValue(results())
+    m.getSources.mockResolvedValue(sources())
+
+    act(() => useStore.getState().setSessionToken('tok'))
+
+    expect(await screen.findByLabelText(/website links/i)).toBeInTheDocument()
+    expect(screen.queryByText('Please sign out and sign in again to use AI evidence assessment.')).toBeNull()
   })
 
   it('shows the not-configured sentence on a 503 and shows nothing else', async () => {

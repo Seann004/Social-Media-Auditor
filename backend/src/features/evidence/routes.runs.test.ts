@@ -196,6 +196,73 @@ describe('re-assess', () => {
     expect(world.enqueued).toEqual([res.body.run.id])
   })
 
+  describe('when nothing is unfinished', () => {
+    /** A completed run with a suggestion for every item on the checklist. */
+    async function allDone(world: World) {
+      const seed = await seedResult(world.repo, P1)
+      const { id: _id, runId: _run, quotes: _quotes, ...rest } = seed.suggestion
+      await world.repo.addSuggestion({ ...rest, runId: seed.run.id, itemId: 'item-2', quotes: [] })
+      return seed
+    }
+
+    it('answers 409 and spends none of the day\'s runs', async () => {
+      const world = makeWorld()
+      const seed = await allDone(world)
+      const res = await post(world, path(seed.run.id), { scope: 'unfinished' })
+      expect(res.status).toBe(409)
+      expect(res.body.error).toBe('Nothing is unfinished.')
+      expect(world.enqueued).toEqual([])
+      expect((await world.repo.latestRun(P1))?.id).toBe(seed.run.id)
+      expect(await world.repo.countRunsSince(P1, ago(60_000))).toBe(1)
+    })
+
+    it('says the same when the scope is left to its default', async () => {
+      const world = makeWorld()
+      const seed = await allDone(world)
+      expect((await post(world, path(seed.run.id), {})).body.error).toBe('Nothing is unfinished.')
+    })
+
+    it('still lets scope all start a run', async () => {
+      const world = makeWorld()
+      const seed = await allDone(world)
+      expect((await post(world, path(seed.run.id), { scope: 'all' })).status).toBe(202)
+    })
+
+    it('says a run is in progress when one is, since that run may change what is unfinished', async () => {
+      const world = makeWorld()
+      const seed = await allDone(world)
+      await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'all' })
+      const res = await post(world, path(seed.run.id), { scope: 'unfinished' })
+      expect(res.status).toBe(409)
+      expect(res.body.error).toMatch(/in progress/)
+    })
+
+    it('starts a run for an item added to the checklist since', async () => {
+      const world = makeWorld()
+      const seed = await allDone(world)
+      const list = world.audit.listChecklistItems.bind(world.audit)
+      world.audit.listChecklistItems = async (id) => [...(await list(id)), { id: 'item-3', guidelineId: 'g-1', category: 'Safety', name: 'Item 3', text: 'Is it new?', helpText: '' }]
+      expect((await post(world, path(seed.run.id), { scope: 'unfinished' })).status).toBe(202)
+    })
+
+    it('starts a run when the last run listed a category as not assessed', async () => {
+      const world = makeWorld()
+      const seed = await allDone(world)
+      await world.repo.updateRun(seed.run.id, { status: 'partial', unassessedCategories: ['g-1__Privacy'] })
+      expect((await post(world, path(seed.run.id), { scope: 'unfinished' })).status).toBe(202)
+    })
+
+    it('creates no run when what is unfinished cannot be read', async () => {
+      const world = makeWorld()
+      const seed = await allDone(world)
+      vi.spyOn(world.repo, 'listSuggestions').mockRejectedValue(new Error('down'))
+      const res = await post(world, path(seed.run.id), { scope: 'unfinished' })
+      expect(res.status).toBe(500)
+      expect(world.enqueued).toEqual([])
+      expect((await world.repo.latestRun(P1))?.id).toBe(seed.run.id)
+    })
+  })
+
   it('takes scope all', async () => {
     const world = makeWorld()
     const seed = await seedResult(world.repo, P1)

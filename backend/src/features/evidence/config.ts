@@ -45,6 +45,10 @@ export const VIEWING_LINK_SECONDS = 300
 export const ACCEPTED_EVIDENCE_LINK_SECONDS = 31_536_000
 export const SESSION_HOURS = 12
 
+// Reading from Supabase
+/** Rows asked for at a time by reads with no natural limit. Below PostgREST's default cap of 1 000, so a short page always means the end. */
+export const SUPABASE_READ_PAGE_SIZE = 500
+
 // Keeping a run's status true: waits between tries at an update that failed (about a minute in all)
 export const RUN_UPDATE_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000, 20_000, 25_000]
 

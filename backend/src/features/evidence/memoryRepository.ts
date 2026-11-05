@@ -18,9 +18,9 @@ import type {
   EvidenceRun,
   Passage,
   RunStatus,
-  SuggestedResult,
   Suggestion,
   SuggestionQuote,
+  SuggestionSummary,
 } from './types.js'
 
 const ACTIVE: readonly RunStatus[] = ['queued', 'capturing', 'assessing']
@@ -217,6 +217,7 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
         confidence: input.confidence,
         flags: copy(input.flags),
         passageIdsSent: [...input.passageIdsSent],
+        originSuggestionId: input.originSuggestionId ?? null,
         quotes,
       }
       suggestions.push(row)
@@ -229,9 +230,11 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
       const row = suggestions.find((s) => s.id === id)
       return row ? copy(row) : null
     },
-    async getSuggestedResults(ids) {
-      const out: Record<string, SuggestedResult | null> = {}
-      for (const s of suggestions) if (ids.includes(s.id)) out[s.id] = s.suggestedResult
+    async getSuggestionSummaries(ids) {
+      const out: Record<string, SuggestionSummary> = {}
+      for (const s of suggestions) {
+        if (ids.includes(s.id)) out[s.id] = { suggestedResult: s.suggestedResult, originSuggestionId: s.originSuggestionId }
+      }
       return out
     },
     async getQuote(id) {

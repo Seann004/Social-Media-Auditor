@@ -1,15 +1,15 @@
 import type { Browser } from 'playwright'
-import { assessBatch as defaultAssessBatch, planBatches, type AssessItem } from './assess.js'
+import { assessBatch as defaultAssessBatch, type AssessItem } from './assess.js'
 import { getBrowser } from './browser.js'
 import { capturePages } from './capture.js'
 import { MAX_TOKENS_PER_RUN, RUN_TIMEOUT_MS, RUN_UPDATE_RETRY_DELAYS_MS } from './config.js'
 import { captureHighlights } from './highlight.js'
 import { createRobotsChecker } from './robots.js'
+import { planCategories, unfinishedCategories, type Category } from './runPlan.js'
 import { assessAndStore, type BatchContext, type TokenMeter } from './runnerAssess.js'
 import { capturePhase } from './runnerCapture.js'
 import { autoMatchAnswers, carryForward, partialSummary, type StopReason } from './runnerFinish.js'
 import {
-  categoryKey,
   isGroqLimit,
   isRunGone,
   logRunProblem,
@@ -36,11 +36,6 @@ const OUT_OF_TIME_NO_PAGE = 'The run ran out of time before any page could be re
 const CHECKLIST_UNREADABLE = 'The checklist of this project could not be read because the database did not answer. Start the run again later.'
 const COULD_NOT_START = 'The run could not be started because it could not be read from the database. Start it again.'
 
-interface Category {
-  key: string
-  batches: AssessItem[][]
-}
-
 interface Progress {
   done: number
   unassessed: string[]
@@ -64,41 +59,14 @@ function resolve(deps: RunnerDeps): ResolvedDeps {
   }
 }
 
-/** Categories in checklist order, each with its batches. planBatches keeps a category's batches together. */
-function planCategories(items: AssessItem[]): Category[] {
-  const categories: Category[] = []
-  for (const batch of planBatches(items)) {
-    const key = categoryKey(batch[0])
-    const last = categories[categories.length - 1]
-    if (last && last.key === key) last.batches.push(batch)
-    else categories.push({ key, batches: [batch] })
-  }
-  return categories
-}
-
-/**
- * Which categories this run assesses: all of them, or for a re-assess of the unfinished, those the
- * latest result run of this capture listed as not assessed, plus any category with an item that run
- * has no suggestion for (a category that was switched off meanwhile, or an item added since).
- */
+/** Which categories this run assesses: all of them, or for a re-assess of the unfinished, those still to do. */
 async function categoriesToAssess(ctx: RunCtx, items: AssessItem[]): Promise<Category[]> {
-  const all = planCategories(items)
   const isReassess = ctx.run.capturedInRunId !== ctx.run.id
-  if (!isReassess || ctx.run.scope !== 'unfinished') return all
-  const { repo } = ctx.deps
-  const prior = await repo.latestResultRun(ctx.run.projectId)
-  if (!prior || prior.capturedInRunId !== ctx.run.capturedInRunId) return all
-  let shown: Set<string>
-  try {
-    shown = new Set((await repo.listSuggestions(prior.id)).map((s) => s.itemId))
-  } catch (err) {
+  if (!isReassess || ctx.run.scope !== 'unfinished') return planCategories(items)
+  return unfinishedCategories(ctx.deps.repo, ctx.run, items, async (err) => {
     if (await isRunGone(ctx)) throw new RunGoneError()
     logRunProblem(ctx, 'Could not read the earlier suggestions, so every category is assessed again', err)
-    return all
-  }
-  const wanted = new Set(prior.unassessedCategories)
-  for (const item of items) if (!shown.has(item.id)) wanted.add(categoryKey(item))
-  return all.filter((c) => wanted.has(c.key))
+  })
 }
 
 function stopBefore(ctx: RunCtx, tokensUsed: number): StopReason | null {

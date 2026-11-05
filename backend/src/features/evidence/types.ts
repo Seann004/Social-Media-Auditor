@@ -93,8 +93,13 @@ export interface Suggestion {
   flags: ReviewFlag[]
   /** Ids of the passages sent to the AI in the call that made this suggestion. Empty when no call was made. */
   passageIdsSent: string[]
+  /** On a copy carried forward by a re-assess: the suggestion first assessed. Null when its run assessed it. */
+  originSuggestionId: string | null
   quotes: SuggestionQuote[]
 }
+
+/** What is read of a suggestion from another run: what it said, and whose copy it is. */
+export type SuggestionSummary = Pick<Suggestion, 'suggestedResult' | 'originSuggestionId'>
 
 export interface Decision {
   id: string

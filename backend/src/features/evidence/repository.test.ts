@@ -192,13 +192,18 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
     expect(await h.repo.listPageSummaries(randomUUID())).toEqual([])
   })
 
-  it('getSuggestedResults reads the result of many suggestions at once and skips unknown ids', async () => {
+  it('getSuggestionSummaries reads the result and origin of many suggestions at once and skips unknown ids', async () => {
     const run = await newRun()
+    const later = await newRun()
     const a = await h.repo.addSuggestion({ ...suggestion(run.id), suggestedResult: 'no' })
+    const b = await h.repo.addSuggestion({ ...suggestion(later.id), suggestedResult: 'no', originSuggestionId: a.id })
     const missing = randomUUID()
-    const got = await h.repo.getSuggestedResults([a.id, missing])
-    expect(got).toEqual({ [a.id]: 'no' })
-    expect(await h.repo.getSuggestedResults([])).toEqual({})
+    const got = await h.repo.getSuggestionSummaries([a.id, b.id, missing])
+    expect(got).toEqual({
+      [a.id]: { suggestedResult: 'no', originSuggestionId: null },
+      [b.id]: { suggestedResult: 'no', originSuggestionId: a.id },
+    })
+    expect(await h.repo.getSuggestionSummaries([])).toEqual({})
   })
 
   it('addPassages returns the saved passages', async () => {
@@ -252,10 +257,19 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
     const saved = await h.repo.addSuggestion(suggestion(run.id, 2))
     expect(saved.quotes.length).toBe(2)
     expect(saved.passageIdsSent).toEqual(SENT)
+    expect(saved.originSuggestionId).toBeNull()
     expect(await h.repo.getSuggestion(saved.id)).toEqual(saved)
     expect(await h.repo.listSuggestions(run.id)).toEqual([saved])
     expect(await h.repo.getQuote(saved.quotes[0].id)).toEqual(saved.quotes[0])
     expect(await h.repo.getQuote(randomUUID())).toBeNull()
+  })
+
+  it('stores and reads back the suggestion a copy came from', async () => {
+    const first = await h.repo.addSuggestion(suggestion((await newRun()).id))
+    const copy = await h.repo.addSuggestion({ ...suggestion((await newRun()).id), originSuggestionId: first.id })
+    expect(copy.originSuggestionId).toBe(first.id)
+    expect(await h.repo.getSuggestion(copy.id)).toEqual(copy)
+    expect(await h.repo.listSuggestions(copy.runId)).toEqual([copy])
   })
 
   it('rejects a second suggestion for the same run and item', async () => {
