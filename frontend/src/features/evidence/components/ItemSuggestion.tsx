@@ -13,7 +13,15 @@ interface Props {
 
 /** The suggestion card of one checklist item, wired to the response flow. Renders nothing without a suggestion. */
 export default function ItemSuggestion({ itemId, flow, suggestion, decision, currentStatus }: Props) {
-  if (!suggestion) return null
+  if (!suggestion) {
+    // A failed answer-button decision on an item without a card still has to be told to the auditor.
+    const error = flow.errorFor(itemId)
+    return error ? (
+      <p role="alert" className="mt-3 text-sm text-rose-600">
+        {error}
+      </p>
+    ) : null
+  }
   return (
     <SuggestionCard
       suggestion={suggestion}

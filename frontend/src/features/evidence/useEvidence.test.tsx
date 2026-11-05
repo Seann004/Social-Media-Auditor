@@ -181,16 +181,31 @@ describe('useEvidence', () => {
     expect(result.current.resultRun?.id).toBe('run-1')
   })
 
-  it('shares one request among refresh calls made while one is in flight', async () => {
+  it('refresh calls made while one is in flight share one more load, not one each', async () => {
     getLatestRun.mockResolvedValueOnce(latest(makeRun()))
     const { result } = renderHook(() => useEvidence('p1', { enabled: true }))
     await settle()
     const slow = deferred<LatestRunResponse>()
-    getLatestRun.mockReturnValueOnce(slow.promise)
+    getLatestRun.mockReturnValueOnce(slow.promise).mockResolvedValue(latest(makeRun()))
     let all: Promise<unknown[]> = Promise.resolve([])
     act(() => { all = Promise.all([result.current.refresh(), result.current.refresh(), result.current.refresh()]) })
     await act(async () => { slow.resolve(latest(makeRun())); await all })
-    expect(getLatestRun).toHaveBeenCalledTimes(2)
+    expect(getLatestRun).toHaveBeenCalledTimes(3)
+  })
+
+  it('a refresh requested during another loads again, so the newest decision is not missed', async () => {
+    const stale = results()
+    const fresh: SuggestionsResponse = { run: makeRun(), suggestions: [makeSuggestion({ itemId: 'a' })], decisions: [makeDecision({ itemId: 'a' })] }
+    getLatestRun.mockResolvedValue(latest(makeRun()))
+    getSuggestions.mockResolvedValueOnce(results())
+    const { result } = renderHook(() => useEvidence('p1', { enabled: true }))
+    await settle()
+    const slow = deferred<SuggestionsResponse>()
+    getSuggestions.mockReturnValueOnce(slow.promise).mockResolvedValue(fresh)
+    let all: Promise<unknown[]> = Promise.resolve([])
+    act(() => { all = Promise.all([result.current.refresh(), result.current.refresh()]) })
+    await act(async () => { slow.resolve(stale); await all })
+    expect(result.current.decisionsByItem.has('a')).toBe(true)
   })
 
   it('rebuilds the maps instead of mutating them', async () => {

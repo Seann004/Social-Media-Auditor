@@ -401,6 +401,14 @@ export default function AuditPage() {
 
   // Accept / override of AI suggestions (card and answer buttons). Only an auditor decides, and not on a locked audit.
   const auditLocked = project?.submissionStatus === 'pending_review' || project?.submissionStatus === 'approved'
+  // Blur saves still running: a decision waits for them, so none lands after it and brings the old answer back.
+  const pendingSaves = useRef(new Set<Promise<unknown>>())
+  function trackSave<T>(save: Promise<T>): Promise<T> {
+    pendingSaves.current.add(save)
+    const forget = () => { pendingSaves.current.delete(save) }
+    save.then(forget, forget)
+    return save
+  }
   const responseFlow = useResponseFlow({
     projectId: id ?? '',
     canDecide: isAuditor && !auditLocked,
@@ -409,10 +417,20 @@ export default function AuditPage() {
       const typed = findingsValues[itemId]
       return typed !== undefined && typed !== (responses[`${id}__${itemId}`]?.findings ?? '') ? typed : undefined
     },
+    getUnsavedNotes: (itemId) => {
+      const typed = noteValues[itemId]
+      return typed !== undefined && typed !== (responses[`${id}__${itemId}`]?.notes ?? '') ? typed : undefined
+    },
+    settleSaves: async () => { await Promise.allSettled([...pendingSaves.current]) },
     onDecided: handleDecided,
   })
 
   // The store, compliance and evidence panel are updated by the flow; this is the page's own state.
+  /** Answer buttons are off on a locked audit, and while a decision for the item is posting. */
+  function answersDisabled(itemId: string): boolean {
+    return auditLocked || responseFlow.isBusy(itemId)
+  }
+
   function handleDecided(itemId: string, answer: AppliedAnswer, decision: 'accepted' | 'overridden') {
     const update = pageUpdateAfterDecision(answer, decision)
     const { findings, images } = update
@@ -552,13 +570,13 @@ export default function AuditPage() {
     const current = getResponse(itemId)
     const notes = textOnBlur(noteValues[itemId], current?.notes)
     if (current && current.status !== 'not_started') {
-      await setResponse(id!, itemId, guidelineId, current.status, notes)
+      await trackSave(setResponse(id!, itemId, guidelineId, current.status, notes))
     }
   }
 
   async function handleFindingsBlur(itemId: string) {
     const findings = textOnBlur(findingsValues[itemId], getResponse(itemId)?.findings)
-    await saveFindings(id!, itemId, findings)
+    await trackSave(saveFindings(id!, itemId, findings))
   }
 
   async function handleAddItem() {
@@ -1445,16 +1463,18 @@ helpText: newItemHelp.trim() || undefined,
                                 const isActive = currentStatus === value
                                 return (
                                   <motion.button key={value} type="button" whileTap={{ scale: 0.97 }}
+                                    disabled={answersDisabled(ci.id)}
                                     onClick={() => handleResponseClick(ci.id, ci.guidelineId, value)}
-                                    className={['flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ring-1 transition-all', isActive ? active : inactive].join(' ')}>
+                                    className={['flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ring-1 transition-all disabled:opacity-60 disabled:cursor-not-allowed', isActive ? active : inactive].join(' ')}>
                                     <Icon size={15} weight={isActive ? 'fill' : 'regular'} /> {label}
                                   </motion.button>
                                 )
                               })}
                               {/* Flag for Review */}
                               <motion.button type="button" whileTap={{ scale: 0.97 }}
+                                disabled={answersDisabled(ci.id)}
                                 onClick={() => handleResponseClick(ci.id, ci.guidelineId, 'needs_review')}
-                                className={['flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ring-1 transition-all',
+                                className={['flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ring-1 transition-all disabled:opacity-60 disabled:cursor-not-allowed',
                                   currentStatus === 'needs_review'
                                     ? 'bg-amber-500 text-white ring-amber-500'
                                     : 'bg-white text-slate-500 ring-slate-200 hover:ring-amber-300 hover:text-amber-600',
@@ -1514,6 +1534,7 @@ helpText: newItemHelp.trim() || undefined,
                                 value={findingsValues[ci.id] ?? getResponse(ci.id)?.findings ?? ''}
                                 onChange={(e) => setFindingsValues((prev) => ({ ...prev, [ci.id]: e.target.value }))}
                                 onBlur={() => handleFindingsBlur(ci.id)}
+                                readOnly={responseFlow.isBusy(ci.id)}
                                 placeholder="Describe what you observed on the platform…"
                                 rows={2}
                                 className="w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed"
@@ -1530,6 +1551,7 @@ helpText: newItemHelp.trim() || undefined,
                                   <textarea value={currentNotes}
                                     onChange={(e) => setNoteValues((prev) => ({ ...prev, [ci.id]: e.target.value }))}
                                     onBlur={() => handleNotesBlur(ci.id, ci.guidelineId)}
+                                    readOnly={responseFlow.isBusy(ci.id)}
                                     placeholder="Record evidence references or remediation notes…" rows={2}
                                     className="mt-3 w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed" />
                                 </motion.div>

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -35,12 +35,14 @@ interface HarnessProps {
   suggestion?: SuggestionView
   decision?: DecisionView | null
   unsaved?: string
+  unsavedNotes?: string
+  settleSaves?: () => Promise<void>
   onDecided?: (itemId: string, answer: AppliedAnswer, decision: 'accepted' | 'overridden') => void
   refresh?: () => Promise<void>
   onSave?: (status: ChecklistItemStatus) => void
 }
 
-function Harness({ canDecide = true, suggestion, decision = null, unsaved, onDecided = () => {}, refresh = () => Promise.resolve(), onSave }: HarnessProps) {
+function Harness({ canDecide = true, suggestion, decision = null, unsaved, unsavedNotes, settleSaves, onDecided = () => {}, refresh = () => Promise.resolve(), onSave }: HarnessProps) {
   const status = useStore((s) => s.responses[KEY]?.status)
   const suggestionsByItem = new Map(suggestion ? [[ITEM, suggestion]] : [])
   const decisionsByItem = new Map(decision ? [[ITEM, decision]] : [])
@@ -49,6 +51,8 @@ function Harness({ canDecide = true, suggestion, decision = null, unsaved, onDec
     canDecide,
     evidence: { suggestionsByItem, decisionsByItem, refresh },
     getUnsavedFindings: () => unsaved,
+    getUnsavedNotes: () => unsavedNotes,
+    settleSaves,
     onDecided,
   })
   const answers: [ChecklistItemStatus, string][] = [
@@ -64,6 +68,7 @@ function Harness({ canDecide = true, suggestion, decision = null, unsaved, onDec
         <button
           key={value}
           type="button"
+          disabled={flow.isBusy(ITEM)}
           onClick={async () => {
             if (await flow.handleClick(ITEM, value)) return
             onSave?.(value)
@@ -270,41 +275,48 @@ describe('after a decision', () => {
     spy.mockRestore()
   })
 
-  it('accept keeps typed unsaved findings: they are saved first, then the decision is posted', async () => {
-    const order: string[] = []
-    vi.mocked(db.saveAuditFindings).mockImplementation(async () => {
-      order.push('save')
-    })
-    postDecision.mockImplementation(async () => {
-      order.push('post')
-      return accepted({ findings: 'typed words' })
-    })
+  it('typed unsaved findings and notes travel with the decision; nothing is saved first', async () => {
+    postDecision.mockResolvedValue(accepted({ findings: 'typed words' }))
     setStatus('non_compliant')
-    render(<Harness suggestion={makeSuggestion()} unsaved="typed words" />)
+    render(<Harness suggestion={makeSuggestion()} unsaved="typed words" unsavedNotes="a note" />)
     await userEvent.click(screen.getByRole('button', { name: 'Accept suggestion' }))
     await waitFor(() => expect(status()).toBe('compliant'))
-    expect(db.saveAuditFindings).toHaveBeenCalledWith('p1', ITEM, 'u1', 'typed words')
-    expect(order).toEqual(['save', 'post'])
+    expect(postDecision).toHaveBeenCalledWith('s-1', { decision: 'accepted', origin: 'card', findings: 'typed words', notes: 'a note' })
+    expect(db.saveAuditFindings).not.toHaveBeenCalled()
     expect(useStore.getState().responses[KEY].findings).toBe('typed words')
   })
 
-  it('does not save findings when none are unsaved', async () => {
+  it('an override carries them too', async () => {
+    postDecision.mockResolvedValue(overridden('partially'))
+    render(<Harness suggestion={makeSuggestion()} unsaved="typed" />)
+    await userEvent.click(screen.getByRole('button', { name: /^override/i }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Partially' }))
+    await userEvent.type(screen.getByLabelText(/reason/i), 'because')
+    await userEvent.click(screen.getByRole('button', { name: /confirm/i }))
+    await waitFor(() => expect(status()).toBe('partially'))
+    expect(postDecision).toHaveBeenCalledWith('s-1', expect.objectContaining({ decision: 'overridden', findings: 'typed' }))
+    expect(postDecision.mock.calls[0][1]).not.toHaveProperty('notes')
+  })
+
+  it('sends neither field when nothing is unsaved', async () => {
     postDecision.mockResolvedValue(accepted())
     render(<Harness suggestion={makeSuggestion()} />)
     await userEvent.click(screen.getByRole('button', { name: /^accept/i }))
     await waitFor(() => expect(status()).toBe('compliant'))
-    expect(db.saveAuditFindings).not.toHaveBeenCalled()
+    expect(postDecision).toHaveBeenCalledWith('s-1', { decision: 'accepted', origin: 'card' })
   })
 
-  it('a failed findings save stops the decision and shows the error', async () => {
-    vi.mocked(db.saveAuditFindings).mockRejectedValue(new Error('offline'))
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    setStatus('non_compliant')
-    render(<Harness suggestion={makeSuggestion()} unsaved="typed words" />)
-    await userEvent.click(screen.getByRole('button', { name: 'Accept suggestion' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent(/findings/i)
+  it('waits for saves still in flight before posting', async () => {
+    let release!: () => void
+    const settleSaves = vi.fn(() => new Promise<void>((resolve) => { release = resolve }))
+    postDecision.mockResolvedValue(accepted())
+    render(<Harness suggestion={makeSuggestion()} settleSaves={settleSaves} />)
+    await userEvent.click(screen.getByRole('button', { name: /^accept/i }))
+    await waitFor(() => expect(settleSaves).toHaveBeenCalled())
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
     expect(postDecision).not.toHaveBeenCalled()
-    expect(status()).toBe('non_compliant')
+    await act(async () => release())
+    await waitFor(() => expect(postDecision).toHaveBeenCalledTimes(1))
   })
 })
 
@@ -344,6 +356,65 @@ describe('failures and double clicks', () => {
     await userEvent.click(screen.getByRole('button', { name: /confirm/i }))
     await waitFor(() => expect(status()).toBe('partially'))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('other answer clicks do nothing while that item is posting', async () => {
+    postDecision.mockReturnValue(new Promise(() => {}))
+    const onSave = vi.fn()
+    render(<Harness suggestion={makeSuggestion()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Yes' }))
+    await waitFor(() => expect(postDecision).toHaveBeenCalled())
+    expect(screen.getByRole('button', { name: 'Flag' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'No' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^override/i })).toBeDisabled()
+    expect(onSave).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('handleClick itself does nothing for an item in flight', async () => {
+    postDecision.mockReturnValue(new Promise(() => {}))
+    const { result } = renderHook(() =>
+      useResponseFlow({
+        projectId: 'p1',
+        canDecide: true,
+        evidence: { suggestionsByItem: new Map([[ITEM, makeSuggestion()]]), decisionsByItem: new Map(), refresh: () => Promise.resolve() },
+        getUnsavedFindings: () => undefined,
+        getUnsavedNotes: () => undefined,
+        onDecided: () => {},
+      }),
+    )
+    void act(() => void result.current.accept(ITEM))
+    await waitFor(() => expect(postDecision).toHaveBeenCalledTimes(1))
+    let took = false
+    await act(async () => { took = await result.current.handleClick(ITEM, 'partially') })
+    expect(took).toBe(true)
+    expect(result.current.dialogProps).toBeNull()
+    expect(postDecision).toHaveBeenCalledTimes(1)
+  })
+
+  it('accept does nothing when the flow cannot decide', async () => {
+    const { result } = renderHook(() =>
+      useResponseFlow({
+        projectId: 'p1',
+        canDecide: false,
+        evidence: { suggestionsByItem: new Map([[ITEM, makeSuggestion()]]), decisionsByItem: new Map(), refresh: () => Promise.resolve() },
+        getUnsavedFindings: () => undefined,
+        getUnsavedNotes: () => undefined,
+        onDecided: () => {},
+      }),
+    )
+    await act(async () => result.current.accept(ITEM))
+    expect(postDecision).not.toHaveBeenCalled()
+  })
+
+  it('a failed button-accept on an item with no card still shows the error', async () => {
+    setStatus('non_compliant')
+    postDecision.mockRejectedValue(new EvidenceApiError(409, 'This audit is locked.'))
+    const older = makeDecision({ suggestionId: 's-0', decision: 'overridden', finalResult: 'non_compliant', overrideReason: 'r', suggestedResult: 'yes' })
+    render(<Harness decision={older} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Yes' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('This audit is locked.')
+    expect(status()).toBe('non_compliant')
   })
 
   it('a double click sends one request', async () => {

@@ -161,12 +161,20 @@ export function useEvidence(projectId: string, options: { enabled: boolean }): U
       else failed(problems.find((p) => FATAL_STATUSES.has(p.status)) ?? problems[0], false)
     }
 
+    /** A refresh asked for during another: the one in flight may predate it, so load once more afterwards. */
+    let reloadAfter = false
     const refresh = (): Promise<void> => {
-      if (refreshing) return refreshing
+      if (refreshing) {
+        reloadAfter = true
+        return refreshing
+      }
       refreshing = (async () => {
         if (polling) await polling
         stopped = false
-        await loadAll()
+        do {
+          reloadAfter = false
+          await loadAll()
+        } while (reloadAfter && alive)
         refreshing = null
         schedule()
       })()

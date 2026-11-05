@@ -1,6 +1,7 @@
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSessions } from '../auth/session.js'
+import { MAX_DECISION_FINDINGS_CHARS, MAX_DECISION_NOTES_CHARS } from './config.js'
 import { P1, P2, USERS, makeWorld, seedResult, type TestUser, type World } from './routesTestKit.js'
 
 type Who = keyof typeof USERS
@@ -95,6 +96,20 @@ describe('who may do what', () => {
     expect(world.audit.applied).toMatchObject([{ projectId: P1, itemId: 'item-1', userId: USERS.auditor.userId }])
   })
 
+  it('passes typed findings and notes to the answer, and nothing when they are absent', async () => {
+    const { world, seeded } = await setup()
+    const res = await request(world.app)
+      .post(`/api/suggestions/${seeded.suggestionId}/decision`)
+      .set(world.auth(USERS.auditor))
+      .send({ decision: 'accepted', origin: 'answer_button', findings: 'typed findings', notes: 'typed notes' })
+    expect(res.status).toBe(200)
+    expect(world.audit.applied[0]).toMatchObject({ typedFindings: 'typed findings', notes: 'typed notes' })
+    const { world: w2, seeded: s2 } = await setup()
+    await request(w2.app).post(`/api/suggestions/${s2.suggestionId}/decision`).set(w2.auth(USERS.auditor)).send({ decision: 'accepted', origin: 'card' })
+    expect(w2.audit.applied[0]).not.toHaveProperty('typedFindings')
+    expect(w2.audit.applied[0]).not.toHaveProperty('notes')
+  })
+
   it('an auditor of one project cannot decide a suggestion of another project', async () => {
     const { world } = await setup()
     const other = await seedResult(world.repo, P2)
@@ -184,6 +199,10 @@ describe('validation', () => {
     [{ decision: 'overridden', origin: 'card', finalResult: 'bogus', overrideReason: 'because' }],
     [{ decision: 'overridden', origin: 'card', finalResult: 'non_compliant', overrideReason: 5 }],
     [{ decision: 'overridden', origin: 'card', finalResult: 'non_compliant', overrideReason: 'x'.repeat(2001) }],
+    [{ decision: 'accepted', origin: 'card', findings: 5 }],
+    [{ decision: 'accepted', origin: 'card', notes: { a: 1 } }],
+    [{ decision: 'accepted', origin: 'card', findings: 'x'.repeat(MAX_DECISION_FINDINGS_CHARS + 1) }],
+    [{ decision: 'accepted', origin: 'card', notes: 'x'.repeat(MAX_DECISION_NOTES_CHARS + 1) }],
   ])('rejects the decision body %j with 400', async (body) => {
     const { world, seeded } = await setup()
     const res = await request(world.app).post(`/api/suggestions/${seeded.suggestionId}/decision`).set(world.auth(USERS.auditor)).send(body)

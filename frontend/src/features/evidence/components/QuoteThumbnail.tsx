@@ -38,7 +38,15 @@ export default function QuoteThumbnail({ quoteId }: { quoteId: string }) {
         className="flex h-16 w-28 items-center justify-center overflow-hidden rounded-lg bg-slate-100 ring-1 ring-slate-200 hover:ring-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
       >
         {url ? (
-          <img src={url} alt="Screenshot of the quoted passage" className="h-full w-full object-cover" />
+          <img
+            src={url}
+            alt="Screenshot of the quoted passage"
+            onError={() => {
+              setUrl(null)
+              setFailed(true)
+            }}
+            className="h-full w-full object-cover"
+          />
         ) : (
           <span className="px-2 text-center text-[11px] text-slate-400">{failed ? 'Preview unavailable' : 'Loading…'}</span>
         )}

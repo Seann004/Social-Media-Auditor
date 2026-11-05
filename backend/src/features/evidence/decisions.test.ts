@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppliedAnswer, ApplyAnswerInput, AuditData } from './auditData.js'
-import { ACCEPTED_EVIDENCE_LINK_SECONDS, MAX_OVERRIDE_REASON_CHARS } from './config.js'
+import { ACCEPTED_EVIDENCE_LINK_SECONDS, MAX_DECISION_NOTES_CHARS, MAX_OVERRIDE_REASON_CHARS } from './config.js'
 import { DecisionError, latestDecisionPerItem, recordDecision } from './decisions.js'
 import { createMemoryRepository } from './memoryRepository.js'
 import type { NewSuggestion } from './repository.js'
@@ -70,6 +70,33 @@ const failsWith = async (p: Promise<unknown>, status: number) => {
   expect(err).toBeInstanceOf(DecisionError)
   expect((err as DecisionError).status).toBe(status)
 }
+
+describe('recordDecision typed text', () => {
+  it('passes typed findings and notes to the answer for an accept and for an override', async () => {
+    const w = makeWorld()
+    const s = await seed(w)
+    await recordDecision({ suggestionId: s.id, userId: 'u1', decision: 'accepted', origin: 'answer_button', findings: 'F', notes: 'N' }, w.deps)
+    expect(w.applied[0]).toMatchObject({ typedFindings: 'F', notes: 'N' })
+    await override(w, s.id, { findings: 'F2', notes: '' })
+    expect(w.applied[1]).toMatchObject({ typedFindings: 'F2', notes: '' })
+  })
+
+  it('leaves both out when the request has neither', async () => {
+    const w = makeWorld()
+    const s = await seed(w)
+    await accept(w, s.id)
+    expect(w.applied[0]).not.toHaveProperty('typedFindings')
+    expect(w.applied[0]).not.toHaveProperty('notes')
+  })
+
+  it('rejects text that is not a string, or too long, before writing anything', async () => {
+    const w = makeWorld()
+    const s = await seed(w)
+    await failsWith(recordDecision({ suggestionId: s.id, userId: 'u1', decision: 'accepted', origin: 'card', findings: 5 as never }, w.deps), 422)
+    await failsWith(recordDecision({ suggestionId: s.id, userId: 'u1', decision: 'accepted', origin: 'card', notes: 'x'.repeat(MAX_DECISION_NOTES_CHARS + 1) }, w.deps), 422)
+    expect(w.applied).toHaveLength(0)
+  })
+})
 
 describe('recordDecision', () => {
   let w: World

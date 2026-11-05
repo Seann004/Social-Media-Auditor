@@ -38,7 +38,13 @@ export default function OverrideDialog({ suggestedLabel, presetResult, excludeRe
   const canConfirm = !busy && result !== null && trimmed.length >= MIN_REASON
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+    // A press on the backdrop must not move focus out of the dialog (Escape and the Tab trap would stop).
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) e.preventDefault()
+      }}
+    >
       <div
         ref={root}
         role="dialog"

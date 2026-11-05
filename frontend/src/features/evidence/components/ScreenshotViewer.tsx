@@ -61,7 +61,14 @@ export default function ScreenshotViewer({ kind, id, label, onClose }: Props) {
             {loaded.message}
           </p>
         )}
-        {loaded.state === 'ready' && <img src={loaded.url} alt={label} className="mx-auto h-auto max-w-full rounded-lg" />}
+        {loaded.state === 'ready' && (
+          <img
+            src={loaded.url}
+            alt={label}
+            onError={() => setLoaded({ state: 'failed', message: 'The screenshot could not be loaded.' })}
+            className="mx-auto h-auto max-w-full rounded-lg"
+          />
+        )}
       </div>
     </div>
   )

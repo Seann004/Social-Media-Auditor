@@ -50,6 +50,9 @@ export const RUN_UPDATE_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 5_00
 
 // Decisions
 export const MAX_OVERRIDE_REASON_CHARS = 2_000
+/** Text the auditor typed that travels with a decision. The older save routes have no cap, so these are generous. */
+export const MAX_DECISION_FINDINGS_CHARS = 50_000
+export const MAX_DECISION_NOTES_CHARS = 10_000
 /** Submission statuses in which the audit's answers can no longer change. */
 export const LOCKED_SUBMISSION_STATUSES: readonly string[] = ['pending_review', 'approved']
 

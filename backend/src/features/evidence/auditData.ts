@@ -33,6 +33,13 @@ export interface ApplyAnswerInput {
   userId: string
   guidelineId: string
   result: AnswerStatus
+  /** Notes the auditor typed and had not saved: used instead of their stored notes. */
+  notes?: string
+  /**
+   * Findings the auditor typed and had not saved (ignored when blank). On accept they come first in the
+   * merge, in place of the auditor's own stored text. On override they go to the auditor's own row only.
+   */
+  typedFindings?: string
   /** Accept only: used when no auditor has written findings on the item. */
   findingsIfEmpty?: string
   /** Accept only: added after the photos already on the item. */
@@ -219,16 +226,26 @@ export function createAuditData(opts: AuditDataOptions = {}): AuditData {
       // The deciding auditor's notes, so the upsert does not blank them.
       const before = await readRows('resultId,userId,notes', 'notes')
       const ownBefore = before.find((r) => r.userId === userId)
-      await (await db()).upsertAuditResult(projectId, itemId, userId, guidelineId, result, ownBefore?.notes ?? '')
+      await (await db()).upsertAuditResult(projectId, itemId, userId, guidelineId, result, input.notes ?? ownBefore?.notes ?? '')
 
       // Read after the upsert, so anything saved while it ran is merged rather than overwritten.
-      const rows = orderRows(await readRows('resultId,userId,findings,evidenceImages', 'findings and photos'), userId)
+      const stored = orderRows(await readRows('resultId,userId,findings,evidenceImages', 'findings and photos'), userId)
+      const typed = input.typedFindings?.trim() ? input.typedFindings : undefined
+      // What the auditor typed stands in for their own stored text (the box they edited showed it).
+      const rows = typed === undefined ? stored : stored.map((r) => (r.userId === userId ? { ...r, findings: typed } : r))
       const own = rows.find((r) => r.userId === userId)
 
       const fail = (e: { message: string } | null) => {
         if (e) throw new Error(`Could not save the answer for the item: ${e.message}`)
       }
       const itemRows = () => client.from('Audit_Result').update({ result }).eq('projectId', projectId).eq('itemId', itemId)
+
+      if (!accepting && typed !== undefined) {
+        fail((await itemRows()).error)
+        const mine = await client.from('Audit_Result').update({ findings: typed }).eq('projectId', projectId).eq('itemId', itemId).eq('userId', userId)
+        fail(mine.error)
+        return { itemId, status: result, findings: typed, evidenceImages: own?.evidenceImages ?? [] }
+      }
 
       if (!accepting) {
         // An empty row of the auditor's own (new, or left empty by a failed earlier try) would otherwise

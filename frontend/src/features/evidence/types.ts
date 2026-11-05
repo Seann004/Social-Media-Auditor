@@ -147,6 +147,10 @@ export interface DecisionRequest {
   origin: 'card' | 'answer_button'
   finalResult?: AnswerStatus
   overrideReason?: string
+  /** Findings typed and not yet saved. The server writes them with the decision. */
+  findings?: string
+  /** Notes typed and not yet saved. */
+  notes?: string
 }
 export interface DecisionResponse {
   decision: DecisionView

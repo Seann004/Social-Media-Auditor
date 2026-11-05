@@ -5,6 +5,8 @@ import type { AuditData, ProjectAccess } from './auditData.js'
 import {
   API_REQUESTS_PER_MINUTE,
   MAX_BODY_SIZE,
+  MAX_DECISION_FINDINGS_CHARS,
+  MAX_DECISION_NOTES_CHARS,
   MAX_OVERRIDE_REASON_CHARS,
   MAX_PERMISSION_NOTE_CHARS,
   MAX_START_URLS,
@@ -52,6 +54,8 @@ const decisionBody = z.object({
   origin: z.enum(['card', 'answer_button']),
   finalResult: z.enum(['compliant', 'non_compliant', 'partially', 'not_applicable']).optional(),
   overrideReason: z.string().max(MAX_OVERRIDE_REASON_CHARS).optional(),
+  findings: z.string().max(MAX_DECISION_FINDINGS_CHARS).optional(),
+  notes: z.string().max(MAX_DECISION_NOTES_CHARS).optional(),
 })
 
 const invalid = (res: Response): void => {

@@ -7,7 +7,6 @@ import { responseAction, toAnswerStatus } from './state'
 import type { AnswerStatus, AppliedAnswer, DecisionRequest, DecisionView, SuggestedResult, SuggestionView } from './types'
 import type { UseEvidenceResult } from './useEvidence'
 
-const FINDINGS_SAVE_MESSAGE = 'Your findings could not be saved, so nothing was decided. Check your connection and try again.'
 const GENERIC_MESSAGE = 'The decision could not be saved. Check your connection and try again.'
 
 export interface ResponseFlowOptions {
@@ -17,6 +16,10 @@ export interface ResponseFlowOptions {
   evidence: Pick<UseEvidenceResult, 'suggestionsByItem' | 'decisionsByItem' | 'refresh'>
   /** Text typed in the findings box and not yet saved, or undefined. */
   getUnsavedFindings: (itemId: string) => string | undefined
+  /** Text typed in the notes box and not yet saved, or undefined. */
+  getUnsavedNotes: (itemId: string) => string | undefined
+  /** Resolves when saves started by the page (blur saves) have finished, so none lands after the decision. */
+  settleSaves?: () => Promise<void>
   /** Page-local follow-up once the decision is saved (findings box, photos). */
   onDecided: (itemId: string, answer: AppliedAnswer, decision: 'accepted' | 'overridden') => void
 }
@@ -43,15 +46,12 @@ interface DialogState {
   presetResult?: AnswerStatus
 }
 
-class FindingsSaveError extends Error {}
-
 function messageOf(err: unknown): string {
-  if (err instanceof FindingsSaveError) return FINDINGS_SAVE_MESSAGE
   return err instanceof EvidenceApiError ? err.message : GENERIC_MESSAGE
 }
 
 export function useResponseFlow(options: ResponseFlowOptions): ResponseFlow {
-  const { projectId, canDecide, evidence, getUnsavedFindings, onDecided } = options
+  const { projectId, canDecide, evidence, getUnsavedFindings, getUnsavedNotes, settleSaves, onDecided } = options
   const responses = useStore((s) => s.responses)
   const [busyItems, setBusyItems] = useState<ReadonlySet<string>>(new Set())
   const [errors, setErrors] = useState<Readonly<Record<string, string>>>({})
@@ -76,16 +76,16 @@ export function useResponseFlow(options: ResponseFlowOptions): ResponseFlow {
       setBusyItems((prev) => new Set(prev).add(itemId))
       setError(itemId, null)
       try {
-        const unsaved = getUnsavedFindings(itemId)
-        if (unsaved !== undefined) {
-          try {
-            await useStore.getState().saveFindings(projectId, itemId, unsaved)
-          } catch (err) {
-            console.error('[useResponseFlow] Could not save findings before the decision:', err)
-            throw new FindingsSaveError()
-          }
-        }
-        const { decision, answer } = await postDecision(suggestionId, body)
+        // A blur save still running could land after the decision and bring the old answer back.
+        await settleSaves?.()
+        // Typed text travels with the decision: the server writes it for this auditor, who may have no row yet.
+        const findings = getUnsavedFindings(itemId)
+        const notes = getUnsavedNotes(itemId)
+        const { decision, answer } = await postDecision(suggestionId, {
+          ...body,
+          ...(findings !== undefined ? { findings } : {}),
+          ...(notes !== undefined ? { notes } : {}),
+        })
         const store = useStore.getState()
         store.applyServerAnswer(projectId, itemId, { status: answer.status, findings: answer.findings })
         try {
@@ -110,11 +110,12 @@ export function useResponseFlow(options: ResponseFlowOptions): ResponseFlow {
         })
       }
     },
-    [projectId, getUnsavedFindings, onDecided, evidence],
+    [projectId, getUnsavedFindings, getUnsavedNotes, settleSaves, onDecided, evidence],
   )
 
   const handleClick = async (itemId: string, clicked: ChecklistItemStatus): Promise<boolean> => {
     if (!canDecide) return false
+    if (inFlight.current.has(itemId)) return true // a decision is posting: this click is not a new answer
     const suggestion = suggestionOf(itemId)
     const decision = decisionOf(itemId)
     const next = responseAction({ suggestion, decision, currentStatus: statusOf(itemId), clicked })
@@ -142,7 +143,7 @@ export function useResponseFlow(options: ResponseFlowOptions): ResponseFlow {
 
   const openOverride = (itemId: string, mode: 'override' | 'keep' = 'override'): void => {
     const suggestion = suggestionOf(itemId)
-    if (!canDecide || !suggestion || suggestion.suggestedResult === null) return
+    if (!canDecide || inFlight.current.has(itemId) || !suggestion || suggestion.suggestedResult === null) return
     const current = statusOf(itemId)
     const keep = mode === 'keep' && current !== undefined && current !== 'needs_review' && current !== 'not_started'
     setError(itemId, null)

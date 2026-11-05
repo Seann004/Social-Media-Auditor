@@ -178,6 +178,65 @@ describe('applyAnswer', () => {
     expect(out).toMatchObject({ status: 'non_compliant', findings: 'F1', evidenceImages: [mine] })
   })
 
+  describe('typed text that travels with the decision', () => {
+    it('notes given go to the upsert instead of the stored notes (also when empty)', async () => {
+      await w.audit.applyAnswer({ ...base, notes: 'typed note' })
+      expect(w.upsert).toHaveBeenLastCalledWith('p1', 'i1', 'u1', 'g1', 'compliant', 'typed note')
+      await w.audit.applyAnswer({ ...base, notes: '' })
+      expect(w.upsert).toHaveBeenLastCalledWith('p1', 'i1', 'u1', 'g1', 'compliant', '')
+    })
+
+    it('a first answer by an auditor with no row keeps the note they typed', async () => {
+      const w2 = world([row('u2')])
+      await w2.audit.applyAnswer({ ...base, notes: 'first note' })
+      expect(w2.rows.find((r) => r.userId === 'u1')?.notes).toBe('first note')
+    })
+
+    it('accept: typed findings come first in the merge, replacing the auditor own stored text', async () => {
+      w.rows[0].findings = 'old own'
+      w.rows[1].findings = 'From u2'
+      const out = await w.audit.applyAnswer({ ...base, findingsIfEmpty: 'AI', typedFindings: 'typed' })
+      expect(w.rows.map((r) => r.findings)).toEqual(['typed\n\nFrom u2', 'typed\n\nFrom u2'])
+      expect(out.findings).toBe('typed\n\nFrom u2')
+    })
+
+    it('accept by an auditor with no row: the typed text is kept, not the fallback, and not lost', async () => {
+      const w2 = world([row('u2')])
+      const out = await w2.audit.applyAnswer({ ...base, findingsIfEmpty: 'AI', typedFindings: 'typed' })
+      expect(out.findings).toBe('typed')
+      expect(w2.rows.map((r) => r.findings)).toEqual(['typed', 'typed'])
+    })
+
+    it('accept: blank typed findings are ignored', async () => {
+      w.rows[0].findings = 'own'
+      await w.audit.applyAnswer({ ...base, findingsIfEmpty: 'AI', typedFindings: '   ' })
+      expect(w.rows.map((r) => r.findings)).toEqual(['own', 'own'])
+    })
+
+    it('override: typed findings go to the deciding auditor own row only', async () => {
+      w.rows[0].findings = 'old own'
+      w.rows[1].findings = 'From u2'
+      const out = await w.audit.applyAnswer({ ...base, result: 'non_compliant', typedFindings: 'typed' })
+      expect(w.rows.map((r) => r.findings)).toEqual(['typed', 'From u2'])
+      expect(w.rows.map((r) => r.result)).toEqual(['non_compliant', 'non_compliant'])
+      expect(out.findings).toBe('typed')
+    })
+
+    it('override by an auditor with no row: their new row gets the text, other rows stay as they were', async () => {
+      const w2 = world([row('u2', { findings: 'From u2' })])
+      const out = await w2.audit.applyAnswer({ ...base, result: 'non_compliant', typedFindings: 'typed' })
+      expect(w2.rows.find((r) => r.userId === 'u1')?.findings).toBe('typed')
+      expect(w2.rows.find((r) => r.userId === 'u2')?.findings).toBe('From u2')
+      expect(out.findings).toBe('typed')
+    })
+
+    it('override: blank typed findings leave everything as before', async () => {
+      w.rows[0].findings = 'own'
+      await w.audit.applyAnswer({ ...base, result: 'non_compliant', typedFindings: ' ' })
+      expect(w.rows.map((r) => r.findings)).toEqual(['own', null])
+    })
+  })
+
   it('throws when the update fails', async () => {
     w.failUpdate()
     await expect(w.audit.applyAnswer(base)).rejects.toThrow(/update refused/)

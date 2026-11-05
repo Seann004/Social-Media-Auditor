@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -217,6 +217,41 @@ describe('SuggestionCard', () => {
     expect(props.onAccept).toHaveBeenCalled()
   })
 
+  it('never loads a javascript: or data: screenshot link as a picture', async () => {
+    getScreenshotUrl.mockResolvedValue('javascript:alert(1)')
+    renderCard()
+    expect(await screen.findByText(/preview unavailable/i)).toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(document.querySelector('img')).toBeNull()
+  })
+
+  it('shows the placeholder when the picture itself fails to load', async () => {
+    renderCard()
+    const img = await screen.findByRole('img')
+    fireEvent.error(img)
+    expect(await screen.findByText(/preview unavailable/i)).toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('the viewer refuses a javascript: link and shows a failure instead of a picture', async () => {
+    getScreenshotUrl.mockResolvedValueOnce('https://files.example/thumb.jpg').mockResolvedValueOnce('javascript:alert(1)')
+    renderCard()
+    await userEvent.click(await screen.findByRole('button', { name: /enlarge/i }))
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByRole('alert')).toBeInTheDocument()
+    expect(within(dialog).queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('the viewer shows a failure when its picture fails to load', async () => {
+    getScreenshotUrl.mockResolvedValue('https://files.example/x.jpg')
+    renderCard()
+    await userEvent.click(await screen.findByRole('button', { name: /enlarge/i }))
+    const dialog = await screen.findByRole('dialog')
+    const img = await within(dialog).findByRole('img')
+    fireEvent.error(img)
+    expect(await within(dialog).findByRole('alert')).toBeInTheDocument()
+  })
+
   it('opens the viewer with a fresh link, closes it on Escape and returns focus', async () => {
     getScreenshotUrl.mockResolvedValueOnce('https://files.example/thumb.jpg').mockResolvedValueOnce('https://files.example/fresh.jpg')
     renderCard()
@@ -250,6 +285,26 @@ describe('OverrideDialog', () => {
     expect(confirm).toBeEnabled()
     await userEvent.click(confirm)
     expect(props.onConfirm).toHaveBeenCalledWith('non_compliant', 'a bc')
+  })
+
+  it('a reason of 2 characters is refused, 3 is enough, padding does not count', async () => {
+    renderDialog({ presetResult: 'partially' })
+    const confirm = screen.getByRole('button', { name: /confirm/i })
+    const box = screen.getByLabelText(/reason/i)
+    await userEvent.type(box, '  ab  ')
+    expect(confirm).toBeDisabled()
+    await userEvent.clear(box)
+    await userEvent.type(box, 'abc')
+    expect(confirm).toBeEnabled()
+  })
+
+  it('a click on the backdrop keeps focus inside, so Escape still closes', async () => {
+    const props = renderDialog()
+    const overlay = screen.getByRole('dialog').parentElement as HTMLElement
+    await userEvent.click(overlay)
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true)
+    await userEvent.keyboard('{Escape}')
+    expect(props.onCancel).toHaveBeenCalled()
   })
 
   it('is labelled, starts with the preset chosen, and omits the AI result', () => {

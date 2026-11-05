@@ -2,6 +2,8 @@ import type { AppliedAnswer, AuditData, EvidenceImage } from './auditData.js'
 import {
   ACCEPTED_EVIDENCE_LINK_SECONDS,
   LOCKED_SUBMISSION_STATUSES,
+  MAX_DECISION_FINDINGS_CHARS,
+  MAX_DECISION_NOTES_CHARS,
   MAX_HIGHLIGHTS_PER_SUGGESTION,
   MAX_OVERRIDE_REASON_CHARS,
 } from './config.js'
@@ -31,6 +33,10 @@ export interface DecisionInput {
   finalResult?: AnswerStatus
   overrideReason?: string
   origin: 'card' | 'answer_button'
+  /** Findings the auditor typed and had not saved. */
+  findings?: string
+  /** Notes the auditor typed and had not saved. */
+  notes?: string
 }
 
 export interface DecisionDeps {
@@ -91,10 +97,18 @@ interface Plan {
   overrideReason: string | null
 }
 
+function checkText(value: unknown, what: string, max: number): void {
+  if (value === undefined) return
+  if (typeof value !== 'string') throw new DecisionError(`${what} must be text.`, 422)
+  if (value.length > max) throw new DecisionError(`${what} can be at most ${max} characters.`, 422)
+}
+
 /** The shape of the request, checked before anything is read or written. */
 function checkShape(input: DecisionInput): void {
   if (!DECISIONS.includes(input.decision)) throw new DecisionError('The decision must be accepted or overridden.', 422)
   if (!ORIGINS.includes(input.origin)) throw new DecisionError('The origin must be card or answer_button.', 422)
+  checkText(input.findings, 'The findings', MAX_DECISION_FINDINGS_CHARS)
+  checkText(input.notes, 'The notes', MAX_DECISION_NOTES_CHARS)
   if (input.decision !== 'overridden') return
   const reason = input.overrideReason
   if (reason !== undefined && typeof reason !== 'string') throw new DecisionError('The reason must be text.', 422)
@@ -152,6 +166,8 @@ export async function recordDecision(
     guidelineId: item.guidelineId,
     userId: input.userId,
     result,
+    ...(input.findings !== undefined ? { typedFindings: input.findings } : {}),
+    ...(input.notes !== undefined ? { notes: input.notes } : {}),
     ...(accepting ? { findingsIfEmpty: suggestion.reason, addImages: await signEvidence(suggestion, deps) } : {}),
   })
 
