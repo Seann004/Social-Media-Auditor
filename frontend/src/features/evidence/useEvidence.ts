@@ -77,6 +77,8 @@ export function useEvidence(projectId: string, options: { enabled: boolean }): U
     let failures = 0
     let latestIsActive = false
     let stopped = false
+    /** A finished run whose suggestions have not been fetched yet: keep retrying until they arrive. */
+    let suggestionsPending = false
 
     const applyLatest = (res: LatestRunResponse): void => {
       latestIsActive = isActive(res.run)
@@ -108,7 +110,7 @@ export function useEvidence(projectId: string, options: { enabled: boolean }): U
     }
 
     const schedule = (): void => {
-      if (!alive || stopped || !latestIsActive || timer !== undefined) return
+      if (!alive || stopped || !(latestIsActive || suggestionsPending) || timer !== undefined) return
       timer = setTimeout(() => {
         timer = undefined
         void poll()
@@ -121,11 +123,12 @@ export function useEvidence(projectId: string, options: { enabled: boolean }): U
         const res = await getLatestRun(projectId)
         if (!alive) return
         applyLatest(res)
-        if (wasActive && !latestIsActive) {
-          // Finished (or swept as failed): fetch the suggestions once.
+        if (wasActive && !latestIsActive) suggestionsPending = true // finished, or swept as failed
+        if (suggestionsPending) {
           const suggestions = await getSuggestions(projectId)
           if (!alive) return
           applySuggestions(suggestions)
+          suggestionsPending = false
         }
         succeeded()
       } catch (err) {
@@ -145,7 +148,12 @@ export function useEvidence(projectId: string, options: { enabled: boolean }): U
       const [latest, suggestions] = await Promise.allSettled([getLatestRun(projectId), getSuggestions(projectId)])
       if (!alive) return
       if (latest.status === 'fulfilled') applyLatest(latest.value)
-      if (suggestions.status === 'fulfilled') applySuggestions(suggestions.value)
+      if (suggestions.status === 'fulfilled') {
+        applySuggestions(suggestions.value)
+        suggestionsPending = false
+      } else if (latest.status === 'fulfilled' && !latestIsActive) {
+        suggestionsPending = true
+      }
       const problems = [latest, suggestions]
         .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
         .map((r) => toApiError(r.reason))

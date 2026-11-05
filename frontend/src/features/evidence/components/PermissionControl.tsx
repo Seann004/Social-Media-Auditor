@@ -3,7 +3,8 @@ import type { EvidencePermission } from '../types'
 
 interface Props {
   permission: EvidencePermission | null
-  onSave(granted: boolean, note: string | undefined): Promise<void>
+  /** Resolves to an error sentence, or null when saved. */
+  onSave(granted: boolean, note: string | undefined): Promise<string | null>
 }
 
 /** Head Auditor only: records that the platform gave permission to read its pages. */
@@ -13,13 +14,19 @@ export default function PermissionControl({ permission, onSave }: Props) {
   const [granted, setGranted] = useState(savedGranted)
   const [note, setNote] = useState(savedNote)
   const [saving, setSaving] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
   const unchanged = granted === savedGranted && note.trim() === savedNote.trim()
 
   async function save(): Promise<void> {
     if (saving) return
     setSaving(true)
+    setProblem(null)
     try {
-      await onSave(granted, note.trim() === '' ? undefined : note.trim())
+      const failure = await onSave(granted, note.trim() === '' ? undefined : note.trim())
+      if (failure !== null) {
+        setProblem(failure)
+        setGranted(savedGranted)
+      }
     } finally {
       setSaving(false)
     }
@@ -47,6 +54,7 @@ export default function PermissionControl({ permission, onSave }: Props) {
             type="text"
             value={note}
             onChange={(e) => setNote(e.target.value)}
+            maxLength={500}
             className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
@@ -59,6 +67,7 @@ export default function PermissionControl({ permission, onSave }: Props) {
           Save permission
         </button>
       </div>
+      {problem ? <p role="alert" className="text-xs text-rose-600">{problem}</p> : null}
     </div>
   )
 }

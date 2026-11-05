@@ -33,9 +33,9 @@ const m = {
   getSuggestions: vi.mocked(api.getSuggestions),
 }
 
-function Harness({ role = 'auditor', locked = false }: { role?: UserRole; locked?: boolean }) {
-  const evidence = useEvidence('p1', { enabled: role !== 'admin' })
-  return <EvidencePanel projectId="p1" role={role} evidence={evidence} locked={locked} />
+function Harness({ role = 'auditor', locked = false, projectId = 'p1' }: { role?: UserRole; locked?: boolean; projectId?: string }) {
+  const evidence = useEvidence(projectId, { enabled: role !== 'admin' })
+  return <EvidencePanel projectId={projectId} role={role} evidence={evidence} locked={locked} />
 }
 
 const sources = (urls: string[] = ['https://a.example/'], granted = false): SourcesResponse => ({
@@ -320,5 +320,94 @@ describe('EvidencePanel', () => {
     expect(screen.getAllByRole('link')).toHaveLength(1)
     expect(screen.getByText('javascript:alert(1)')).toBeInTheDocument()
     expect(screen.getByText('Bad <b>html</b>')).toBeInTheDocument()
+  })
+  it('shows a failed sources load with a retry, and keeps Run unavailable until it loads', async () => {
+    const user = userEvent.setup()
+    m.getSources.mockRejectedValueOnce(new EvidenceApiError(500, 'Something went wrong on the server.'))
+    render(<Harness />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong on the server.')
+    expect(runButton()).toBeDisabled()
+    expect(screen.queryByLabelText(/website links/i)).toBeNull()
+    await user.click(screen.getByRole('button', { name: /try again/i }))
+    await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://a.example/'))
+    expect(runButton()).toBeEnabled()
+  })
+
+  it('shows a non-blocking load error in an alert', async () => {
+    m.getLatestRun.mockRejectedValue(new EvidenceApiError(500, 'Something went wrong on the server.'))
+    render(<Harness />)
+    expect(await screen.findByText('Something went wrong on the server.')).toBeInTheDocument()
+    expect(screen.getAllByRole('alert').some((a) => a.textContent?.includes('Something went wrong'))).toBe(true)
+  })
+
+  it('shows one plain line and nothing else on a 403', async () => {
+    const sentence = 'You do not have access to this project.'
+    m.getLatestRun.mockRejectedValue(new EvidenceApiError(403, sentence))
+    m.getSuggestions.mockRejectedValue(new EvidenceApiError(403, sentence))
+    m.getSources.mockRejectedValue(new EvidenceApiError(403, sentence))
+    render(<Harness />)
+    expect(await screen.findByText(sentence)).toBeInTheDocument()
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.queryByText(/loading/i)).toBeNull()
+  })
+
+  it('puts the checkbox back and shows the error when saving the permission fails', async () => {
+    const user = userEvent.setup()
+    m.setPermission.mockRejectedValue(new EvidenceApiError(500, 'Could not record the permission.'))
+    render(<Harness role="head_auditor" />)
+    const box = await screen.findByRole('checkbox', { name: /permission/i })
+    await user.click(box)
+    expect(box).toBeChecked()
+    await user.click(screen.getByRole('button', { name: /save permission/i }))
+    expect(await screen.findByText('Could not record the permission.')).toBeInTheDocument()
+    expect(box).not.toBeChecked()
+    expect(screen.getByLabelText(/note/i)).toHaveAttribute('maxlength', '500')
+  })
+
+  it('does not let a pending save from one project land on the next', async () => {
+    const user = userEvent.setup()
+    const pendingSave = deferred<{ source: NonNullable<SourcesResponse['source']> }>()
+    m.getSources.mockImplementation(async (id) => (id === 'pB' ? sources(['https://b.example/']) : sources(['https://a.example/'])))
+    m.saveSources.mockReturnValue(pendingSave.promise)
+    m.startRun.mockResolvedValue({ run: running() })
+    const view = render(<Harness projectId="pA" />)
+    const box = await screen.findByLabelText(/website links/i)
+    await waitFor(() => expect(box).toHaveValue('https://a.example/'))
+    await user.type(box, '{Enter}https://a2.example/')
+    await user.click(runButton())
+    view.rerender(<Harness projectId="pB" />)
+    await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://b.example/'))
+    await act(async () => { pendingSave.resolve({ source: sources().source! }) })
+    m.getLatestRun.mockResolvedValue(latest(null))
+    await user.click(runButton())
+    expect(m.saveSources).toHaveBeenCalledTimes(1)
+    expect(m.startRun).toHaveBeenCalledWith('pB')
+  })
+
+  it('recovers from a 503 on Run once the user tries again', async () => {
+    const user = userEvent.setup()
+    m.startRun.mockRejectedValue(new EvidenceApiError(503, 'The service is temporarily unavailable.'))
+    render(<Harness />)
+    await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://a.example/'))
+    await user.click(runButton())
+    expect(await screen.findByText('The service is temporarily unavailable.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^run/i })).toBeNull()
+    await user.click(screen.getByRole('button', { name: /try again/i }))
+    expect(await screen.findByRole('button', { name: /^run/i })).toBeEnabled()
+  })
+
+  it('keeps the buttons disabled until the refresh after an action has finished', async () => {
+    const user = userEvent.setup()
+    m.startRun.mockResolvedValue({ run: makeRun({ id: 'run-3', status: 'completed' }) })
+    render(<Harness />)
+    await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://a.example/'))
+    const slow = deferred<LatestRunResponse>()
+    m.getLatestRun.mockReturnValue(slow.promise)
+    await user.click(runButton())
+    await waitFor(() => expect(m.startRun).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+    expect(runButton()).toBeDisabled()
+    await act(async () => { slow.resolve(latest(makeRun({ id: 'run-3' }))) })
+    await waitFor(() => expect(runButton()).toBeEnabled())
   })
 })

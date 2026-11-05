@@ -17,6 +17,7 @@ const getSuggestions = vi.mocked(api.getSuggestions)
 const active = (status: 'queued' | 'capturing' | 'assessing' = 'capturing') =>
   makeRun({ id: 'run-2', status, finishedAt: null })
 const latest = (run: ReturnType<typeof makeRun> | null): LatestRunResponse => ({ run, pages: run ? [makePage()] : [] })
+const results = (): SuggestionsResponse => ({ run: null, suggestions: [], decisions: [] })
 const sugg = (): SuggestionsResponse => ({
   run: makeRun(),
   suggestions: [makeSuggestion({ itemId: 'a' }), makeSuggestion({ id: 's-2', itemId: 'b' })],
@@ -200,5 +201,57 @@ describe('useEvidence', () => {
     await act(async () => { await result.current.refresh() })
     expect(result.current.suggestionsByItem).not.toBe(before)
     expect(before.size).toBe(2)
+  })
+  it('keeps retrying the suggestions after a run finishes, showing an error after several failures', async () => {
+    getLatestRun.mockResolvedValueOnce(latest(active())).mockResolvedValue(latest(makeRun({ id: 'run-2' })))
+    getSuggestions
+      .mockResolvedValueOnce(results())
+      .mockRejectedValueOnce(new EvidenceApiError(500, 'x'))
+      .mockRejectedValueOnce(new EvidenceApiError(500, 'x'))
+      .mockRejectedValueOnce(new EvidenceApiError(500, 'x'))
+      .mockResolvedValue(sugg())
+    const { result } = renderHook(() => useEvidence('p1', { enabled: true }))
+    await settle()
+    await tick(3000)
+    await tick(3000)
+    expect(result.current.error).toBeNull()
+    await tick(3000)
+    expect(result.current.error?.status).toBe(500)
+    expect(result.current.suggestionsByItem.size).toBe(0)
+    await tick(3000)
+    expect(result.current.error).toBeNull()
+    expect(result.current.suggestionsByItem.size).toBe(2)
+    const calls = getSuggestions.mock.calls.length
+    await tick(30_000)
+    expect(getSuggestions.mock.calls.length).toBe(calls)
+  })
+
+  it('does not poll while a refresh is in flight', async () => {
+    getLatestRun.mockResolvedValueOnce(latest(active()))
+    const { result } = renderHook(() => useEvidence('p1', { enabled: true }))
+    await settle()
+    const slow = deferred<LatestRunResponse>()
+    getLatestRun.mockReturnValueOnce(slow.promise)
+    let pending: Promise<void> = Promise.resolve()
+    act(() => { pending = result.current.refresh() })
+    await tick(10_000) // the poll timer fires meanwhile
+    expect(getLatestRun).toHaveBeenCalledTimes(2)
+    getLatestRun.mockResolvedValue(latest(active()))
+    await act(async () => { slow.resolve(latest(active())); await pending })
+  })
+
+  it('waits for an in-flight poll before a refresh starts its own requests', async () => {
+    const slow = deferred<LatestRunResponse>()
+    getLatestRun.mockResolvedValueOnce(latest(active())).mockReturnValueOnce(slow.promise)
+    const { result } = renderHook(() => useEvidence('p1', { enabled: true }))
+    await settle()
+    await tick(3000) // poll in flight
+    let pending: Promise<void> = Promise.resolve()
+    act(() => { pending = result.current.refresh() })
+    await settle()
+    expect(getLatestRun).toHaveBeenCalledTimes(2)
+    getLatestRun.mockResolvedValue(latest(active()))
+    await act(async () => { slow.resolve(latest(active())); await pending })
+    expect(getLatestRun).toHaveBeenCalledTimes(3)
   })
 })

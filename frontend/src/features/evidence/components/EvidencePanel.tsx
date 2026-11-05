@@ -29,13 +29,13 @@ const sameList = (a: string[], b: string[]): boolean => a.length === b.length &&
 const asApiError = (err: unknown): EvidenceApiError =>
   err instanceof EvidenceApiError ? err : new EvidenceApiError(0, 'Something went wrong. Try again.')
 
-const isBlocking = (err: EvidenceApiError | null): boolean => err !== null && (err.status === 401 || err.status === 503)
+const isBlocking = (err: EvidenceApiError | null): boolean => err !== null && (err.status === 401 || err.status === 403 || err.status === 503)
 
 export default function EvidencePanel(props: Props) {
   if (props.role !== 'auditor' && props.role !== 'head_auditor') return null
   return (
     <PanelBoundary>
-      <PanelBody {...props} />
+      <PanelBody key={props.projectId} {...props} />
     </PanelBoundary>
   )
 }
@@ -44,7 +44,8 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
   const [text, setText] = useState('')
   const [savedLinks, setSavedLinks] = useState<string[]>([])
   const [permission, setPermissionState] = useState<EvidencePermission | null>(null)
-  const [sourcesLoaded, setSourcesLoaded] = useState(false)
+  const [sourcesState, setSourcesState] = useState<'loading' | 'ok' | 'error'>('loading')
+  const [sourcesTry, setSourcesTry] = useState(0)
   const [sourcesError, setSourcesError] = useState<EvidenceApiError | null>(null)
   const [actionError, setActionError] = useState<EvidenceApiError | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -54,7 +55,7 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
 
   useEffect(() => {
     let alive = true
-    setSourcesLoaded(false)
+    setSourcesState('loading')
     getSources(projectId)
       .then((res) => {
         if (!alive) return
@@ -63,17 +64,22 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
         setText(urls.join('\n'))
         setPermissionState(res.permission)
         setSourcesError(null)
-        setSourcesLoaded(true)
+        setSourcesState('ok')
       })
       .catch((err: unknown) => {
         if (!alive) return
         setSourcesError(asApiError(err))
-        setSourcesLoaded(true)
+        setSourcesState('error')
       })
     return () => {
       alive = false
     }
-  }, [projectId])
+  }, [projectId, sourcesTry])
+
+  // Any successful load or poll replaces these objects: a blocking action error is over by then.
+  useEffect(() => {
+    setActionError(null)
+  }, [run, resultRun])
 
   const flaggedCount = useMemo(
     () => [...suggestionsByItem.values()].filter((s) => s.flags.length > 0).length,
@@ -83,14 +89,26 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
   const blocking = [evidence.error, sourcesError, actionError].find(isBlocking) ?? null
   if (blocking) {
     return (
-      <p role="alert" className="mx-4 my-3 text-xs text-slate-500 md:mx-8">
-        {blocking.status === 401 ? SIGN_IN_AGAIN : blocking.message}
-      </p>
+      <div className="mx-4 my-3 flex flex-wrap items-center gap-2 text-xs text-slate-500 md:mx-8">
+        <p role="alert">{blocking.status === 401 ? SIGN_IN_AGAIN : blocking.message}</p>
+        {blocking === actionError && blocking.status !== 401 ? (
+          <button
+            type="button"
+            onClick={() => {
+              setActionError(null)
+              void refresh()
+            }}
+            className="rounded text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            Try again
+          </button>
+        ) : null}
+      </div>
     )
   }
 
   const running = run !== null && ACTIVE.includes(run.status)
-  const canStart = !locked && sourcesLoaded && !busy && !running
+  const canStart = !locked && sourcesState === 'ok' && !busy && !running
 
   /** Runs one action once at a time. A 409 means a run is already going: show it. */
   async function perform(action: () => Promise<unknown>): Promise<void> {
@@ -98,17 +116,22 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
     busyRef.current = true
     setBusy(true)
     setMessage(null)
+    let blocked = false
     try {
       await action()
     } catch (err) {
       const error = asApiError(err)
-      if (isBlocking(error)) setActionError(error)
-      else if (error.status !== 409) setMessage(error.message)
+      if (isBlocking(error)) {
+        blocked = true
+        setActionError(error)
+      } else if (error.status !== 409) setMessage(error.message)
+    }
+    try {
+      if (!blocked) await refresh()
     } finally {
       busyRef.current = false
       setBusy(false)
     }
-    await refresh()
   }
 
   const onRun = () =>
@@ -123,15 +146,16 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
 
   const onReassess = (scope: RunScope) => perform(() => reassess(projectId, resultRun!.id, scope))
 
-  const onSavePermission = async (granted: boolean, note: string | undefined): Promise<void> => {
+  /** Resolves to an error sentence to show beside the control, or null when saved. */
+  const onSavePermission = async (granted: boolean, note: string | undefined): Promise<string | null> => {
     try {
       const res = await setPermission(projectId, granted, note)
       setPermissionState(res.permission)
-      setMessage(null)
+      return null
     } catch (err) {
       const error = asApiError(err)
       if (isBlocking(error)) setActionError(error)
-      else setMessage(error.message)
+      return error.message
     }
   }
 
@@ -151,8 +175,19 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
         Suggestions only. Nothing changes your answers or the score until you accept or override it.
       </p>
 
-      {!sourcesLoaded ? (
+      {sourcesState === 'loading' ? (
         <p className="text-xs text-slate-500">Loading…</p>
+      ) : sourcesState === 'error' ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <p role="alert" className="text-xs text-rose-600">{sourcesError?.message}</p>
+          <button
+            type="button"
+            onClick={() => setSourcesTry((n) => n + 1)}
+            className="rounded text-xs text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            Try again
+          </button>
+        </div>
       ) : (
         <div>
           <label htmlFor="evidence-links" className="mb-1 block text-xs font-medium text-slate-700">
@@ -170,6 +205,7 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
         </div>
       )}
 
+      {evidence.error ? <p role="alert" className="text-xs text-rose-600">{evidence.error.message}</p> : null}
       {message ? <p role="alert" className="text-xs text-rose-600">{message}</p> : null}
 
       {!locked ? (
@@ -223,7 +259,7 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
         />
       ) : null}
 
-      {role === 'head_auditor' && sourcesLoaded ? (
+      {role === 'head_auditor' && sourcesState === 'ok' ? (
         <PermissionControl permission={permission} onSave={onSavePermission} />
       ) : null}
     </motion.section>
