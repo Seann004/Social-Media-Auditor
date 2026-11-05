@@ -129,6 +129,8 @@ interface StoreState {
     itemId: string,
     answer: { status: ChecklistItemStatus; findings: string | null },
   ) => void
+  /** After an answer is stored (by setResponse or a decision): refresh the compliance map and move a draft project to in_progress. */
+  refreshAfterAnswer: (projectId: string) => Promise<void>
   register: (email: string, name: string, role: UserRole, password?: string) => Promise<void>
   initFromDb: () => Promise<void>
 
@@ -558,30 +560,33 @@ export const useStore = create<StoreState>()(
     // Persist to DB + auto-transition draft → in_progress + update complianceMap
     try {
       await db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes)
-
-      // Refresh complianceMap from DB (fetchProjectComplianceSummary reads result values directly
-      // and is not affected by the global-vs-project item ID mismatch in the RPC count query)
-      const updated = await db.fetchProjectComplianceSummary([projectId])
-      if (updated[projectId] !== undefined) {
-        set((state) => ({
-          complianceMap: { ...state.complianceMap, [projectId]: updated[projectId] },
-        }))
-      }
-
-      // Auto-advance project from draft → in_progress the moment the first response is saved
-      const { projects } = get()
-      const proj = projects.find((p) => p.id === projectId)
-      if (proj?.status === 'draft') {
-        await db.updateProject(projectId, { projectStatus: 'in_progress' })
-        set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id === projectId ? { ...p, status: 'in_progress' as AuditStatus } : p
-          ),
-        }))
-      }
+      await get().refreshAfterAnswer(projectId)
     } catch (err) {
       console.error('[setResponse] Failed to save audit result to DB:', err)
       throw err
+    }
+  },
+
+  refreshAfterAnswer: async (projectId) => {
+    // Refresh complianceMap from DB (fetchProjectComplianceSummary reads result values directly
+    // and is not affected by the global-vs-project item ID mismatch in the RPC count query)
+    const updated = await db.fetchProjectComplianceSummary([projectId])
+    if (updated[projectId] !== undefined) {
+      set((state) => ({
+        complianceMap: { ...state.complianceMap, [projectId]: updated[projectId] },
+      }))
+    }
+
+    // Auto-advance project from draft → in_progress the moment the first response is saved
+    const { projects } = get()
+    const proj = projects.find((p) => p.id === projectId)
+    if (proj?.status === 'draft') {
+      await db.updateProject(projectId, { projectStatus: 'in_progress' })
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === projectId ? { ...p, status: 'in_progress' as AuditStatus } : p
+        ),
+      }))
     }
   },
 

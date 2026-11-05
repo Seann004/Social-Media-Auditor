@@ -52,6 +52,16 @@ describe('suggestionState', () => {
     expect(suggestionState({ suggestion: s, decision: overridden, currentStatus: 'partially' })).toBe('overridden')
   })
 
+  it('a decision on this suggestion stops counting once the answer is changed by hand (Flag, another answer)', () => {
+    const s = suggestion('s1', 'yes')
+    expect(suggestionState({ suggestion: s, decision: decision(), currentStatus: 'needs_review' })).toBe('pending')
+    expect(suggestionState({ suggestion: s, decision: decision(), currentStatus: 'not_started' })).toBe('pending')
+    expect(suggestionState({ suggestion: s, decision: decision(), currentStatus: 'non_compliant' })).toBe('disagrees')
+    const overridden = decision({ decision: 'overridden', finalResult: 'partially', overrideReason: 'x' })
+    expect(suggestionState({ suggestion: s, decision: overridden, currentStatus: 'needs_review' })).toBe('pending')
+    expect(suggestionState({ suggestion: s, decision: overridden, currentStatus: 'compliant' })).toBe('agrees')
+  })
+
   it('new_differs when the decision is from an older run and the new result differs', () => {
     const s = suggestion('s2', 'no')
     expect(suggestionState({ suggestion: s, decision: decision(), currentStatus: 'compliant' })).toBe('new_differs')

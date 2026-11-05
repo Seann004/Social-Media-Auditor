@@ -35,6 +35,12 @@ import AuditorAvatar from '../../../components/ui/AuditorAvatar'
 import ScoreRing from '../../audits/components/ScoreRing'
 import { useEvidence } from '../../evidence/useEvidence'
 import EvidencePanel from '../../evidence/components/EvidencePanel'
+import ItemSuggestion from '../../evidence/components/ItemSuggestion'
+import OverrideDialog from '../../evidence/components/OverrideDialog'
+import { pageUpdateAfterDecision } from '../../evidence/decidedAnswer'
+import type { AppliedAnswer } from '../../evidence/types'
+import { useResponseFlow } from '../../evidence/useResponseFlow'
+import { textOnBlur } from '../textOnBlur'
 
 const AUDITOR_RESPONSE_OPTIONS: {
   value: ChecklistItemStatus; label: string; icon: typeof CheckCircle
@@ -393,6 +399,27 @@ export default function AuditPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(evidenceMap)])
 
+  // Accept / override of AI suggestions (card and answer buttons). Only an auditor decides, and not on a locked audit.
+  const auditLocked = project?.submissionStatus === 'pending_review' || project?.submissionStatus === 'approved'
+  const responseFlow = useResponseFlow({
+    projectId: id ?? '',
+    canDecide: isAuditor && !auditLocked,
+    evidence: aiEvidence,
+    getUnsavedFindings: (itemId) => {
+      const typed = findingsValues[itemId]
+      return typed !== undefined && typed !== (responses[`${id}__${itemId}`]?.findings ?? '') ? typed : undefined
+    },
+    onDecided: handleDecided,
+  })
+
+  // The store, compliance and evidence panel are updated by the flow; this is the page's own state.
+  function handleDecided(itemId: string, answer: AppliedAnswer, decision: 'accepted' | 'overridden') {
+    const update = pageUpdateAfterDecision(answer, decision)
+    const { findings, images } = update
+    if (findings !== undefined) setFindingsValues((prev) => ({ ...prev, [itemId]: findings }))
+    if (images !== undefined) setEvidence((prev) => ({ ...prev, [itemId]: images }))
+  }
+
   function handleImageClick(itemId: string) {
     setPendingEvidenceItemId(itemId)
     if (fileInputRef.current) {
@@ -507,6 +534,7 @@ export default function AuditPage() {
   function getResponse(itemId: string) { return responses[`${id}__${itemId}`] }
 
   async function handleResponseClick(itemId: string, guidelineId: string, status: ChecklistItemStatus) {
+    if (await responseFlow.handleClick(itemId, status)) return
     const current = getResponse(itemId)
     const notes = noteValues[itemId] ?? current?.notes ?? ''
     try {
@@ -522,14 +550,14 @@ export default function AuditPage() {
 
   async function handleNotesBlur(itemId: string, guidelineId: string) {
     const current = getResponse(itemId)
-    const notes = noteValues[itemId] ?? ''
+    const notes = textOnBlur(noteValues[itemId], current?.notes)
     if (current && current.status !== 'not_started') {
       await setResponse(id!, itemId, guidelineId, current.status, notes)
     }
   }
 
   async function handleFindingsBlur(itemId: string) {
-    const findings = findingsValues[itemId] ?? ''
+    const findings = textOnBlur(findingsValues[itemId], getResponse(itemId)?.findings)
     await saveFindings(id!, itemId, findings)
   }
 
@@ -917,6 +945,8 @@ helpText: newItemHelp.trim() || undefined,
           </motion.div>
         )}
       </AnimatePresence>
+
+      {responseFlow.dialogProps && <OverrideDialog {...responseFlow.dialogProps} />}
 
       <EvidencePanel
         projectId={project.id}
@@ -1396,6 +1426,16 @@ helpText: newItemHelp.trim() || undefined,
                                   className="px-3 py-1.5 bg-white text-slate-600 text-xs font-medium rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors">Cancel</button>
                               </div>
                             </div>
+                          )}
+
+                          {!isEditing && (
+                            <ItemSuggestion
+                              itemId={ci.id}
+                              flow={responseFlow}
+                              suggestion={aiEvidence.suggestionsByItem.get(ci.id)}
+                              decision={aiEvidence.decisionsByItem.get(ci.id) ?? null}
+                              currentStatus={resp?.status}
+                            />
                           )}
 
                           {/* Auditor response controls (14.2, 14.3) */}

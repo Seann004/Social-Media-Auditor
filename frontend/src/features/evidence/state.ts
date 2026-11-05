@@ -50,11 +50,13 @@ export function suggestionState(input: {
 }): CardState {
   const { suggestion, decision } = input
   if (!suggestion || suggestion.suggestedResult === null) return 'no_suggestion'
-  if (decision && decision.suggestionId === suggestion.id) return decision.decision
   const answer = answerOf(input.currentStatus)
+  const ownDecision = decision !== null && decision.suggestionId === suggestion.id
+  // A decision on this suggestion counts only while the answer is still the one it made.
+  if (decision && ownDecision && decision.finalResult === answer) return decision.decision
   if (answer === undefined) return 'pending'
   const matches = answer === toAnswerStatus(suggestion.suggestedResult)
-  if (decision) return matches ? 'agrees' : 'new_differs'
+  if (decision && !ownDecision) return matches ? 'agrees' : 'new_differs'
   return matches ? 'agrees' : 'disagrees'
 }
 
