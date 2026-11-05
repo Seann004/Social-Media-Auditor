@@ -83,6 +83,14 @@ describe('evidence api client', () => {
     expect(err.message).not.toContain('secret')
   })
 
+  it('falls back to the plain message when error is not a string', async () => {
+    fetchMock.mockResolvedValueOnce(reply(500, JSON.stringify({ error: { stack: 'secret trace' } })))
+    const err = await failure(() => getLatestRun('p1'))
+    expect(err.message).toBe('Something went wrong on the server.')
+    fetchMock.mockResolvedValueOnce(reply(404, JSON.stringify({ error: 42 })))
+    expect((await failure(() => getLatestRun('p1'))).message).toBe('That was not found.')
+  })
+
   it('reports a network failure as status 0 with a plain message', async () => {
     fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
     const err = await failure(() => getLatestRun('p1'))

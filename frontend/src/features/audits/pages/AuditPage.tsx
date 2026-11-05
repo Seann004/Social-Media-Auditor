@@ -33,6 +33,8 @@ import type { ChecklistItemStatus, Severity, ChecklistItem, ProjectScore } from 
 import StatusBadge from '../../audits/components/StatusBadge'
 import AuditorAvatar from '../../../components/ui/AuditorAvatar'
 import ScoreRing from '../../audits/components/ScoreRing'
+import { useEvidence } from '../../evidence/useEvidence'
+import EvidencePanel from '../../evidence/components/EvidencePanel'
 
 const AUDITOR_RESPONSE_OPTIONS: {
   value: ChecklistItemStatus; label: string; icon: typeof CheckCircle
@@ -101,6 +103,7 @@ export default function AuditPage() {
   const isHeadAuditor = currentUser?.role === 'head_auditor'
   const isAuditor = currentUser?.role === 'auditor'
   const isAdmin = currentUser?.role === 'admin'
+  const aiEvidence = useEvidence(id ?? '', { enabled: Boolean(id) && (isAuditor || isHeadAuditor) })
 
   const projectGuidelines = useMemo(
     () => guidelines.filter((g) => project?.guidelineIds.includes(g.id)),
@@ -914,6 +917,13 @@ helpText: newItemHelp.trim() || undefined,
           </motion.div>
         )}
       </AnimatePresence>
+
+      <EvidencePanel
+        projectId={project.id}
+        role={currentUser?.role ?? 'admin'}
+        evidence={aiEvidence}
+        locked={project.submissionStatus === 'pending_review' || project.submissionStatus === 'approved'}
+      />
 
       {/* Tab bar (head auditor: Checklist / Guidelines / Scope) */}
       {isHeadAuditor && (
