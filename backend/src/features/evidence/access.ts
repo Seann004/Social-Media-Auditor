@@ -16,11 +16,11 @@ export interface AccessResult {
 }
 
 /** A page with at least this many words is content, even if it also has a login box. */
-const CONTENT_WORDS = 150
+export const CONTENT_WORDS = 150
 
 const LOGIN_URL_PATTERN = /\/(log-?in|sign-?in|signin|sso|auth)(\/|\?|$)/i
-const BLOCK_TITLE_PATTERN = /just a moment|attention required|access denied|are you a robot|security check/i
-const BLOCK_TEXT_PATTERN = /verify you are human|checking your browser|unusual traffic|enable javascript and cookies|captcha/i
+export const BLOCK_TITLE_PATTERN = /just a moment|attention required|access denied|are you a robot|security check/i
+export const BLOCK_TEXT_PATTERN = /verify you are human|checking your browser|unusual traffic|enable javascript and cookies|captcha/i
 
 function pathOf(url: string): string {
   try {
