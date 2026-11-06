@@ -117,6 +117,8 @@ export const APP_READ_SOURCE = String.raw`(() => {
     style: getter(HTMLElement.prototype, 'style'),
     setProperty: method(CSSStyleDeclaration.prototype, 'setProperty'),
     inputType: getter(HTMLInputElement.prototype, 'type'),
+    buttonType: getter(HTMLButtonElement.prototype, 'type'),
+    buttonForm: getter(HTMLButtonElement.prototype, 'form'),
     inputValue: getter(HTMLInputElement.prototype, 'value'),
     inputChecked: getter(HTMLInputElement.prototype, 'checked'),
     inputLabels: getter(HTMLInputElement.prototype, 'labels'),
@@ -337,6 +339,12 @@ export const APP_READ_SOURCE = String.raw`(() => {
   const read = () => {
     const hidden = hiddenNow()
     notePasswordFields()
+    // A button reports its type only inside a form, where the browser would submit (or reset) with it.
+    const inputTypeOf = (el) => {
+      if (el instanceof HTMLInputElement) return dom.inputType(el)
+      if (el instanceof HTMLButtonElement && dom.buttonForm(el) !== null) return dom.buttonType(el)
+      return null
+    }
     const groups = new Map()
     const groupOf = (el) => {
       const group = dom.closest(el, GROUP_SELECTOR)
@@ -359,7 +367,7 @@ export const APP_READ_SOURCE = String.raw`(() => {
         role: roleOf(el, tag),
         name: nameOf(el, tag, hidden),
         tag: tag.toLowerCase(),
-        inputType: el instanceof HTMLInputElement ? dom.inputType(el) : null,
+        inputType: inputTypeOf(el),
         href,
         groupId: groupOf(el),
         state: stateOf(el, tag),

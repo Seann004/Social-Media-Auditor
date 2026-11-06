@@ -220,6 +220,26 @@ describe('readAppView', () => {
     expect(audience.state.options).toEqual(['Public', 'Only me'])
   })
 
+  it('reports a button’s type only inside a form, so a type-less button in a form reads as submit', async () => {
+    await signIn()
+    await page.evaluate(() => {
+      const form = document.createElement('form')
+      form.innerHTML = '<input name="note"><button>Cancel</button><button type="button">Close</button><button type="reset">Clear</button>'
+      document.body.append(form)
+      const loose = document.createElement('button')
+      loose.textContent = 'Loose'
+      document.body.append(loose)
+    })
+    const { view } = await readAppView(page, null)
+
+    expect(find(view, 'button', 'Post').inputType).toBe('submit')
+    expect(find(view, 'button', 'Cancel').inputType).toBe('submit')
+    expect(find(view, 'button', 'Close').inputType).toBe('button')
+    expect(find(view, 'button', 'Clear').inputType).toBe('reset')
+    expect(find(view, 'button', 'Follow').inputType).toBeNull()
+    expect(find(view, 'button', 'Loose').inputType).toBeNull()
+  })
+
   it('never reports the value of a password field, even after Show password', async () => {
     await go('/login')
     const first = await readAppView(page, null)

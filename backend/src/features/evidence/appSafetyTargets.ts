@@ -10,6 +10,7 @@ import {
   FINAL_ACTION,
   LEAVE_FORM,
   LOGIN_PATH,
+  PEOPLE_FIELD,
   PERSON_ACTION,
   PRIVATE_OPTION,
   PUBLISH_ACTION,
@@ -79,7 +80,7 @@ export function choosesPrivateOption(action: AppAction, element: AppElement): bo
   const inAudience = AUDIENCE_CONTROL.test(element.name) || AUDIENCE_CONTROL.test(element.contextText)
   // (Reply and Comment are person words, so PERSON_ACTION covers the reply words.)
   const acts = [PERSON_ACTION, PUBLISH_ACTION, FINAL_ACTION].some((words) => words.test(element.name))
-  return inAudience && !acts
+  return inAudience && !acts && !isPeopleField(element)
 }
 
 function buttonLike(element: AppElement): boolean {
@@ -121,14 +122,48 @@ export function reachesPeople(action: AppAction, element: AppElement, view: AppV
   return mates.some((other) => isTextBox(other) || isMediaInput(other))
 }
 
-function isRecipientInput(element: AppElement): boolean {
-  const input = element.tag === 'input' || element.tag === 'textarea' || element.role === 'textbox'
-  return input && RECIPIENT_FIELD.test(element.name) && element.state.value !== undefined && element.state.value.trim() !== ''
+function filled(element: AppElement): boolean {
+  return element.state.value !== undefined && element.state.value.trim() !== ''
 }
 
-/** The handle held by the form's recipient field: null when there is none, false when it holds anything but exactly one handle. */
+function isRecipientInput(element: AppElement): boolean {
+  return isTextField(element) && RECIPIENT_FIELD.test(element.name) && filled(element)
+}
+
+/** A field that says it adds people to a message: To, Cc, Recipients, Add people, Members, Participants, Invite... */
+export function isPeopleField(element: AppElement): boolean {
+  return RECIPIENT_FIELD.test(element.name) || PEOPLE_FIELD.test(element.name)
+}
+
+const TEXT_INPUT_TYPES = ['email', 'tel', 'url']
+
+function isTextField(element: AppElement): boolean {
+  return isTextBox(element) || TEXT_INPUT_TYPES.includes(element.inputType ?? '')
+}
+
+/** A form that sends to a person: one of its buttons is a person word (Send, Message, Reply). */
+function isPersonForm(view: AppView, element: AppElement): boolean {
+  return [element, ...sameGroup(view, element)].some((other) => buttonLike(other) && PERSON_ACTION.test(other.name))
+}
+
+/**
+ * The fields that say who the message goes to. In a person form (A23) every filled text field counts:
+ * a people field must hold exactly one handle (checked by the caller), the one message body (a text box
+ * that is not an input) may hold anything, and any other filled field makes the proof fail (false).
+ */
+function recipientFields(view: AppView, element: AppElement): AppElement[] | false {
+  const group = [element, ...sameGroup(view, element)]
+  if (!isPersonForm(view, element)) return group.filter(isRecipientInput)
+  const filledFields = group.filter((field) => isTextField(field) && filled(field))
+  const others = filledFields.filter((field) => !isPeopleField(field))
+  if (others.length > 1 || others.some((field) => field.tag === 'input')) return false
+  return filledFields.filter(isPeopleField)
+}
+
+/** The handle held by the form's recipient fields: null when there is none, false when they hold anything but exactly one handle. */
 function recipientOf(view: AppView, element: AppElement): string | null | false {
-  const fields = [element, ...sameGroup(view, element)].filter(isRecipientInput)
+  const fields = recipientFields(view, element)
+  if (fields === false) return false
   const names = new Set<string>()
   for (const field of fields) {
     const tokens = (field.state.value ?? '').split(/[\s,;]+/).filter((token) => token !== '')
@@ -184,6 +219,15 @@ export function checkTypeBox(element: AppElement, view: AppView, ctx: TargetCont
     return seen.every((name) => handles.includes(name))
   })
   return shown ? OK : no('This box could reach a person, and the page does not show that it belongs to one test account alone.')
+}
+
+/** Typing into a people field of a person form (A23): the text must be exactly one other test account's handle. */
+export function checkPeopleText(text: string, element: AppElement, view: AppView, ctx: TargetContext): Check {
+  if (!isPeopleField(element) || !isPersonForm(view, element)) return OK
+  const others = ctx.accounts.filter((account) => account.id !== ctx.currentAccount?.id)
+  const name = handleName(text)
+  const known = others.some((account) => account.handles.map(handleName).includes(name))
+  return name !== null && known ? OK : no('This field adds people to the message, and only one test account handle may go into it.')
 }
 
 /** What is typed may mention only test accounts, and it never holds a line break (a break could send it). */

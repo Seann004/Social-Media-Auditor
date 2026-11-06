@@ -66,6 +66,8 @@ export const AUDIENCE_CONTROL = /audience|visibility|privacy|who can (?:see|view
 
 /** A field that sets who a message goes to. */
 export const RECIPIENT_FIELD = /^\s*(?:to|cc|bcc)\b|\b(?:recipients?|send to|share with|add people|contacts?)\b/i
+/** Other names of a field that adds people to a message (A23): "Add more", "Members", "Participants", "Invite", "Group name". */
+export const PEOPLE_FIELD = /\b(?:add|people|members?|participants?|invit\w*|groups?)\b/i
 /** Controls that go nowhere near a person; the only ones allowed in a person context without a target. */
 export const SAFE_NAVIGATION =
   /^\s*(?:open|view|settings|privacy|privacy settings|back|next page|previous page|menu|more|close|cancel|home|profile|about|overview|posts|photos|videos|search|help)\s*$/i

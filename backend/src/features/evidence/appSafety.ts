@@ -9,6 +9,7 @@ import type { AgentAccount, AppAction, AppElement, AppView } from './appTypes.js
 import { audienceIsPrivate, checkPublishing } from './appSafetyPublic.js'
 import {
   checkLabel,
+  checkPeopleText,
   checkTarget,
   choosesPrivateOption,
   checkTypeBox,
@@ -73,6 +74,8 @@ function checkOwnAccounts(action: AppAction, element: AppElement | null, view: A
   if (element === null || view === null) return ALLOWED
   const typed = action.type === 'type' ? checkTypedText(action.text, ctx) : ({ ok: true } as const)
   if (!typed.ok) return refuse('own_accounts', typed.reason)
+  const people = action.type === 'type' ? checkPeopleText(action.text, element, view, ctx) : ({ ok: true } as const)
+  if (!people.ok) return refuse('own_accounts', people.reason)
   if (!['click', 'toggle', 'select', 'type'].includes(action.type)) return ALLOWED
   const target = targetOf(action)
   if (choosesPrivateOption(action, element)) return ALLOWED
