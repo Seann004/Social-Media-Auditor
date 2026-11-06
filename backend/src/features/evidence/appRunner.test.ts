@@ -236,6 +236,64 @@ describe('executeAppRun, a capture run', () => {
     expect(run.status).toBe('completed')
   })
 
+  describe('after the run timeout (ruling A22)', () => {
+    const RUN_TIMEOUT_SENTINEL = 987_654
+    const GRACE_SENTINEL = 876_543
+    const OUT_OF_TIME = 'The run ran out of time before this could be put back.'
+
+    /** Lets each test fire the run's timeout and the restore's grace when it chooses: both timers are captured by their delay. */
+    function captureTimers(): Map<number, () => void> {
+      const fired = new Map<number, () => void>()
+      const real = globalThis.setTimeout
+      vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+        if (ms === RUN_TIMEOUT_SENTINEL || ms === GRACE_SENTINEL) fired.set(ms, fn)
+        return real(fn, ms, ...rest)
+      }) as typeof setTimeout)
+      kit.deps.runTimeoutMs = RUN_TIMEOUT_SENTINEL
+      kit.deps.app = { ...kit.deps.app!, restoreGraceMs: GRACE_SENTINEL }
+      return fired
+    }
+
+    it('a run that times out mid-check still puts its toggled switch back', async () => {
+      const fired = captureTimers()
+      kit.scripts.i1 = [
+        ...TOGGLE_PRIVATE,
+        () => {
+          fired.get(RUN_TIMEOUT_SENTINEL)?.()
+          return { type: 'finish', observations: '', evidenceSteps: [] }
+        },
+      ]
+      const run = await kit.run({ checkedItemIds: ['i1', 'i3'] })
+      expect(world.social.state().privateAccount.teen15).toBe(true)
+      expect((await kit.appRepo.listChanges(run.id)).map((c) => [c.control, c.restored, c.restoreDetail])).toEqual([['Private account', true, 'Put back.']])
+      expect(run.status).toBe('partial')
+      expect(run.error).toBe('The run ran out of time; 2 items not checked')
+      expect(kit.prompts.some((p) => p.item.id === 'i3')).toBe(false)
+    })
+
+    it('a restore that exceeds the grace records that the run ran out of time', async () => {
+      const fired = captureTimers()
+      kit.scripts.i1 = [
+        ...TOGGLE_PRIVATE,
+        () => {
+          fired.get(RUN_TIMEOUT_SENTINEL)?.()
+          return { type: 'finish', observations: '', evidenceSteps: [] }
+        },
+      ]
+      const listChanges = kit.appRepo.listChanges.bind(kit.appRepo)
+      vi.spyOn(kit.appRepo, 'listChanges').mockImplementation(async (runId, opts) => {
+        // The grace runs out while the restore is reading what to put back.
+        if (opts?.unrestoredOnly) fired.get(GRACE_SENTINEL)?.()
+        return listChanges(runId, opts)
+      })
+      const run = await kit.run({ checkedItemIds: ['i1'] })
+      expect(fired.has(GRACE_SENTINEL)).toBe(true)
+      expect(world.social.state().privateAccount.teen15).toBe(false)
+      expect((await kit.appRepo.listChanges(run.id)).map((c) => [c.restored, c.restoreDetail])).toEqual([[false, OUT_OF_TIME]])
+      expect(run.status).toBe('partial')
+    })
+  })
+
   it('a check that ended with error gets no suggestion, is listed unchecked, and the run goes on', async () => {
     kit.scripts.i1 = [
       () => {

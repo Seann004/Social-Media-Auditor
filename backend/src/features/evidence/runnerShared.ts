@@ -19,6 +19,8 @@ export interface AppRunnerDeps {
   secretKey: Buffer | null
   /** Defaults to the Groq step call. */
   decideStep?: DecideStep
+  /** For tests. Defaults to APP_RESTORE_GRACE_MS. */
+  restoreGraceMs?: number
 }
 
 export interface RunnerDeps {

@@ -115,6 +115,8 @@ export const APP_ACTION_TIMEOUT_MS = 15_000
 export const APP_SETTLE_MS = 500
 export const APP_NETWORK_IDLE_WAIT_MS = 2_000
 export const APP_RUN_TIMEOUT_MS = 1_800_000
+/** After the run timeout, how long putting back one check's changes may still take (ruling A22). */
+export const APP_RESTORE_GRACE_MS = 60_000
 /** How long the response a followed redirect ended on waits for the browser's navigation to it. */
 export const APP_REDIRECT_ARRIVAL_MS = 10_000
 

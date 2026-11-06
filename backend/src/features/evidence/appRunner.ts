@@ -15,7 +15,7 @@ import { createSessionPool, type AppSessionPool } from './appSession.js'
 import { isAiFinish } from './appSteps.js'
 import type { AgentAccount, AppChange, AppSource, AppStep, StoppedBy, TestAccount } from './appTypes.js'
 import type { AssessItem } from './assess.js'
-import { APP_MAX_TOKENS_PER_RUN } from './config.js'
+import { APP_MAX_TOKENS_PER_RUN, APP_RESTORE_GRACE_MS } from './config.js'
 import type { TokenMeter } from './runnerAssess.js'
 import { autoMatchAnswers, carryForward, type StopReason } from './runnerFinish.js'
 import {
@@ -53,6 +53,9 @@ interface CheckSetup {
   source: AppSource
   agents: AgentAccount[]
   pool: AppSessionPool
+  /** Ends the sessions: when a restore's grace runs out after the run timeout. */
+  endSessions: () => void
+  restoreGraceMs: number
   platform: string
   meter: TokenMeter
 }
@@ -120,18 +123,47 @@ async function pagesOf(ctx: RunCtx, capturedInRunId: string, steps: AppStep[]): 
   }
 }
 
+/**
+ * The signal a restore runs under (ruling A22): it aborts `graceMs` after the run's own signal has
+ * aborted, counted from the later of the run's timeout and the start of the restore.
+ */
+function restoreDeadline(runSignal: AbortSignal, graceMs: number, onExpired: () => void): { signal: AbortSignal; stop(): void } {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const start = () => {
+    timer = setTimeout(() => {
+      controller.abort()
+      onExpired()
+    }, graceMs)
+  }
+  if (runSignal.aborted) start()
+  else runSignal.addEventListener('abort', start, { once: true })
+  return {
+    signal: controller.signal,
+    stop: () => {
+      runSignal.removeEventListener('abort', start)
+      clearTimeout(timer)
+    },
+  }
+}
+
 /** Puts back what this item's check changed, read afresh so that a check that threw is covered too. Returns what stays changed. Never throws. */
 async function putBack(ctx: RunCtx, setup: CheckSetup, itemId: string): Promise<AppChange[]> {
-  let changes: AppChange[]
+  const deadline = restoreDeadline(ctx.signal, setup.restoreGraceMs, setup.endSessions)
   try {
-    changes = await setup.appRepo.listChanges(ctx.run.id, { itemId, unrestoredOnly: true })
-  } catch (err) {
-    logRunProblem(ctx, `Could not read the changes of item ${itemId}, so they were not put back`, err)
-    return []
+    let changes: AppChange[]
+    try {
+      changes = await setup.appRepo.listChanges(ctx.run.id, { itemId, unrestoredOnly: true })
+    } catch (err) {
+      logRunProblem(ctx, `Could not read the changes of item ${itemId}, so they were not put back`, err)
+      return []
+    }
+    const safety: SafetyContext = { accounts: setup.agents, currentAccount: null, appUrl: setup.source.appUrl, loginDomains: setup.source.loginDomains }
+    const results = await restoreChanges(setup.pool, changes, setup.appRepo, deadline.signal, safety)
+    return results.filter((c) => !c.restored)
+  } finally {
+    deadline.stop()
   }
-  const safety: SafetyContext = { accounts: setup.agents, currentAccount: null, appUrl: setup.source.appUrl, loginDomains: setup.source.loginDomains }
-  const results = await restoreChanges(setup.pool, changes, setup.appRepo, ctx.signal, safety)
-  return results.filter((c) => !c.restored)
 }
 
 /** Checks and judges one item. A stop of 'error' leaves the item without a suggestion and lets the run go on. */
@@ -233,7 +265,10 @@ async function checkAndJudge(ctx: RunCtx): Promise<void> {
   await updateRun(ctx, { categoriesTotal: checked.length })
 
   const browser = await ctx.browser()
-  const pool = createSessionPool({ browser, baseGuard: ctx.deps.guard, app: source, accounts, secretKey, signal: ctx.signal, aborted: abortedOf(ctx.signal) })
+  // The sessions outlive the run's timeout, so that its changes can still be put back (ruling A22).
+  // They end when a restore's grace runs out, and in any case when the pool is closed.
+  const sessions = new AbortController()
+  const pool = createSessionPool({ browser, baseGuard: ctx.deps.guard, app: source, accounts, secretKey, signal: sessions.signal, aborted: abortedOf(sessions.signal) })
   const meter = createMeter()
   const { repo, screenshots, apiKey, model } = ctx.deps
   const setup: CheckSetup = {
@@ -242,6 +277,8 @@ async function checkAndJudge(ctx: RunCtx): Promise<void> {
     source,
     agents: accounts.map((a) => ({ id: a.id, label: a.label, ageGroup: a.ageGroup, age: a.age, handles: [...a.handles] })),
     pool,
+    endSessions: () => sessions.abort(),
+    restoreGraceMs: app.restoreGraceMs ?? APP_RESTORE_GRACE_MS,
     platform,
     meter,
   }
