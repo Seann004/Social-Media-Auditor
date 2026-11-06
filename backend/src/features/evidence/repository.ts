@@ -1,3 +1,4 @@
+import type { RunSource } from './appTypes.js'
 import type {
   AnswerStatus,
   CapturedPage,
@@ -39,6 +40,12 @@ export interface NewRun {
   capturedInRunId?: string
   categoriesTotal?: number
   pagesTotal?: number
+  /** Defaults to 'pages'. */
+  source?: RunSource
+  /** Defaults to none. */
+  checkedItemIds?: string[]
+  /** Defaults to PROMPT_VERSION. */
+  promptVersion?: string
 }
 
 export type RunPatch = Partial<Omit<EvidenceRun, 'id' | 'projectId' | 'createdAt'>>
@@ -62,6 +69,8 @@ export interface NewSuggestion {
   passageIdsSent: string[]
   /** Only for a copy carried forward. Defaults to null: the run assessed it itself. */
   originSuggestionId?: string | null
+  /** Defaults to 'pages'. */
+  source?: RunSource
   quotes: Omit<SuggestionQuote, 'id'>[]
 }
 
@@ -107,6 +116,10 @@ export interface EvidenceRepository {
   getPage(id: string): Promise<CapturedPage | null>
 
   addPassages(pageId: string, passages: NewPassage[]): Promise<Passage[]>
+  /** The passages of the given pages, in the order of `pageIds`, then by position. Empty for no ids. */
+  listPassagesOfPages(pageIds: string[]): Promise<Passage[]>
+  /** The summary of each known page, whichever run captured it. Unknown ids are left out. */
+  getPageSummaries(ids: string[]): Promise<PageSummary[]>
   /** Matches ANY query term, best match first. */
   searchPassages(capturedInRunId: string, query: string, limit: number): Promise<Passage[]>
 

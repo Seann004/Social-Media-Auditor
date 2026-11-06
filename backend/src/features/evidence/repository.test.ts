@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import type { EvidenceRepository, NewSuggestion } from './repository.js'
 import { createMemoryRepository } from './memoryRepository.js'
 import { createSupabaseRepository } from './supabaseRepository.js'
+import { APP_PROMPT_VERSION, PROMPT_VERSION } from './config.js'
 
 interface Harness {
   repo: EvidenceRepository
@@ -292,6 +293,73 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
     const first = await h.repo.addDecision({ ...base, decision: 'accepted', finalResult: 'compliant', overrideReason: null })
     const second = await h.repo.addDecision({ ...base, decision: 'overridden', finalResult: 'non_compliant', overrideReason: 'wrong' })
     expect((await h.repo.listDecisions(h.projectId)).map((d) => d.id)).toEqual([first.id, second.id])
+  })
+
+  it('a new run defaults to source pages with empty checked and unchecked items and step 0', async () => {
+    const run = await newRun()
+    expect(run.source).toBe('pages')
+    expect(run.checkedItemIds).toEqual([])
+    expect(run.uncheckedItemIds).toEqual([])
+    expect(run.currentItemId).toBeNull()
+    expect(run.currentStep).toBe(0)
+    expect(run.promptVersion).toBe(PROMPT_VERSION)
+    expect(await h.repo.getRun(run.id)).toEqual(run)
+  })
+
+  it('an app run keeps source, checkedItemIds and promptVersion as given', async () => {
+    const run = await newRun({ source: 'app', checkedItemIds: [h.itemId], promptVersion: APP_PROMPT_VERSION })
+    expect(run.source).toBe('app')
+    expect(run.checkedItemIds).toEqual([h.itemId])
+    expect(run.promptVersion).toBe(APP_PROMPT_VERSION)
+    expect(await h.repo.getRun(run.id)).toEqual(run)
+  })
+
+  it('updateRun saves currentItemId, currentStep and uncheckedItemIds', async () => {
+    const run = await newRun({ source: 'app' })
+    const other = randomUUID()
+    const updated = await h.repo.updateRun(run.id, { currentItemId: h.itemId, currentStep: 4, uncheckedItemIds: [other] })
+    expect(updated.currentItemId).toBe(h.itemId)
+    expect(updated.currentStep).toBe(4)
+    expect(updated.uncheckedItemIds).toEqual([other])
+    expect(await h.repo.getRun(run.id)).toEqual(updated)
+  })
+
+  it('a suggestion keeps its source; one added without a source is pages', async () => {
+    const run = await newRun()
+    const plain = await h.repo.addSuggestion(suggestion(run.id))
+    expect(plain.source).toBe('pages')
+    const appRun = await newRun({ source: 'app' })
+    const fromApp = await h.repo.addSuggestion({ ...suggestion(appRun.id), source: 'app' })
+    expect(fromApp.source).toBe('app')
+    expect(await h.repo.getSuggestion(fromApp.id)).toEqual(fromApp)
+    expect((await h.repo.listSuggestions(appRun.id))[0].source).toBe('app')
+  })
+
+  it('listPassagesOfPages returns only those pages, in page order then position', async () => {
+    const run = await newRun()
+    const a = await h.repo.addPage(run.id, pageInput('https://example.com/a'))
+    const b = await h.repo.addPage(run.id, pageInput('https://example.com/b'))
+    const c = await h.repo.addPage(run.id, pageInput('https://example.com/c'))
+    await h.repo.addPassages(a.id, [{ position: 0, kind: 'text', text: 'a0' }, { position: 1, kind: 'text', text: 'a1' }])
+    await h.repo.addPassages(b.id, [{ position: 1, kind: 'text', text: 'b1' }, { position: 0, kind: 'text', text: 'b0' }])
+    await h.repo.addPassages(c.id, [{ position: 0, kind: 'text', text: 'c0' }])
+    const got = await h.repo.listPassagesOfPages([b.id, a.id])
+    expect(got.map((p) => p.text)).toEqual(['b0', 'b1', 'a0', 'a1'])
+    expect(await h.repo.listPassagesOfPages([])).toEqual([])
+  })
+
+  it('getPageSummaries returns the summaries of the given ids, across runs, without text', async () => {
+    const r1 = await newRun()
+    const r2 = await newRun()
+    const a = await h.repo.addPage(r1.id, { ...pageInput('https://example.com/a'), screenshotPath: 'p/a.jpg' })
+    const b = await h.repo.addPage(r2.id, pageInput('https://example.com/b'))
+    await h.repo.addPage(r2.id, pageInput('https://example.com/c'))
+    const got = await h.repo.getPageSummaries([a.id, b.id, randomUUID()])
+    expect(got.map((p) => p.id).sort()).toEqual([a.id, b.id].sort())
+    expect(Object.keys(got[0]).sort()).toEqual(
+      ['accessDetail', 'accessStatus', 'capturedAt', 'finalUrl', 'httpStatus', 'id', 'screenshotPath', 'title', 'url'].sort(),
+    )
+    expect(await h.repo.getPageSummaries([])).toEqual([])
   })
 
   it('returns copies, so changing a result does not change stored data', async () => {

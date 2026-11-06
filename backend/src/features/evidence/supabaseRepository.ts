@@ -27,6 +27,7 @@ const BUCKET = 'evidence-screenshots'
 const ACTIVE = ['queued', 'capturing', 'assessing']
 const RESULT = ['completed', 'partial']
 const LIST_PAGE_SIZE = 100
+const PAGE_SUMMARY_COLUMNS = 'id, url, finalUrl, httpStatus, accessStatus, accessDetail, title, screenshotPath, capturedAt'
 const REMOVE_CHUNK = 100
 
 interface DbResult<T> {
@@ -79,6 +80,11 @@ function toRun(row: Row): EvidenceRun {
     capturedInRunId: row.capturedInRunId ?? row.id,
     promptVersion: row.promptVersion ?? '',
     unassessedCategories: row.unassessedCategories ?? [],
+    source: row.source ?? 'pages',
+    checkedItemIds: row.checkedItemIds ?? [],
+    uncheckedItemIds: row.uncheckedItemIds ?? [],
+    currentItemId: row.currentItemId ?? null,
+    currentStep: row.currentStep ?? 0,
   }
 }
 
@@ -105,6 +111,7 @@ function toSuggestion(row: Row, quotes: Row[]): Suggestion {
     flags: row.flags ?? [],
     passageIdsSent: row.passageIdsSent ?? [],
     originSuggestionId: row.originSuggestionId ?? null,
+    source: row.source ?? 'pages',
     quotes: quotes.map(toQuote),
   }
 }
@@ -197,7 +204,9 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
             capturedInRunId: input.capturedInRunId ?? id,
             categoriesTotal: input.categoriesTotal ?? 0,
             pagesTotal: input.pagesTotal ?? 0,
-            promptVersion: PROMPT_VERSION,
+            promptVersion: input.promptVersion ?? PROMPT_VERSION,
+            source: input.source ?? 'pages',
+            checkedItemIds: input.checkedItemIds ?? [],
           })
           .select('*')
           .single(),
@@ -262,7 +271,7 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
         'listPageSummaries',
         await admin
           .from('Evidence_Page')
-          .select('id, url, finalUrl, httpStatus, accessStatus, accessDetail, title, screenshotPath, capturedAt')
+          .select(PAGE_SUMMARY_COLUMNS)
           .eq('runId', capturedInRunId)
           .order('capturedAt', { ascending: true }),
       )
@@ -283,6 +292,27 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
           .select('id, pageId, position, kind, text'),
       )
       return rows.map(toPassage).sort((a, b) => a.position - b.position)
+    },
+    async listPassagesOfPages(pageIds) {
+      if (pageIds.length === 0) return []
+      const rows = await readAllRows('listPassagesOfPages', (from, to) =>
+        admin
+          .from('Evidence_Passage')
+          .select('id, pageId, position, kind, text')
+          .in('pageId', pageIds)
+          .order('pageId')
+          .order('position')
+          .range(from, to),
+      )
+      const rank = new Map(pageIds.map((id, i) => [id, i]))
+      return rows
+        .map(toPassage)
+        .sort((a, b) => (rank.get(a.pageId) ?? 0) - (rank.get(b.pageId) ?? 0) || a.position - b.position)
+    },
+    async getPageSummaries(ids) {
+      if (ids.length === 0) return []
+      const rows = unwrap('getPageSummaries', await admin.from('Evidence_Page').select(PAGE_SUMMARY_COLUMNS).in('id', ids))
+      return (rows ?? []) as PageSummary[]
     },
     async searchPassages(capturedInRunId, query, limit) {
       const rows = unwrap(
@@ -311,6 +341,7 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
             flags: input.flags,
             passageIdsSent: input.passageIdsSent,
             originSuggestionId: input.originSuggestionId ?? null,
+            source: input.source ?? 'pages',
           })
           .select('*')
           .single(),

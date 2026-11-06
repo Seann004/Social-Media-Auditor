@@ -57,6 +57,7 @@ export async function carryForward(ctx: RunCtx, items: AssessItem[], ownItemIds:
         flags: old.flags,
         passageIdsSent: old.passageIdsSent,
         originSuggestionId: old.originSuggestionId ?? old.id,
+        source: old.source,
         quotes: old.quotes.map(({ id: _id, ...quote }) => quote),
       })
     } catch (err) {

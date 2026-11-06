@@ -2,6 +2,8 @@ export type SuggestedResult = 'yes' | 'no' | 'partially' | 'not_applicable'
 export type AnswerStatus = 'compliant' | 'non_compliant' | 'partially' | 'not_applicable'
 export type Confidence = 'high' | 'medium' | 'low'
 
+import type { RunSource } from './appTypes.js'
+
 export type AccessStatus = 'ok' | 'error' | 'timeout' | 'login_required' | 'blocked'
 export type RunStatus = 'queued' | 'capturing' | 'assessing' | 'completed' | 'failed' | 'partial'
 export type RunScope = 'all' | 'unfinished'
@@ -35,6 +37,12 @@ export interface EvidenceRun {
   tokensUsed: number
   model: string | null
   promptVersion: string
+  /** Where the run got its evidence: captured pages or the platform's web app. */
+  source: RunSource
+  checkedItemIds: string[]
+  uncheckedItemIds: string[]
+  currentItemId: string | null
+  currentStep: number
   error: string | null
   createdAt: string
   startedAt: string | null
@@ -95,6 +103,7 @@ export interface Suggestion {
   passageIdsSent: string[]
   /** On a copy carried forward by a re-assess: the suggestion first assessed. Null when its run assessed it. */
   originSuggestionId: string | null
+  source: RunSource
   quotes: SuggestionQuote[]
 }
 

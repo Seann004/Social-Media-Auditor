@@ -16,6 +16,7 @@ import type {
   CapturedPage,
   Decision,
   EvidenceRun,
+  PageSummary,
   Passage,
   RunStatus,
   Suggestion,
@@ -34,6 +35,20 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
 function terms(text: string): Set<string> {
   const words = text.toLowerCase().match(/[a-z0-9]+/g) ?? []
   return new Set(words.filter((w) => !STOP_WORDS.has(w)))
+}
+
+function summaryOf(p: CapturedPage): PageSummary {
+  return {
+    id: p.id,
+    url: p.url,
+    finalUrl: p.finalUrl,
+    httpStatus: p.httpStatus,
+    accessStatus: p.accessStatus,
+    accessDetail: p.accessDetail,
+    title: p.title,
+    screenshotPath: p.screenshotPath,
+    capturedAt: p.capturedAt,
+  }
 }
 
 const copy = <T>(v: T): T => structuredClone(v)
@@ -102,7 +117,12 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
         pagesDone: 0,
         tokensUsed: 0,
         model: null,
-        promptVersion: PROMPT_VERSION,
+        promptVersion: input.promptVersion ?? PROMPT_VERSION,
+        source: input.source ?? 'pages',
+        checkedItemIds: [...(input.checkedItemIds ?? [])],
+        uncheckedItemIds: [],
+        currentItemId: null,
+        currentStep: 0,
         error: null,
         createdAt: new Date().toISOString(),
         startedAt: null,
@@ -163,17 +183,7 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
     async listPageSummaries(capturedInRunId) {
       return pages
         .filter((p) => p.runId === capturedInRunId)
-        .map((p) => copy({
-          id: p.id,
-          url: p.url,
-          finalUrl: p.finalUrl,
-          httpStatus: p.httpStatus,
-          accessStatus: p.accessStatus,
-          accessDetail: p.accessDetail,
-          title: p.title,
-          screenshotPath: p.screenshotPath,
-          capturedAt: p.capturedAt,
-        }))
+        .map((p) => copy(summaryOf(p)))
     },
     async getPage(id) {
       const page = pages.find((p) => p.id === id)
@@ -184,6 +194,16 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
       const rows: Passage[] = input.map((p) => ({ id: randomUUID(), pageId, ...copy(p) }))
       passages.push(...rows)
       return copy(rows)
+    },
+    async listPassagesOfPages(pageIds) {
+      const out: Passage[] = []
+      for (const pageId of pageIds) {
+        out.push(...passages.filter((p) => p.pageId === pageId).sort((a, b) => a.position - b.position))
+      }
+      return copy(out)
+    },
+    async getPageSummaries(ids) {
+      return ids.length === 0 ? [] : copy(pages.filter((p) => ids.includes(p.id)).map(summaryOf))
     },
     async searchPassages(capturedInRunId, query, limit) {
       const wanted = terms(query)
@@ -218,6 +238,7 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
         flags: copy(input.flags),
         passageIdsSent: [...input.passageIdsSent],
         originSuggestionId: input.originSuggestionId ?? null,
+        source: input.source ?? 'pages',
         quotes,
       }
       suggestions.push(row)
