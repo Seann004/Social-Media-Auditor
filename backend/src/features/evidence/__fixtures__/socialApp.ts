@@ -40,6 +40,8 @@ export interface SocialApp {
 }
 
 const PASSWORDS: Record<string, string> = { teen15: 'Teen-Pass-111', adult30: 'Adult-Pass-222' }
+/** Signing in also works with a login name, which differs from the handle. */
+const LOGIN_NAMES: Record<string, string> = { 'teen.login@example.test': 'teen15', 'adult.login@example.test': 'adult30' }
 const HANDLES = ['teen15', 'adult30', 'stranger']
 const ADULTS = new Set(['adult30'])
 const AUDIENCES: Record<string, string> = { public: 'Public', only_me: 'Only me' }
@@ -266,7 +268,8 @@ export async function startSocialApp(): Promise<SocialApp> {
   }
 
   const signIn = (ctx: Ctx) => {
-    const handle = ctx.form.get('username') ?? ''
+    const typed = ctx.form.get('username') ?? ''
+    const handle = LOGIN_NAMES[typed] ?? typed
     const ok = PASSWORDS[handle] !== undefined && PASSWORDS[handle] === ctx.form.get('password') && !state.deleted.includes(handle)
     update((s) => ({ ...s, loginAttempts: [...s.loginAttempts, { handle, ok }] }))
     if (!ok) return send(ctx.res, loginPage('Wrong password'))
