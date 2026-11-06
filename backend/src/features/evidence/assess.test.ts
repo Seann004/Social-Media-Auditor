@@ -141,3 +141,15 @@ describe('assessBatch', () => {
     expect(err.message).not.toContain('Check i1')
   })
 })
+
+describe('assessBatch request shape (refactor guard)', () => {
+  it('still sends temperature 0.1, JSON mode and max_tokens 1500', async () => {
+    const f = vi.fn().mockResolvedValue(groqResponse({ results: [goodResult('i1')] }))
+    vi.stubGlobal('fetch', f)
+    await run()
+    const body = JSON.parse((f.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.temperature).toBe(0.1)
+    expect(body.response_format).toEqual({ type: 'json_object' })
+    expect(body.max_tokens).toBe(1500)
+  })
+})

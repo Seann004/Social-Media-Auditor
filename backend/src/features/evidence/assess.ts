@@ -1,16 +1,12 @@
 import { z } from 'zod'
-import { groqFetchWithRetry } from '../../lib/groq.js'
+import { callGroqJson } from './aiCall.js'
 import {
-  AI_TEMPERATURE,
-  GROQ_MAX_WAIT_MS,
   MAX_INPUT_TOKENS_PER_CALL,
   MAX_ITEMS_PER_CALL,
   MAX_OUTPUT_TOKENS_PER_CALL,
   MAX_PASSAGES_PER_ITEM,
 } from './config.js'
 import type { Confidence, Passage, SuggestedResult } from './types.js'
-
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 
 export interface AssessItem {
   id: string
@@ -138,40 +134,15 @@ interface Attempt {
 }
 
 async function callGroq(input: AssessInput, system: string, user: string): Promise<Attempt> {
-  const res = await groqFetchWithRetry(
-    GROQ_URL,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${input.apiKey}` },
-      body: JSON.stringify({
-        model: input.model,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        temperature: AI_TEMPERATURE,
-        max_tokens: MAX_OUTPUT_TOKENS_PER_CALL,
-        response_format: { type: 'json_object' },
-      }),
-    },
-    3,
-    GROQ_MAX_WAIT_MS / 1000,
-  )
-  if (!res.ok) throw new Error(`Groq request failed with status ${res.status}`)
-  const body = (await res.json()) as {
-    choices?: { message?: { content?: string } }[]
-    usage?: { total_tokens?: number }
-  }
-  const tokens = body.usage?.total_tokens ?? 0
-  const content = body.choices?.[0]?.message?.content
-  if (typeof content !== 'string') return { raw: null, tokens }
-  try {
-    const parsed = envelopeSchema.safeParse(JSON.parse(content))
-    if (!parsed.success) return { raw: null, tokens }
-    return { raw: parsed.data.results, tokens }
-  } catch {
-    return { raw: null, tokens }
-  }
+  const { content, tokens } = await callGroqJson({
+    apiKey: input.apiKey,
+    model: input.model,
+    system,
+    user,
+    maxTokens: MAX_OUTPUT_TOKENS_PER_CALL,
+  })
+  const parsed = envelopeSchema.safeParse(content)
+  return { raw: parsed.success ? parsed.data.results : null, tokens }
 }
 
 export async function assessBatch(input: AssessInput): Promise<AssessOutput> {
