@@ -1,5 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { appPassagesOf, describeAction, detectChange, isAiFinish, locateControl, recordStep, restoreAddress, stepLine, type StepContext } from './appSteps.js'
+import {
+  appPassagesOf,
+  describeAction,
+  detectChange,
+  isAiFinish,
+  locateControl,
+  recordStep,
+  restoreAddress,
+  stepLine,
+  touchesSetting,
+  unknownChange,
+  type StepContext,
+} from './appSteps.js'
 import type { AgentAccount, AppAction, AppElement, AppStep, AppView } from './appTypes.js'
 import { createMemoryAppRepository } from './memoryAppRepository.js'
 import { createMemoryRepository } from './memoryRepository.js'
@@ -312,5 +324,49 @@ describe('isAiFinish', () => {
     expect(isAiFinish(step(finish, 'blocked'))).toBe(false)
     expect(isAiFinish(step(finish, 'failed'))).toBe(false)
     expect(isAiFinish(step({ type: 'back' }, 'done'))).toBe(false)
+  })
+})
+
+describe('detectChange: radio groups (fix round 2)', () => {
+  const radio = (ref: string, name: string, checked: boolean) =>
+    el(ref, 'radio', name, { tag: 'input', inputType: 'radio', groupId: 'g1', state: { checked } })
+  /** One form, three radio groups: "tag" (Everyone/Nobody), "message" (Everyone/Friends), "birthday" (Close friends/No one). */
+  const form = (c: { tag: string; message: string; birthday: string | null }) =>
+    view([
+      radio('e1', 'Everyone', c.tag === 'Everyone'),
+      radio('e2', 'Nobody', c.tag === 'Nobody'),
+      radio('e3', 'Everyone', c.message === 'Everyone'),
+      radio('e4', 'Friends', c.message === 'Friends'),
+      radio('e5', 'Close friends', c.birthday === 'Close friends'),
+      radio('e6', 'No one', c.birthday === 'No one'),
+    ])
+  const start = { tag: 'Everyone', message: 'Everyone', birthday: null }
+
+  it('with two radio groups in one form, records the radio that turned off, in the clicked group', () => {
+    expect(detectChange({ type: 'click', ref: 'e4' }, form(start), form({ ...start, message: 'Friends' }))).toEqual({
+      role: 'radio',
+      control: 'Everyone (2)',
+      before: 'on',
+      after: 'off',
+      chosen: 'Friends',
+    })
+  })
+
+  it('with no radio on before, records the clicked radio off → on', () => {
+    expect(detectChange({ type: 'click', ref: 'e6' }, form(start), form({ ...start, birthday: 'No one' }))).toEqual({
+      role: 'radio',
+      control: 'No one',
+      before: 'off',
+      after: 'on',
+    })
+    expect(touchesSetting({ type: 'click', ref: 'e6' }, form(start))).toBe(true)
+  })
+
+  it('records nothing when the clicked radio was on already', () => {
+    expect(detectChange({ type: 'click', ref: 'e1' }, form(start), form(start))).toBeNull()
+  })
+
+  it('when the page cannot be read after, records the clicked radio as unknown', () => {
+    expect(unknownChange({ type: 'click', ref: 'e4' }, form(start))).toEqual({ role: 'radio', control: 'Friends', before: 'off', after: 'unknown' })
   })
 })

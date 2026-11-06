@@ -171,41 +171,54 @@ export function locateControl(view: AppView, role: string, control: string): App
   return exact.length === 1 ? exact[0] : null
 }
 
-/** The setting an action works on: for a radio, the radio of its group that was on before. */
-function changedControl(action: AppAction, before: AppView): { el: AppElement; chosen?: AppElement } | null {
+/** The setting control the action works on, or null when it works on none. */
+function settingTarget(action: AppAction, before: AppView): AppElement | null {
   if (action.type !== 'toggle' && action.type !== 'click' && action.type !== 'select') return null
   const el = elementOf(before, action.ref)
-  if (el === null || !isSettingControl(el)) return null
-  if (el.role !== 'radio') return { el }
-  const previous = before.elements.find((other) => other.role === 'radio' && other.ref !== el.ref && other.groupId === el.groupId && other.state.checked === true)
-  return previous === undefined ? null : { el: previous, chosen: el }
+  return el !== null && isSettingControl(el) ? el : null
 }
 
 /** Whether the action works on a setting, so that its effect must be looked for whatever the action reported. */
 export function touchesSetting(action: AppAction, before: AppView): boolean {
-  return changedControl(action, before) !== null
+  return settingTarget(action, before) !== null
 }
 
-/** The change to record when the page could not be read after a setting action (ruling A16). */
+/** The change to record when the page could not be read after a setting action (ruling A16): the clicked control, state unknown. */
 export function unknownChange(action: AppAction, before: AppView): DetectedChange | null {
-  const target = changedControl(action, before)
-  if (target === null) return null
-  const change: DetectedChange = { role: target.el.role, control: controlKey(before, target.el), before: controlState(target.el), after: UNKNOWN_STATE }
-  return target.chosen === undefined ? change : { ...change, chosen: target.chosen.name }
+  const el = settingTarget(action, before)
+  return el === null ? null : { role: el.role, control: controlKey(before, el), before: controlState(el), after: UNKNOWN_STATE }
+}
+
+function changeOf(el: AppElement, before: AppView, after: AppView): DetectedChange | null {
+  const key = controlKey(before, el)
+  const now = locateControl(after, el.role, key)
+  if (now === null) return null
+  const was = controlState(el)
+  const is = controlState(now)
+  return was === is ? null : { role: el.role, control: key, before: was, after: is }
+}
+
+/**
+ * A radio click, read from what changed. The outline knows a radio's form or dialog but not its own
+ * group, and one form may hold several groups, so the radio that matters is the one in that form that
+ * was on before and is off after: it is recorded on → off, with the clicked radio as the one chosen.
+ * When none turned off (nothing was chosen before), the clicked radio itself is recorded off → on.
+ */
+function radioChange(clicked: AppElement, before: AppView, after: AppView): DetectedChange | null {
+  const turnedOff = before.elements
+    .filter((r) => r.role === 'radio' && r.ref !== clicked.ref && r.groupId === clicked.groupId && r.state.checked === true)
+    .find((r) => locateControl(after, 'radio', controlKey(before, r))?.state.checked === false)
+  if (turnedOff !== undefined) {
+    return { role: 'radio', control: controlKey(before, turnedOff), before: 'on', after: 'off', chosen: clicked.name }
+  }
+  return changeOf(clicked, before, after)
 }
 
 /** A setting the action changed: the same control (role, name and place) on the same path, with a new state. */
 export function detectChange(action: AppAction, before: AppView, after: AppView): DetectedChange | null {
-  const target = changedControl(action, before)
-  if (target === null || pathOf(before.url) !== pathOf(after.url)) return null
-  const key = controlKey(before, target.el)
-  const now = locateControl(after, target.el.role, key)
-  if (now === null) return null
-  const was = controlState(target.el)
-  const is = controlState(now)
-  if (was === is) return null
-  const change: DetectedChange = { role: target.el.role, control: key, before: was, after: is }
-  return target.chosen === undefined ? change : { ...change, chosen: target.chosen.name }
+  const el = settingTarget(action, before)
+  if (el === null || pathOf(before.url) !== pathOf(after.url)) return null
+  return el.role === 'radio' ? radioChange(el, before, after) : changeOf(el, before, after)
 }
 
 /** A finish the AI chose. Blocked and unreadable-reply steps also store a finish action, as a placeholder. */

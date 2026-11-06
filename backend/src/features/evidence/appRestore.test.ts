@@ -179,3 +179,24 @@ describe('restoreChanges: fix round 1', () => {
     expect(world.social.state().privateAccount.teen15).toBe(true)
   })
 })
+
+describe('restoreChanges: radio groups (fix round 2)', () => {
+  it('two radio groups in one form: a change in the second is recorded and restored, the first untouched', async () => {
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings/contact'), on('radio', 'Friends'), on('button', 'Save'), FINISH])
+    expect(outcome.steps[5].line).toBe('Step 6 · Teen 15 · clicked radio "Friends" → "Friends" is now on')
+    expect(outcome.changes.map((c) => [c.control, c.before, c.after, c.saveControl])).toEqual([['Everyone (2)', 'on', 'off', 'Save']])
+    expect(world.social.state().contact.teen15).toEqual({ tag: 'Everyone', message: 'Friends', birthday: null })
+    const restored = await restore()
+    expect(restored.map((c) => [c.restored, c.restoreDetail])).toEqual([[true, 'Put back.']])
+    expect(world.social.state().contact.teen15).toEqual({ tag: 'Everyone', message: 'Everyone', birthday: null })
+  })
+
+  it('no radio on at first: the change is recorded, and restore records its outcome', async () => {
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings/contact'), on('radio', 'No one'), on('button', 'Save'), FINISH])
+    expect(outcome.changes.map((c) => [c.control, c.before, c.after, c.saveControl])).toEqual([['No one', 'off', 'on', 'Save']])
+    const restored = await restore()
+    // A radio cannot be clicked off, and the fixture has no way back to "none chosen": restore says so honestly.
+    expect(restored.map((c) => [c.restored, c.restoreDetail])).toEqual([[false, 'It was switched back but did not stay that way after reload.']])
+    expect(world.social.state().contact.teen15.birthday).toBe('No one')
+  })
+})

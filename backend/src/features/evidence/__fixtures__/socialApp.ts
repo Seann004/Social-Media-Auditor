@@ -26,6 +26,14 @@ export interface SocialState {
   postVisibility: Record<string, string>
   /** Two switches both named "Notifications" on /settings/notifications. */
   notifications: Record<string, { email: boolean; push: boolean }>
+  /** Three radio groups in one form on /settings/contact; `birthday` starts with no option chosen. */
+  contact: Record<string, ContactChoices>
+}
+
+export interface ContactChoices {
+  tag: string
+  message: string
+  birthday: string | null
 }
 
 export interface SocialMode {
@@ -283,6 +291,24 @@ function notificationsPage(on: { email: boolean; push: boolean }): string {
   )
 }
 
+const CONTACT_GROUPS: { field: keyof ContactChoices; legend: string; options: string[] }[] = [
+  { field: 'tag', legend: 'Who can tag you', options: ['Everyone', 'Nobody'] },
+  { field: 'message', legend: 'Who can message you', options: ['Everyone', 'Friends'] },
+  { field: 'birthday', legend: 'Who can see your birthday', options: ['Close friends', 'No one'] },
+]
+const DEFAULT_CONTACT: ContactChoices = { tag: 'Everyone', message: 'Everyone', birthday: null }
+
+/** Several radio groups in one form, two of them with an option of the same name. */
+function contactPage(choices: ContactChoices): string {
+  const groups = CONTACT_GROUPS.map(
+    ({ field, legend, options }) =>
+      `<fieldset><legend>${legend}</legend>${options
+        .map((option) => `<label><input type="radio" name="${field}" value="${option}"${choices[field] === option ? ' checked' : ''}> ${option}</label>`)
+        .join(' ')}</fieldset>`,
+  ).join('')
+  return page('Contact', `<h1>Contact</h1><form method="post" action="/settings/contact" aria-label="Contact settings">${groups}<button type="submit">Save</button></form>`)
+}
+
 /** A sign-in form, and apart from it a search box whose label says username. */
 function findPage(): string {
   return page(
@@ -310,6 +336,7 @@ export async function startSocialApp(): Promise<SocialApp> {
     loginAttempts: [],
     postVisibility: { teen15: 'Public', adult30: 'Public', stranger: 'Public' },
     notifications: { teen15: { email: true, push: true }, adult30: { email: true, push: true }, stranger: { email: true, push: true } },
+    contact: { teen15: DEFAULT_CONTACT, adult30: DEFAULT_CONTACT, stranger: DEFAULT_CONTACT },
   }
   let mode: SocialMode = {
     captchaOnLogin: false,
@@ -386,6 +413,17 @@ export async function startSocialApp(): Promise<SocialApp> {
       const current = state.notifications[viewer] ?? { email: true, push: true }
       update((s) => ({ ...s, notifications: { ...s.notifications, [viewer]: { ...current, [kind]: ctx.form.get('value') === 'true' } } }))
       send(ctx.res, 'ok')
+    },
+    'GET /settings/contact': (ctx, viewer) => send(ctx.res, contactPage(state.contact[viewer] ?? DEFAULT_CONTACT)),
+    'POST /settings/contact': (ctx, viewer) => {
+      const current = state.contact[viewer] ?? DEFAULT_CONTACT
+      const next: ContactChoices = {
+        tag: ctx.form.get('tag') ?? current.tag,
+        message: ctx.form.get('message') ?? current.message,
+        birthday: ctx.form.get('birthday') ?? current.birthday,
+      }
+      update((s) => ({ ...s, contact: { ...s.contact, [viewer]: next } }))
+      redirect(ctx.res, '/settings/contact')
     },
     'GET /settings/password': (ctx) => send(ctx.res, changePasswordPage()),
     'POST /settings/password': (ctx) => send(ctx.res, page('Not changed', '<p>Passwords cannot be changed here.</p>')),
