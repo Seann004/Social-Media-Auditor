@@ -197,7 +197,7 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
     },
     async listPassagesOfPages(pageIds) {
       const out: Passage[] = []
-      for (const pageId of pageIds) {
+      for (const pageId of new Set(pageIds)) {
         out.push(...passages.filter((p) => p.pageId === pageId).sort((a, b) => a.position - b.position))
       }
       return copy(out)

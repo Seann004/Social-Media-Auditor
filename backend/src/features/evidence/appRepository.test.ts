@@ -164,6 +164,8 @@ describe.each(variants)('app evidence repository (%s)', (_variant, factory) => {
 
   it('changes: add, mark restored, list unrestored only', async () => {
     const runId = await newRunId()
+    const otherRunId = await newRunId()
+    await h.app.addChange(change(otherRunId, h.itemId, 'Elsewhere'))
     const a = await h.app.addChange(change(runId, h.itemId, 'Private account'))
     const b = await h.app.addChange(change(runId, h.itemId, 'Location'))
     await h.app.addChange(change(runId, h.otherItemId, 'Messages'))
@@ -179,6 +181,40 @@ describe.each(variants)('app evidence repository (%s)', (_variant, factory) => {
     expect((await h.app.listChanges(runId, { itemId: h.itemId })).map((c) => c.id).sort()).toEqual([a.id, b.id].sort())
     expect((await h.app.listChanges(runId, { itemId: h.itemId, unrestoredOnly: true })).map((c) => c.id)).toEqual([b.id])
     expect((await h.app.listChanges(runId, { unrestoredOnly: true })).length).toBe(2)
+    expect((await h.app.listChanges(otherRunId)).map((c) => c.control)).toEqual(['Elsewhere'])
+  })
+
+  it('lists accounts in one label order whatever the case', async () => {
+    for (const label of ['teen b', 'Teen C', 'adult a', 'Teen A', 'Zed']) await h.app.addTestAccount(account(label))
+    expect((await h.app.listTestAccounts(h.projectId)).map((x) => x.label)).toEqual(['adult a', 'Teen A', 'teen b', 'Teen C', 'Zed'])
+  })
+
+  it('an update with an undefined field leaves that field as it was', async () => {
+    const a = await h.app.addTestAccount(account('Teen 15'))
+    const updated = await h.app.updateTestAccount(a.id, { label: undefined, age: 16 })
+    expect(updated.label).toBe('Teen 15')
+    expect(updated.age).toBe(16)
+    const runId = await newRunId()
+    const c = await h.app.addChange({ ...change(runId, h.itemId, 'Private'), saveControl: 'Save' })
+    const kept = await h.app.updateChange(c.id, { restored: true, saveControl: undefined })
+    expect(kept.saveControl).toBe('Save')
+    expect(kept.restored).toBe(true)
+  })
+
+  it('deleting an account keeps its steps and changes with no account', async () => {
+    const a = await h.app.addTestAccount(account('Teen 15'))
+    const runId = await newRunId()
+    await h.app.addStep({ ...step(runId, h.itemId, 1), accountId: a.id })
+    await h.app.addChange({ ...change(runId, h.itemId, 'Private'), accountId: a.id })
+    await h.app.deleteTestAccount(a.id)
+    const steps = await h.app.listSteps(runId)
+    const changes = await h.app.listChanges(runId)
+    expect(steps).toHaveLength(1)
+    expect(steps[0].accountId).toBeNull()
+    expect(steps[0].accountLabel).toBe('Teen 15')
+    expect(changes).toHaveLength(1)
+    expect(changes[0].accountId).toBeNull()
+    expect(changes[0].accountLabel).toBe('Teen 15')
   })
 })
 

@@ -1,9 +1,13 @@
 import { randomUUID } from 'node:crypto'
+import { byLabel } from './accountOrder.js'
 import type { AppRepository } from './appRepository.js'
 import type { AppChange, AppSource, AppStep, TestAccount } from './appTypes.js'
 
 const copy = <T>(v: T): T => structuredClone(v)
-const byLabel = (a: TestAccount, b: TestAccount): number => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0)
+/** Defined keys only, as the Supabase client sends. */
+const defined = <T extends object>(patch: T): Partial<T> =>
+  Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as Partial<T>
+
 
 /** In-memory app repository for tests. Every result is a copy. */
 export function createMemoryAppRepository(): AppRepository {
@@ -58,12 +62,16 @@ export function createMemoryAppRepository(): AppRepository {
       if (patch.label !== undefined && labelTaken(current.projectId, patch.label, id)) {
         throw new Error('updateTestAccount: the project already has an account with this label')
       }
-      accounts[index] = { ...current, ...copy(patch), updatedAt: new Date().toISOString() }
+      accounts[index] = { ...current, ...copy(defined(patch)), updatedAt: new Date().toISOString() }
       return copy(accounts[index])
     },
     async deleteTestAccount(id) {
       const index = accounts.findIndex((a) => a.id === id)
-      if (index >= 0) accounts.splice(index, 1)
+      if (index < 0) return
+      accounts.splice(index, 1)
+      // As the foreign keys of migration 002 do: on delete set null.
+      steps.forEach((s, i) => { if (s.accountId === id) steps[i] = { ...s, accountId: null } })
+      changes.forEach((c, i) => { if (c.accountId === id) changes[i] = { ...c, accountId: null } })
     },
 
     async addStep(input) {
@@ -93,7 +101,7 @@ export function createMemoryAppRepository(): AppRepository {
     async updateChange(id, patch) {
       const index = changes.findIndex((c) => c.id === id)
       if (index < 0) throw new Error(`updateChange: change ${id} not found`)
-      changes[index] = { ...changes[index], ...copy(patch) }
+      changes[index] = { ...changes[index], ...copy(defined(patch)) }
       return copy(changes[index])
     },
     async listChanges(runId, opts = {}) {

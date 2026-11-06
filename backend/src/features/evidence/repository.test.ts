@@ -346,6 +346,7 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
     const got = await h.repo.listPassagesOfPages([b.id, a.id])
     expect(got.map((p) => p.text)).toEqual(['b0', 'b1', 'a0', 'a1'])
     expect(await h.repo.listPassagesOfPages([])).toEqual([])
+    expect((await h.repo.listPassagesOfPages([a.id, a.id])).map((p) => p.text)).toEqual(['a0', 'a1'])
   })
 
   it('getPageSummaries returns the summaries of the given ids, across runs, without text', async () => {

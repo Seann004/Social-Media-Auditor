@@ -95,6 +95,27 @@ describe('a carried suggestion is the suggestion it was', () => {
   })
 })
 
+describe('a carried suggestion keeps its source', () => {
+  it.each(['app', 'pages'] as const)('carries a %s suggestion with its source', async (source) => {
+    const repo = createMemoryRepository()
+    const add = repo.addSuggestion.bind(repo)
+    repo.addSuggestion = (input) => add({ ...input, source })
+    const world = await createWorld({ repo, items: THREE_CATEGORIES })
+    const first = await world.run()
+    expect((await world.suggestions(first.id)).every((s) => s.source === source)).toBe(true)
+    repo.addSuggestion = add
+    world.deps.assessBatch = async () => {
+      throw new GroqLimitError(7200)
+    }
+
+    const second = await world.run({ scope: 'all', capturedInRunId: first.id })
+
+    const carried = await world.suggestions(second.id)
+    expect(carried.length).toBeGreaterThan(0)
+    expect(carried.every((s) => s.originSuggestionId !== null && s.source === source)).toBe(true)
+  })
+})
+
 describe('a carry that fails loses nothing quietly', () => {
   async function partialFirstRun() {
     const repo = createMemoryRepository()

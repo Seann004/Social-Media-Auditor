@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { byLabel } from './accountOrder.js'
 import type { AppRepository } from './appRepository.js'
 import type { AppChange, AppSource, AppStep, TestAccount } from './appTypes.js'
 
@@ -84,7 +85,7 @@ export function createSupabaseAppRepository(admin: SupabaseClient): AppRepositor
         'listTestAccounts',
         await admin.from('Evidence_Test_Account').select('*').eq('projectId', projectId).order('label', { ascending: true }),
       )
-      return (rows ?? []).map(toAccount)
+      return (rows ?? []).map(toAccount).sort(byLabel)
     },
     async getTestAccount(id) {
       const res = await admin.from('Evidence_Test_Account').select('*').eq('id', id).maybeSingle()
