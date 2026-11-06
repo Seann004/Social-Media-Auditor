@@ -1,7 +1,7 @@
 import { rateLimit } from 'express-rate-limit'
 import type { ErrorRequestHandler, NextFunction, Request, RequestHandler, Response } from 'express'
 import { API_RATE_WINDOW_MS, MAX_ROUTE_PARAM_LENGTH, ROUTE_ID_PATTERN } from './config.js'
-import type { ProjectAccess } from './auditData.js'
+import type { AuditData, ProjectAccess } from './auditData.js'
 
 export type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<void>
 
@@ -68,4 +68,31 @@ export function createProjectLock(): (projectId: string) => (() => void) | null 
     held.add(projectId)
     return () => void held.delete(projectId)
   }
+}
+
+/** The signed-in user, as requireSession left it. */
+export const sessionOf = (res: Response): { userId: string; role: string } => res.locals.session
+
+export interface ProjectGate {
+  /** The caller's access to a project, checked against the allowed values. Answers 403 itself when it fails. */
+  authorise(res: Response, projectId: string, allowed: readonly ProjectAccess[]): Promise<boolean>
+  /** Middleware for routes with the project in `:id`. */
+  onProject(allowed: readonly ProjectAccess[]): RequestHandler
+}
+
+export function projectGate(audit: Pick<AuditData, 'getProjectAccess'>): ProjectGate {
+  async function authorise(res: Response, projectId: string, allowed: readonly ProjectAccess[]): Promise<boolean> {
+    const { userId, role } = sessionOf(res)
+    const access = await audit.getProjectAccess(projectId, userId, role)
+    if (isAllowed(access, allowed)) return true
+    res.status(403).json({ error: 'You do not have access to this project.' })
+    return false
+  }
+
+  const onProject = (allowed: readonly ProjectAccess[]): RequestHandler =>
+    route(async (req, res, next) => {
+      if (await authorise(res, req.params.id, allowed)) next()
+    })
+
+  return { authorise, onProject }
 }

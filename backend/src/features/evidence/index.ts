@@ -3,12 +3,17 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getSupabaseAdmin } from '../../config/supabaseAdmin.js'
 import { createAuthRouter, verifyLoginWithSupabase } from '../auth/routes.js'
 import { createSessions } from '../auth/session.js'
+import type { AppRepository } from './appRepository.js'
+import { createAppRouter } from './appRoutes.js'
 import { createAuditData, type AuditData } from './auditData.js'
 import { MAX_ROUTE_PARAM_LENGTH, ROUTE_ID_PATTERN } from './config.js'
 import { createRunQueue } from './queue.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
+import { createProjectLock } from './routeSupport.js'
 import { createEvidenceRouter } from './routes.js'
 import { runEvidenceJob, type RunnerDeps } from './runner.js'
+import { parseSecretKey } from './secrets.js'
+import { createSupabaseAppRepository } from './supabaseAppRepository.js'
 import { createSupabaseRepository, createSupabaseScreenshotStore } from './supabaseRepository.js'
 import { createUrlGuard } from './urlGuard.js'
 
@@ -26,6 +31,7 @@ export interface EvidenceModuleOptions {
   repo?: EvidenceRepository
   screenshots?: ScreenshotStore
   audit?: AuditData
+  appRepo?: AppRepository
   requestsPerMinute?: number
   /** For tests. Defaults to runEvidenceJob. */
   runJob?: (runId: string, deps: RunnerDeps) => Promise<void>
@@ -36,8 +42,10 @@ type Env = Record<string, string | undefined>
 export const NOT_CONFIGURED_MESSAGE =
   "AI evidence assessment isn't configured: set SESSION_SECRET and SUPABASE_SERVICE_ROLE_KEY"
 
-/** The same default as the older Groq routes in server.ts. */
-const DEFAULT_MODEL = 'llama-3.3-70b-versatile'
+/** The model the owner's backend .env names: GROQ_MODEL overrides it. */
+const DEFAULT_MODEL = 'openai/gpt-oss-120b'
+
+const SECRET_KEY_MISSING = '[evidence] EVIDENCE_SECRET_KEY is not set: test accounts and app runs are unavailable.'
 
 /** Every path of this module, so that an unconfigured server answers 503 on these and no others. */
 const EVIDENCE_PATHS = [
@@ -51,6 +59,13 @@ const EVIDENCE_PATHS = [
   '/suggestions/:id/decision',
   '/evidence/screenshots/page/:id',
   '/evidence/screenshots/quote/:id',
+  '/projects/:id/app-setup',
+  '/projects/:id/app-source',
+  '/projects/:id/test-accounts',
+  '/projects/:id/test-accounts/:accountId',
+  '/projects/:id/app-runs',
+  '/projects/:id/evidence-runs/:runId/app-changes',
+  '/suggestions/:id/steps',
 ]
 
 function unconfiguredRouter(): Router {
@@ -83,12 +98,14 @@ const disabled = (): EvidenceModule => ({
  * Builds the evidence feature: the login and evidence routers, the job queue and the start-up step.
  * Importing this file opens no connection and starts no browser; that happens when a job runs.
  * Without SESSION_SECRET or the service key the feature is off and the rest of the app is untouched.
- * A SESSION_SECRET that is set but too short throws.
+ * A SESSION_SECRET that is set but too short throws, and so does an EVIDENCE_SECRET_KEY that is set but
+ * not 32 bytes of base64. Without EVIDENCE_SECRET_KEY the rest works, but not test accounts or app runs.
  */
 export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = {}): EvidenceModule {
   const secret = env.SESSION_SECRET
   // A secret that is set but too short is a mistake to fix, whatever else is missing.
   const sessions = secret ? createSessions(secret) : null
+  const secretKey = parseSecretKey(env.EVIDENCE_SECRET_KEY)
   const admin = secret && env.SUPABASE_SERVICE_ROLE_KEY ? (options.admin ?? getSupabaseAdmin)() : null
   if (!sessions || !env.SUPABASE_SERVICE_ROLE_KEY || (!admin && !(options.repo && options.screenshots && options.audit))) {
     console.error(`[evidence] ${NOT_CONFIGURED_MESSAGE}. The evidence routes answer 503 until then.`)
@@ -98,16 +115,22 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
   const repo = options.repo ?? createSupabaseRepository(admin as SupabaseClient)
   const screenshots = options.screenshots ?? createSupabaseScreenshotStore(admin as SupabaseClient)
   const audit = options.audit ?? createAuditData({ client: () => admin })
+  const appRepo = options.appRepo ?? createSupabaseAppRepository(admin as SupabaseClient)
   const hosts = allowedPrivateHosts(env)
   const guard = () => createUrlGuard({ allowedPrivateHosts: hosts })
   const apiKey = env.GROQ_API_KEY ?? ''
   const model = env.GROQ_MODEL || DEFAULT_MODEL
 
   if (!apiKey) console.error('[evidence] GROQ_API_KEY is not set: suggestions can be read but runs cannot start.')
+  if (!secretKey) console.error(SECRET_KEY_MISSING)
 
   const queue = createRunQueue((runId) =>
-    (options.runJob ?? runEvidenceJob)(runId, { repo, screenshots, audit, guard: guard(), apiKey, model }),
+    (options.runJob ?? runEvidenceJob)(runId, { repo, screenshots, audit, guard: guard(), apiKey, model, app: { appRepo, secretKey } }),
   )
+  // One lock for both routers: a page run and an app run of a project never start at the same time.
+  const acquire = createProjectLock()
+  const aiConfigured = apiKey !== ''
+  const requestsPerMinute = options.requestsPerMinute
 
   return {
     routers: [
@@ -119,9 +142,12 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
         queue,
         guard,
         sessions,
-        aiConfigured: apiKey !== '',
-        requestsPerMinute: options.requestsPerMinute,
+        aiConfigured,
+        acquire,
+        appRepo,
+        requestsPerMinute,
       }),
+      createAppRouter({ repo, appRepo, audit, queue, guard, sessions, acquire, aiConfigured, secretKey, requestsPerMinute }),
     ],
     async start() {
       try {

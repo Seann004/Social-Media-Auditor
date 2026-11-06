@@ -577,10 +577,13 @@ describe('the polled routes read only the page columns they show', () => {
     const { world } = await setup()
     const whole = vi.spyOn(world.repo, 'listPages')
     const summaries = vi.spyOn(world.repo, 'listPageSummaries')
+    const byId = vi.spyOn(world.repo, 'getPageSummaries')
     await request(world.app).get(`/api/projects/${P1}/evidence-runs/latest`).set(world.auth(USERS.auditor))
     await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.auditor))
     expect(whole).not.toHaveBeenCalled()
-    expect(summaries).toHaveBeenCalledTimes(2)
+    expect(summaries).toHaveBeenCalledTimes(1)
+    // The suggestions read the pages their quotes name, whichever run captured them.
+    expect(byId).toHaveBeenCalledTimes(1)
   })
 
   it('suggestions fetch the suggested results of other runs in one batch, not one by one', async () => {

@@ -1,10 +1,14 @@
 import express, { type Express } from 'express'
 import { createSessions, type Sessions } from '../auth/session.js'
 import type { AppliedAnswer, AuditData, ProjectAccess } from './auditData.js'
+import { createAppRouter } from './appRoutes.js'
+import type { AppRepository } from './appRepository.js'
+import { createMemoryAppRepository } from './memoryAppRepository.js'
 import { createMemoryRepository } from './memoryRepository.js'
 import type { RunQueue } from './queue.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import { createEvidenceRouter, type EvidenceRouterDeps } from './routes.js'
+import { createProjectLock } from './routeSupport.js'
 import { createUrlGuard } from './urlGuard.js'
 import type { EvidenceRun, Suggestion } from './types.js'
 import type { SubmissionStatus } from '../../types/index.js'
@@ -12,6 +16,8 @@ import type { SubmissionStatus } from '../../types/index.js'
 export const SECRET = 'a-test-secret-that-is-at-least-32-chars-long'
 export const P1 = 'p-1'
 export const P2 = 'p-2'
+/** The 32-byte key the test routers encrypt test-account passwords with. */
+export const TEST_SECRET_KEY = Buffer.alloc(32, 7)
 
 export interface TestUser {
   userId: string
@@ -78,6 +84,7 @@ export function makeAudit(): FakeAudit {
 export interface World {
   app: Express
   repo: EvidenceRepository & ScreenshotStore
+  appRepo: AppRepository
   audit: FakeAudit
   enqueued: string[]
   queue: RunQueue
@@ -91,12 +98,19 @@ export interface WorldOptions {
   aiConfigured?: boolean
   requestsPerMinute?: number
   repo?: EvidenceRepository & ScreenshotStore
+  appRepo?: AppRepository
+  /** Defaults to TEST_SECRET_KEY; null is a server without EVIDENCE_SECRET_KEY. */
+  secretKey?: Buffer | null
+  /** Replaces the audit the routers read, e.g. to hold a start open. */
+  audit?: FakeAudit
   deps?: Partial<EvidenceRouterDeps>
 }
 
 export function makeWorld(opts: WorldOptions = {}): World {
   const repo = opts.repo ?? createMemoryRepository()
-  const audit = makeAudit()
+  const appRepo = opts.appRepo ?? createMemoryAppRepository()
+  const audit = opts.audit ?? makeAudit()
+  const acquire = createProjectLock()
   const sessions = createSessions(SECRET)
   const enqueued: string[] = []
   const queue: RunQueue = { enqueue: (id) => void enqueued.push(id), idle: async () => undefined }
@@ -118,11 +132,25 @@ export function makeWorld(opts: WorldOptions = {}): World {
       sessions,
       aiConfigured: opts.aiConfigured ?? true,
       requestsPerMinute: opts.requestsPerMinute,
+      acquire,
+      appRepo,
       ...opts.deps,
+    }),
+    createAppRouter({
+      repo,
+      appRepo,
+      audit,
+      queue,
+      guard,
+      sessions,
+      acquire,
+      aiConfigured: opts.aiConfigured ?? true,
+      secretKey: opts.secretKey === undefined ? TEST_SECRET_KEY : opts.secretKey,
+      requestsPerMinute: opts.requestsPerMinute,
     }),
   )
   const token = (user: TestUser) => sessions.sign(user)
-  return { app, repo, audit, enqueued, queue, sessions, guardsMade, token, auth: (u) => ({ Authorization: `Bearer ${token(u)}` }) }
+  return { app, repo, appRepo, audit, enqueued, queue, sessions, guardsMade, token, auth: (u) => ({ Authorization: `Bearer ${token(u)}` }) }
 }
 
 /** A finished run with one page and one suggestion carrying one quote. */

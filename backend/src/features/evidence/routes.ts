@@ -1,6 +1,7 @@
-import express, { Router, type RequestHandler, type Response } from 'express'
+import express, { Router, type Response } from 'express'
 import { z } from 'zod'
 import { requireSession, type Sessions } from '../auth/session.js'
+import type { AppRepository } from './appRepository.js'
 import type { AuditData, ProjectAccess } from './auditData.js'
 import {
   API_REQUESTS_PER_MINUTE,
@@ -16,7 +17,7 @@ import {
 import { DecisionError, recordDecision } from './decisions.js'
 import type { RunQueue } from './queue.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
-import { createProjectLock, isAllowed, jsonErrorHandler, route, userLimiter, validParams } from './routeSupport.js'
+import { createProjectLock, jsonErrorHandler, projectGate, route, sessionOf, userLimiter, validParams } from './routeSupport.js'
 import { startReassess, startRun, sweepStaleRuns, type RunStartDeps, type StartOutcome } from './runStart.js'
 import type { CapturedPage, PageSummary, Suggestion } from './types.js'
 import type { UrlGuard } from './urlGuard.js'
@@ -32,6 +33,10 @@ export interface EvidenceRouterDeps {
   sessions: Sessions
   /** False when GROQ_API_KEY is missing: runs cannot start, everything else works. */
   aiConfigured: boolean
+  /** One lock per process, shared with the app router so that a page run and an app run never start together. Defaults to a lock of its own. */
+  acquire?: (projectId: string) => (() => void) | null
+  /** For the re-assess of an app run. Without it, an app run's unfinished cannot be re-assessed. */
+  appRepo?: AppRepository
   requestsPerMinute?: number
 }
 
@@ -61,36 +66,18 @@ const decisionBody = z.object({
 const invalid = (res: Response): void => {
   res.status(400).json({ error: 'Invalid request' })
 }
-const forbidden = (res: Response): void => {
-  res.status(403).json({ error: 'You do not have access to this project.' })
-}
 const notFound = (res: Response): void => {
   res.status(404).json({ error: 'Not found' })
 }
-
-const sessionOf = (res: Response): { userId: string; role: string } => res.locals.session
 
 export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
   const router = Router()
   const { repo, audit } = deps
   const common = [requireSession(deps.sessions), userLimiter(deps.requestsPerMinute ?? API_REQUESTS_PER_MINUTE), validParams]
   const json = express.json({ limit: MAX_BODY_SIZE })
-  const acquire = createProjectLock()
-  const runDeps: RunStartDeps = { repo, audit, queue: deps.queue, acquire }
-
-  /** The caller's access to a project, checked against the allowed values. Answers 403 itself when it fails. */
-  async function authorise(res: Response, projectId: string, allowed: readonly ProjectAccess[]): Promise<boolean> {
-    const { userId, role } = sessionOf(res)
-    const access = await audit.getProjectAccess(projectId, userId, role)
-    if (isAllowed(access, allowed)) return true
-    forbidden(res)
-    return false
-  }
-
-  const onProject = (allowed: readonly ProjectAccess[]): RequestHandler =>
-    route(async (req, res, next) => {
-      if (await authorise(res, req.params.id, allowed)) next()
-    })
+  const acquire = deps.acquire ?? createProjectLock()
+  const runDeps: RunStartDeps = { repo, audit, queue: deps.queue, acquire, ...(deps.appRepo ? { appRepo: deps.appRepo } : {}) }
+  const { authorise, onProject } = projectGate(audit)
 
   const answerStart = (res: Response, outcome: StartOutcome): void => {
     if (outcome.ok) res.status(202).json({ run: toRunView(outcome.run) })
@@ -198,8 +185,11 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
         res.json({ run: null, suggestions: [], decisions: [] })
         return
       }
-      const pages = new Map<string, PageSummary>((await repo.listPageSummaries(run.capturedInRunId)).map((p) => [p.id, p]))
       const found = await repo.listSuggestions(run.id)
+      // By the ids the quotes name: a copy carried from another capture keeps its page link.
+      const pageIds = [...new Set(found.flatMap((s) => s.quotes.map((q) => q.pageId)).filter((id): id is string => id !== null))]
+      const summaries = pageIds.length > 0 ? await repo.getPageSummaries(pageIds) : []
+      const pages = new Map<string, PageSummary>(summaries.map((p) => [p.id, p]))
       const decisions = await latestDecisionViews(repo, req.params.id, found)
       res.json({ run: toRunView(run), suggestions: found.map((s) => toSuggestionView(s, pages)), decisions })
     }),

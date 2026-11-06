@@ -4,10 +4,18 @@ import request from 'supertest'
 import { createSessions } from '../auth/session.js'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { createEvidenceModule, NOT_CONFIGURED_MESSAGE } from './index.js'
+import { createMemoryAppRepository } from './memoryAppRepository.js'
 import { createMemoryRepository } from './memoryRepository.js'
 import { makeAudit } from './routesTestKit.js'
 
-const CONFIGURED = { SESSION_SECRET: 'a-test-secret-that-is-at-least-32-chars-long', SUPABASE_SERVICE_ROLE_KEY: 'k', GROQ_API_KEY: 'gsk_x' }
+const SECRET_KEY = Buffer.alloc(32, 5)
+const CONFIGURED = {
+  SESSION_SECRET: 'a-test-secret-that-is-at-least-32-chars-long',
+  SUPABASE_SERVICE_ROLE_KEY: 'k',
+  GROQ_API_KEY: 'gsk_x',
+  EVIDENCE_SECRET_KEY: SECRET_KEY.toString('base64'),
+}
+const KEY_MISSING_LINE = '[evidence] EVIDENCE_SECRET_KEY is not set: test accounts and app runs are unavailable.'
 const admin = () => ({}) as SupabaseClient
 
 let errors: MockInstance
@@ -17,7 +25,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 function moduleWith(repo = createMemoryRepository(), env: Record<string, string | undefined> = CONFIGURED) {
-  return createEvidenceModule(env, { admin, repo, screenshots: repo, audit: makeAudit() })
+  return createEvidenceModule(env, { admin, repo, screenshots: repo, audit: makeAudit(), appRepo: createMemoryAppRepository() })
 }
 
 describe('createEvidenceModule', () => {
@@ -48,16 +56,36 @@ describe('createEvidenceModule', () => {
     expect(() => createEvidenceModule({ ...CONFIGURED, SESSION_SECRET: 'short' }, { admin })).toThrow(/at least 32/)
   })
 
-  it('returns the login router and the evidence router when configured', () => {
-    expect(moduleWith().routers).toHaveLength(2)
+  it('returns the login, evidence and app routers when configured', () => {
+    expect(moduleWith().routers).toHaveLength(3)
     expect(errors).not.toHaveBeenCalled()
   })
 
   it('warns once, and still starts, without a Groq key', () => {
     const m = moduleWith(undefined, { ...CONFIGURED, GROQ_API_KEY: undefined })
-    expect(m.routers).toHaveLength(2)
+    expect(m.routers).toHaveLength(3)
     expect(errors).toHaveBeenCalledTimes(1)
     expect(String(errors.mock.calls[0][0])).toContain('GROQ_API_KEY')
+  })
+
+  it('logs one startup line, and still starts, without EVIDENCE_SECRET_KEY', () => {
+    const m = moduleWith(undefined, { ...CONFIGURED, EVIDENCE_SECRET_KEY: undefined })
+    expect(m.routers).toHaveLength(3)
+    expect(errors).toHaveBeenCalledTimes(1)
+    expect(errors.mock.calls[0]).toEqual([KEY_MISSING_LINE])
+  })
+
+  it.each(['not base64!', Buffer.alloc(16, 1).toString('base64')])('a malformed EVIDENCE_SECRET_KEY throws at module creation (%j)', (key) => {
+    expect(() => moduleWith(undefined, { ...CONFIGURED, EVIDENCE_SECRET_KEY: key })).toThrow(/EVIDENCE_SECRET_KEY must be 32 random bytes/)
+    // Like a short SESSION_SECRET: a mistake to fix whatever else is missing, and the error names no key.
+    expect(() => createEvidenceModule({ EVIDENCE_SECRET_KEY: key }, { admin })).toThrow(/EVIDENCE_SECRET_KEY/)
+    let thrown: unknown = null
+    try {
+      moduleWith(undefined, { ...CONFIGURED, EVIDENCE_SECRET_KEY: key })
+    } catch (err) {
+      thrown = err
+    }
+    expect(String(thrown)).not.toContain(key)
   })
 
   it('start fails the runs a restart left in progress', async () => {
@@ -100,12 +128,28 @@ describe('how the module is wired', () => {
   const sessions = createSessions(CONFIGURED.SESSION_SECRET)
   const head = { Authorization: `Bearer ${sessions.sign({ userId: 'u-aud', role: 'auditor' })}` }
 
-  function build(env: Record<string, string | undefined>, runJob = vi.fn(async () => undefined)) {
+  function build(env: Record<string, string | undefined>, runJob = vi.fn(async () => undefined), audit = makeAudit()) {
     const repo = createMemoryRepository()
-    const m = createEvidenceModule(env, { admin, repo, screenshots: repo, audit: makeAudit(), runJob })
+    const appRepo = createMemoryAppRepository()
+    const m = createEvidenceModule(env, { admin, repo, screenshots: repo, audit, runJob, appRepo })
     const app = express()
     app.use('/api', ...m.routers)
-    return { app, repo, runJob }
+    return { app, repo, appRepo, runJob }
+  }
+
+  async function readyForAppRun(appRepo: ReturnType<typeof createMemoryAppRepository>): Promise<void> {
+    await appRepo.saveAppSource('p-1', { appUrl: 'https://example.com/', loginDomains: [] }, null)
+    await appRepo.addTestAccount({
+      id: 'a-1',
+      projectId: 'p-1',
+      label: 'Teen 15',
+      ageGroup: 'under_18',
+      age: 15,
+      loginName: 'teen',
+      handles: [],
+      passwordCiphertext: 'x',
+      createdBy: null,
+    })
   }
 
   it('starts a run on the queue with the key, the model and a guard built from the allow-list', async () => {
@@ -123,12 +167,57 @@ describe('how the module is wired', () => {
     expect((await deps.guard.check('http://localhost:9999/')).allowed).toBe(false)
   })
 
-  it('uses the same default model as the older Groq routes', async () => {
-    const { app, repo, runJob } = build(CONFIGURED)
+  it('defaults the model to openai/gpt-oss-120b when GROQ_MODEL is unset', async () => {
+    const { app, repo, runJob } = build({ ...CONFIGURED, GROQ_MODEL: undefined })
     await repo.saveSource('p-1', ['https://example.com/'], 'u-aud')
     await request(app).post('/api/projects/p-1/evidence-runs').set(head)
     await vi.waitFor(() => expect(runJob).toHaveBeenCalled())
-    expect((runJob.mock.calls[0] as unknown as [string, { model: string }])[1].model).toBe('llama-3.3-70b-versatile')
+    expect((runJob.mock.calls[0] as unknown as [string, { model: string }])[1].model).toBe('openai/gpt-oss-120b')
+  })
+
+  it('starts an app run with the app repository and the secret key in the runner deps', async () => {
+    const { app, appRepo, runJob } = build(CONFIGURED)
+    await readyForAppRun(appRepo)
+    const res = await request(app).post('/api/projects/p-1/app-runs').set(head).send({ itemIds: ['item-1'] })
+    expect(res.status).toBe(202)
+    await vi.waitFor(() => expect(runJob).toHaveBeenCalledTimes(1))
+    const deps = (runJob.mock.calls[0] as unknown as [string, { app: { appRepo: unknown; secretKey: Buffer | null } }])[1]
+    expect(deps.app.appRepo).toBe(appRepo)
+    expect(deps.app.secretKey?.equals(SECRET_KEY)).toBe(true)
+  })
+
+  it('a page run and an app run share one lock across the two routers', async () => {
+    let open: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => {
+      open = resolve
+    })
+    let calls = 0
+    const base = makeAudit()
+    const audit = {
+      ...base,
+      async getSubmissionStatus(projectId: string) {
+        calls += 1
+        if (calls === 1) await gate
+        return base.getSubmissionStatus(projectId)
+      },
+    }
+    const { app, repo, appRepo } = build(CONFIGURED, vi.fn(async () => undefined), audit)
+    await repo.saveSource('p-1', ['https://example.com/'], 'u-aud')
+    await readyForAppRun(appRepo)
+    const first = request(app).post('/api/projects/p-1/evidence-runs').set(head).then((r) => r)
+    await vi.waitFor(() => expect(calls).toBe(1))
+    const second = await request(app).post('/api/projects/p-1/app-runs').set(head).send({ itemIds: ['item-1'] })
+    expect(second.status).toBe(409)
+    open()
+    expect((await first).status).toBe(202)
+  })
+
+  it('app runs answer 503 without EVIDENCE_SECRET_KEY', async () => {
+    const { app, appRepo, runJob } = build({ ...CONFIGURED, EVIDENCE_SECRET_KEY: undefined })
+    await readyForAppRun(appRepo)
+    const res = await request(app).post('/api/projects/p-1/app-runs').set(head).send({ itemIds: ['item-1'] })
+    expect(res.status).toBe(503)
+    expect(runJob).not.toHaveBeenCalled()
   })
 
   it('answers 503 and runs nothing when GROQ_API_KEY is missing', async () => {

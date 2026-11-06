@@ -98,6 +98,19 @@ describe('configured', () => {
     expect(res.headers['content-type']).toMatch(/json/)
   })
 
+  it.each([
+    ['get', '/api/projects/p-1/app-setup'],
+    ['put', '/api/projects/p-1/app-source'],
+    ['post', '/api/projects/p-1/test-accounts'],
+    ['patch', '/api/projects/p-1/test-accounts/a-1'],
+    ['delete', '/api/projects/p-1/test-accounts/a-1'],
+    ['post', '/api/projects/p-1/app-runs'],
+    ['get', '/api/projects/p-1/evidence-runs/r-1/app-changes'],
+    ['get', '/api/suggestions/s-1/steps'],
+  ] as const)('mounts the app route %s %s behind a token', async (method, path) => {
+    expect((await request(makeApp(CONFIGURED))[method](path)).status).toBe(401)
+  })
+
   it('requires a token on the evidence routes and mounts login', async () => {
     const app = makeApp(CONFIGURED)
     expect((await request(app).get('/api/projects/p-1/suggestions')).status).toBe(401)
@@ -118,6 +131,14 @@ describe('unconfigured', () => {
     ['post', '/api/suggestions/s-1/decision'],
     ['get', '/api/evidence/screenshots/page/x-1'],
     ['get', '/api/evidence/screenshots/quote/x-1'],
+    ['get', '/api/projects/p-1/app-setup'],
+    ['put', '/api/projects/p-1/app-source'],
+    ['post', '/api/projects/p-1/test-accounts'],
+    ['patch', '/api/projects/p-1/test-accounts/a-1'],
+    ['delete', '/api/projects/p-1/test-accounts/a-1'],
+    ['post', '/api/projects/p-1/app-runs'],
+    ['get', '/api/projects/p-1/evidence-runs/r-1/app-changes'],
+    ['get', '/api/suggestions/s-1/steps'],
   ] as const)('%s %s answers 503', async (method, path) => {
     const res = await request(makeApp({}))[method](path)
     expect(res.status).toBe(503)
