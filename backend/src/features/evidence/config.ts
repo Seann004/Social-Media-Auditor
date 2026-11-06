@@ -79,3 +79,41 @@ export const MAX_ROUTE_PARAM_LENGTH = 64
 export const ROUTE_ID_PATTERN = /^[A-Za-z0-9-]+$/
 export const MAX_URL_LENGTH = 2_048
 export const MAX_PERMISSION_NOTE_CHARS = 500
+
+// App evidence: the AI checks items by using the platform's web app
+export const APP_PROMPT_VERSION = 'app-evidence-v1'
+export const APP_MAX_STEPS_PER_CHECK = 15
+/** Its own cap: the Phase 1 cap of 80 000 covers only one or two checks. Counts step and judge calls. */
+export const APP_MAX_TOKENS_PER_RUN = 200_000
+export const APP_MAX_ITEMS_PER_RUN = 10
+
+// Step prompt budget
+export const APP_STEP_INPUT_TOKENS = 2_000
+export const APP_STEP_OUTPUT_TOKENS = 800
+export const APP_PAGE_TEXT_CHARS = 3_200
+export const APP_MAX_ELEMENTS = 80
+export const APP_ELEMENT_LINE_CHARS = 160
+export const APP_HISTORY_LINES = 12
+
+// Reading and typing
+export const APP_CONTEXT_TEXT_CHARS = 400
+export const APP_MAX_TYPE_CHARS = 500
+
+// Timing
+export const APP_ACTION_TIMEOUT_MS = 15_000
+export const APP_SETTLE_MS = 500
+export const APP_NETWORK_IDLE_WAIT_MS = 2_000
+export const APP_RUN_TIMEOUT_MS = 1_800_000
+
+// Project limits
+export const APP_MAX_TEST_ACCOUNTS = 6
+export const APP_MAX_LOGIN_DOMAINS = 5
+export const APP_MAX_HANDLES = 5
+
+// Giving up
+export const APP_LOGIN_FAILURES_BEFORE_UNUSABLE = 2
+export const APP_UNREADABLE_REPLIES_BEFORE_STOP = 3
+
+// Crypto and AI
+export const SECRET_KEY_BYTES = 32
+export const AI_REASONING_EFFORT = 'low'
