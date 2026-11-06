@@ -89,16 +89,26 @@ describe('an app run against the social app', () => {
     expect(settingsStep?.line).toContain('/settings')
     expect(privateSuggestion).toMatchObject({ itemId: PRIVATE.id, suggestedResult: 'yes', source: 'app', originSuggestionId: null })
     expect(privateSuggestion.quotes).toHaveLength(1)
+    expect(privateSuggestion.flags).toEqual([])
     expect(privateSuggestion.quotes[0]).toMatchObject({ verified: true, pageId: settingsStep?.pageId })
     expect(typeof privateSuggestion.quotes[0].highlightScreenshotPath).toBe('string')
 
     const messagingSteps = await kit.appRepo.listSteps(run.id, MESSAGING.id)
     const accountOfPage = new Map(messagingSteps.map((s) => [s.pageId, s.accountLabel]))
     expect(messagingSuggestion).toMatchObject({ itemId: MESSAGING.id, suggestedResult: 'no', source: 'app' })
+    expect(messagingSuggestion.flags).toEqual([])
     expect(messagingSuggestion.quotes.map((q) => [q.verified, accountOfPage.get(q.pageId)])).toEqual([
       [true, 'Adult 30'],
       [true, 'Teen 15'],
     ])
+
+    // Every step that recorded a page has its screenshot, for the replay.
+    const withPage = [...privateSteps, ...messagingSteps].filter((s) => s.pageId !== null)
+    expect(withPage.length).toBe(privateSteps.length - 1 + messagingSteps.length - 1)
+    for (const step of withPage) {
+      const stored = await kit.repo.getPage(step.pageId as string)
+      expect(stored?.screenshotPath, step.line).toEqual(expect.any(String))
+    }
 
     // Nothing was changed, nothing was sent, and no answer was written.
     expect(await kit.appRepo.listChanges(run.id)).toEqual([])

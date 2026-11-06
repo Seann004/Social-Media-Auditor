@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GroqLimitError } from '../../lib/groq.js'
+import { StepDecisionError } from './appAgent.js'
 import { leftChangedLine } from './appCheck.js'
 import { appPartialSummary, itemIdsOfLostCategories } from './appRunner.js'
 import type { AppAction } from './appTypes.js'
@@ -219,6 +220,20 @@ describe('executeAppRun, a capture run', () => {
     expect((await kit.appRepo.listChanges(run.id)).map((c) => c.restored)).toEqual([true])
     expect(run.status).toBe('failed')
     expect(run.finishedAt).not.toBeNull()
+    // The session pool was closed on the way out: no browser context of the run is left open.
+    expect(world.browser.contexts()).toHaveLength(0)
+  })
+
+  it('a check that ends unfinished (three unreadable replies) is still judged from its steps', async () => {
+    const unreadable = () => {
+      throw new StepDecisionError('The reply could not be read.', 5)
+    }
+    kit.scripts.i1 = [OPEN_TEEN, unreadable, unreadable, unreadable]
+    const run = await kit.run({ checkedItemIds: ['i1'] })
+    expect((await kit.appRepo.listSteps(run.id, 'i1')).map((s) => s.outcome)).toEqual(['done', 'failed', 'failed', 'failed'])
+    expect(kit.judged.map((j) => j.items[0].id)).toEqual(['i1'])
+    expect(ids(await kit.suggestions(run.id))).toEqual(['i1'])
+    expect(run.status).toBe('completed')
   })
 
   it('a check that ended with error gets no suggestion, is listed unchecked, and the run goes on', async () => {

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { SubmissionStatus } from '../../types/index.js'
 import { startAppRun } from './appRunStart.js'
-import { unfinishedAppItems } from './appRunner.js'
-import { APP_PROMPT_VERSION, MAX_RUNS_PER_PROJECT_PER_DAY } from './config.js'
+import { unfinishedAppItems } from './appRunPlan.js'
+import { APP_PROMPT_VERSION, MAX_RUNS_PER_PROJECT_PER_DAY, PROMPT_VERSION } from './config.js'
 import { createMemoryAppRepository } from './memoryAppRepository.js'
 import { createMemoryRepository } from './memoryRepository.js'
 import type { RunQueue } from './queue.js'
@@ -61,7 +61,14 @@ async function addAccount(): Promise<void> {
 
 /** A finished app run, as an earlier result. */
 async function finishedAppRun(checked: string[], unchecked: string[]): Promise<EvidenceRun> {
-  const run = await repo.createRun({ projectId: PROJECT, startedBy: 'u1', scope: 'all', source: 'app', checkedItemIds: checked })
+  const run = await repo.createRun({
+    projectId: PROJECT,
+    startedBy: 'u1',
+    scope: 'all',
+    source: 'app',
+    checkedItemIds: checked,
+    promptVersion: APP_PROMPT_VERSION,
+  })
   return repo.updateRun(run.id, { status: unchecked.length > 0 ? 'partial' : 'completed', uncheckedItemIds: unchecked, finishedAt: new Date().toISOString() })
 }
 
@@ -172,7 +179,25 @@ describe('startReassess of an app run', () => {
     const all = await startReassess(deps, PROJECT, 'u1', from.id, 'all')
     expect(all.ok).toBe(true)
     if (!all.ok) return
-    expect(all.run).toMatchObject({ source: 'app', checkedItemIds: ['i1', 'i3'], capturedInRunId: from.id, scope: 'all' })
+    expect(all.run).toMatchObject({
+      source: 'app',
+      checkedItemIds: ['i1', 'i3'],
+      capturedInRunId: from.id,
+      scope: 'all',
+      promptVersion: APP_PROMPT_VERSION,
+    })
+  })
+
+  it('refuses an unfinished app re-assess with 409 when the server has no app repository', async () => {
+    const from = await finishedAppRun(['i1'], ['i1'])
+    await addStepFor(from.id, 'i1')
+    const { appRepo: _appRepo, ...withoutApp } = deps
+    expect(await startReassess(withoutApp, PROJECT, 'u1', from.id, 'unfinished')).toEqual({
+      ok: false,
+      status: 409,
+      error: "Checking inside the app isn't configured on this server.",
+    })
+    expect(queued).toEqual([])
   })
 
   it('queues an unfinished re-assess when a checked item has steps and no suggestion', async () => {
@@ -182,7 +207,15 @@ describe('startReassess of an app run', () => {
     await addSuggestionFor(from.id, 'i1')
     const outcome = await startReassess(deps, PROJECT, 'u1', from.id, 'unfinished')
     expect(outcome.ok).toBe(true)
-    if (outcome.ok) expect(outcome.run).toMatchObject({ source: 'app', checkedItemIds: ['i1', 'i3'], scope: 'unfinished', capturedInRunId: from.id })
+    if (outcome.ok) {
+      expect(outcome.run).toMatchObject({
+        source: 'app',
+        checkedItemIds: ['i1', 'i3'],
+        scope: 'unfinished',
+        capturedInRunId: from.id,
+        promptVersion: APP_PROMPT_VERSION,
+      })
+    }
   })
 
   it('refuses "Nothing is unfinished." when every checked item has its suggestion', async () => {
@@ -197,6 +230,6 @@ describe('startReassess of an app run', () => {
     await repo.updateRun(run.id, { status: 'completed' })
     const outcome = await startReassess(deps, PROJECT, 'u1', run.id, 'all')
     expect(outcome.ok).toBe(true)
-    if (outcome.ok) expect(outcome.run).toMatchObject({ source: 'pages', checkedItemIds: [], capturedInRunId: run.id })
+    if (outcome.ok) expect(outcome.run).toMatchObject({ source: 'pages', checkedItemIds: [], capturedInRunId: run.id, promptVersion: PROMPT_VERSION })
   })
 })

@@ -1,5 +1,5 @@
 import type { AppRepository } from './appRepository.js'
-import { unfinishedAppItems } from './appRunner.js'
+import { unfinishedAppItems } from './appRunPlan.js'
 import type { RunSource } from './appTypes.js'
 import type { AuditData } from './auditData.js'
 import {
@@ -172,7 +172,8 @@ export function startReassess(
     if (from.source === 'app') {
       const refusal = scope === 'unfinished' ? await refusalIfNoAppItemUnfinished(deps, from) : null
       if (refusal) return { refusal }
-      return { capturedInRunId: from.capturedInRunId, source: 'app', checkedItemIds: from.checkedItemIds }
+      // The new run judges with the same app prompt, so it records the same prompt version.
+      return { capturedInRunId: from.capturedInRunId, source: 'app', checkedItemIds: from.checkedItemIds, promptVersion: from.promptVersion }
     }
     if (scope === 'unfinished') {
       const refusal = await refusalIfNothingUnfinished(deps, projectId, from.capturedInRunId)
