@@ -94,6 +94,15 @@ export const APP_PAGE_TEXT_CHARS = 3_200
 export const APP_MAX_ELEMENTS = 80
 export const APP_ELEMENT_LINE_CHARS = 160
 export const APP_HISTORY_LINES = 12
+export const APP_HISTORY_LINE_CHARS = 300
+// Fixed caps on the other step-prompt fields, so the whole prompt stays within APP_STEP_INPUT_TOKENS
+export const APP_PROMPT_ITEM_TEXT_CHARS = 500
+export const APP_PROMPT_NAME_CHARS = 100
+export const APP_PROMPT_ACCOUNT_CHARS = 30
+export const APP_PROMPT_SESSION_CHARS = 100
+export const APP_PROMPT_URL_CHARS = 200
+export const APP_PROMPT_LEFT_CHANGED_LINES = 5
+export const APP_PROMPT_LEFT_CHANGED_CHARS = 100
 
 // Reading and typing
 export const APP_CONTEXT_TEXT_CHARS = 400

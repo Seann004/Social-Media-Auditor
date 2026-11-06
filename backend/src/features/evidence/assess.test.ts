@@ -142,14 +142,17 @@ describe('assessBatch', () => {
   })
 })
 
-describe('assessBatch request shape (refactor guard)', () => {
-  it('still sends temperature 0.1, JSON mode and max_tokens 1500', async () => {
+describe('assessBatch reasoning_effort (deliberate Phase 1 change)', () => {
+  const bodyAfter = async (model: string) => {
     const f = vi.fn().mockResolvedValue(groqResponse({ results: [goodResult('i1')] }))
     vi.stubGlobal('fetch', f)
-    await run()
-    const body = JSON.parse((f.mock.calls[0][1] as RequestInit).body as string)
-    expect(body.temperature).toBe(0.1)
-    expect(body.response_format).toEqual({ type: 'json_object' })
-    expect(body.max_tokens).toBe(1500)
+    await assessBatch({ items: [item('i1')], passages: [passage('hello world', 'real-1')], platform: 'T', apiKey: 'K', model })
+    return JSON.parse((f.mock.calls[0][1] as RequestInit).body as string)
+  }
+  it('sends reasoning_effort low on openai/gpt-oss models', async () => {
+    expect((await bodyAfter('openai/gpt-oss-120b')).reasoning_effort).toBe('low')
+  })
+  it('does not send it on other models', async () => {
+    expect(await bodyAfter('llama-3.3-70b')).not.toHaveProperty('reasoning_effort')
   })
 })
