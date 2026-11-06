@@ -1,6 +1,6 @@
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
-import { APP_NOT_CONFIGURED } from './appRoutes.js'
+import { APP_NOT_CONFIGURED, wrapAccountError } from './appRoutes.js'
 import type { TestAccount } from './appTypes.js'
 import { decryptSecret, encryptSecret, secretAad } from './secrets.js'
 import { P1, P2, TEST_SECRET_KEY, USERS, makeAudit, makeWorld, seedResult, type TestUser, type World } from './routesTestKit.js'
@@ -219,7 +219,15 @@ describe('the app address and login domains', () => {
 
   it('rejects an internal app address with one sentence and a bad login domain with 400', async () => {
     const { world } = await setup()
-    for (const appUrl of ['http://intranet.test/', 'ftp://example.com/', 'not a url', 'javascript:alert(1)']) {
+    const internal = [
+      'http://intranet.test/',
+      'http://10.1.2.3/',
+      'http://192.168.0.1/',
+      'http://169.254.169.254/latest/meta-data/',
+      'http://127.0.0.1/',
+      'http://[::1]/',
+    ]
+    for (const appUrl of [...internal, 'ftp://example.com/', 'not a url', 'javascript:alert(1)']) {
       const res = await save(world, { appUrl, loginDomains: [] })
       expect(res.status, appUrl).toBe(400)
       expect(res.body).toEqual({ error: 'Use a public http or https address for the app.' })
@@ -232,6 +240,18 @@ describe('the app address and login domains', () => {
       [['COM.MY'], "Login domain 1 is a shared ending such as co.uk or github.io: enter the sign-in site's own host name."],
       [['github.io'], "Login domain 1 is a shared ending such as co.uk or github.io: enter the sign-in site's own host name."],
       [['10.0.0.1'], "Login domain 1 is an IP address: enter the sign-in site's host name."],
+      [['amazonaws.com'], "Login domain 1 is a shared ending such as co.uk or github.io: enter the sign-in site's own host name."],
+      [['compute.amazonaws.com'], "Login domain 1 is a shared ending such as co.uk or github.io: enter the sign-in site's own host name."],
+      [['com.np'], "Login domain 1 is a shared ending such as co.uk or github.io: enter the sign-in site's own host name."],
+      [['co.at'], "Login domain 1 is a shared ending such as co.uk or github.io: enter the sign-in site's own host name."],
+      [['sso.localhost'], "Login domain 1 is a reserved or local name: enter the sign-in site's public host name."],
+      [['accounts.internal'], "Login domain 1 is a reserved or local name: enter the sign-in site's public host name."],
+      [['printer.local'], "Login domain 1 is a reserved or local name: enter the sign-in site's public host name."],
+      [['login.example'], "Login domain 1 is a reserved or local name: enter the sign-in site's public host name."],
+      [['x.home.arpa'], "Login domain 1 is a reserved or local name: enter the sign-in site's public host name."],
+      [['abc.onion'], "Login domain 1 is a reserved or local name: enter the sign-in site's public host name."],
+      [['sso.test'], "Login domain 1 is a reserved or local name: enter the sign-in site's public host name."],
+      [['a.invalid'], "Login domain 1 is a reserved or local name: enter the sign-in site's public host name."],
       [['a.b.c.d', 'e.f', 'g.h', 'i.j', 'k.l', 'm.n'], 'Enter at most 5 login domains.'],
     ]
     for (const [loginDomains, error] of cases) {
@@ -240,6 +260,23 @@ describe('the app address and login domains', () => {
       expect(res.body).toEqual({ error })
     }
     expect((await save(world, { appUrl: 'https://example.com/', loginDomains: 'x.example.com' })).status).toBe(400)
+  })
+
+  it('refuses an app address on a shared ending or with a user name or password, and allows a tenant of one', async () => {
+    const world = makeWorld({ deps: {} })
+    const shared = "Use the app's own address, not a shared ending such as github.io or co.uk."
+    for (const appUrl of ['https://github.io/', 'https://CO.UK/', 'https://amazonaws.com/x']) {
+      const res = await save(world, { appUrl, loginDomains: [] })
+      expect(res.status, appUrl).toBe(400)
+      expect(res.body).toEqual({ error: shared })
+    }
+    for (const appUrl of ['https://user:Teen-Pass-111@example.com/', 'https://user@example.com/']) {
+      const res = await save(world, { appUrl, loginDomains: [] })
+      expect(res.status, appUrl).toBe(400)
+      expect(res.body).toEqual({ error: 'Leave the user name and password out of the app address.' })
+      expect(res.text).not.toContain('Teen-Pass-111')
+    }
+    expect(await world.appRepo.getAppSource(P1)).toBeNull()
   })
 
   it('saves the address with lower-cased, de-duplicated login domains', async () => {
@@ -256,16 +293,47 @@ describe('the app address and login domains', () => {
 describe('without EVIDENCE_SECRET_KEY', () => {
   it('test-account routes and app runs answer 503 without EVIDENCE_SECRET_KEY; app-setup still works', async () => {
     const { world, seeded } = await setup({ secretKey: null })
-    for (const name of ['add account', 'edit account', 'remove account', 'start app run']) {
+    for (const name of ['add account', 'start app run']) {
       const res = await send(world, endpointNamed(name), seeded, USERS.auditor)
       expect(res.status, name).toBe(503)
       expect(res.body).toEqual({ error: APP_NOT_CONFIGURED })
     }
+    const withPassword = await request(world.app)
+      .patch(`/api/projects/${P1}/test-accounts/${seeded.accountId}`)
+      .set(world.auth(USERS.auditor))
+      .send({ password: 'New-Pass-333' })
+    expect(withPassword.status).toBe(503)
+    expect(withPassword.body).toEqual({ error: APP_NOT_CONFIGURED })
     const res = await request(world.app).get(`/api/projects/${P1}/app-setup`).set(world.auth(USERS.auditor))
     expect(res.status).toBe(200)
     expect(res.body.secretKeyConfigured).toBe(false)
     expect(res.body.accounts).toHaveLength(1)
     expect(world.enqueued).toHaveLength(0)
+  })
+
+  it('a PATCH with no new password works without the key and keeps the ciphertext', async () => {
+    const { world, seeded } = await setup({ secretKey: null })
+    const before = (await world.appRepo.getTestAccount(seeded.accountId)) as TestAccount
+    const res = await request(world.app)
+      .patch(`/api/projects/${P1}/test-accounts/${seeded.accountId}`)
+      .set(world.auth(USERS.auditor))
+      .send({ label: 'Adult 31', handles: ['@a31'] })
+    expect(res.status).toBe(200)
+    expect(res.body.account).toMatchObject({ label: 'Adult 31', handles: ['@a31'] })
+    expect((await world.appRepo.getTestAccount(seeded.accountId))?.passwordCiphertext).toBe(before.passwordCiphertext)
+  })
+
+  it('a test account can be removed without the key, but still not during a run', async () => {
+    const { world, seeded } = await setup({ secretKey: null })
+    const auth = world.auth(USERS.auditor)
+    const other = await storeAccount(world, P1, 'Teen 2')
+    const active = await world.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'all', source: 'app' })
+    const refused = await request(world.app).delete(`/api/projects/${P1}/test-accounts/${other.id}`).set(auth)
+    expect(refused.status).toBe(409)
+    expect(refused.body).toEqual({ error: "Test accounts can't be removed while a run is in progress." })
+    await world.repo.updateRun(active.id, { status: 'failed' })
+    expect((await request(world.app).delete(`/api/projects/${P1}/test-accounts/${seeded.accountId}`).set(auth)).status).toBe(204)
+    expect(await world.appRepo.getTestAccount(seeded.accountId)).toBeNull()
   })
 
   it('the account list still loads after the key was changed', async () => {
@@ -329,6 +397,71 @@ describe('test accounts', () => {
     const empty = await addAccount(world, { ...ACCOUNT, label: 'Empty handles', handles: [] }, USERS.head)
     expect((await world.appRepo.getTestAccount(empty.body.account.id))?.handles).toEqual([])
     expect((await world.appRepo.getTestAccount(empty.body.account.id))?.createdBy).toBe(USERS.head.userId)
+  })
+
+  /** Makes the account list slow to read, so two requests really overlap between the check and the insert. */
+  const slowList = (world: World): void => {
+    const list = world.appRepo.listTestAccounts.bind(world.appRepo)
+    vi.spyOn(world.appRepo, 'listTestAccounts').mockImplementation(async (projectId) => {
+      const found = await list(projectId)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      return found
+    })
+  }
+
+  it('serialises creates: two at once cannot pass 6 accounts or share a label', async () => {
+    const { world } = await setup()
+    for (let i = 2; i <= 5; i += 1) expect((await addAccount(world, { ...ACCOUNT, label: `Teen ${i}` })).status).toBe(201)
+    slowList(world)
+    const both = await Promise.all([addAccount(world, { ...ACCOUNT, label: 'Teen 6' }), addAccount(world, { ...ACCOUNT, label: 'Teen 7' })])
+    expect(both.map((r) => r.status).sort()).toEqual([201, 409])
+    expect((await world.appRepo.listTestAccounts(P1)).length).toBe(6)
+
+    const fresh = (await setup()).world
+    slowList(fresh)
+    const same = await Promise.all([addAccount(fresh, { ...ACCOUNT, label: 'Twin' }), addAccount(fresh, { ...ACCOUNT, label: 'Twin' })])
+    expect(same.map((r) => r.status).sort()).toEqual([201, 409])
+    expect(same.find((r) => r.status === 409)?.body).toEqual({ error: 'A test account with this label already exists.' })
+  })
+
+  it('a duplicate label the database refuses answers the label sentence, not 500', async () => {
+    const { world, seeded } = await setup()
+    vi.spyOn(world.appRepo, 'listTestAccounts').mockResolvedValue([])
+    const created = await addAccount(world, { ...ACCOUNT, label: 'Adult 30' })
+    expect(created.status).toBe(409)
+    expect(created.body).toEqual({ error: 'A test account with this label already exists.' })
+    await storeAccount(world, P1, 'Teen 9')
+    const patched = await request(world.app)
+      .patch(`/api/projects/${P1}/test-accounts/${seeded.accountId}`)
+      .set(world.auth(USERS.auditor))
+      .send({ label: 'Teen 9' })
+    expect(patched.status).toBe(409)
+    expect(patched.body).toEqual({ error: 'A test account with this label already exists.' })
+  })
+
+  it('a rethrown repository error keeps its cause and no password in its message', () => {
+    const original = Object.assign(new Error(`insert failed ${PASSWORD} v1.aaa.bbb.ccc`), { code: 'XX000' })
+    const wrapped = wrapAccountError(original, [PASSWORD, 'v1.aaa.bbb.ccc'])
+    expect(wrapped.message).toBe('insert failed [redacted] [redacted]')
+    expect(wrapped.cause).toBe(original)
+  })
+
+  it('refuses an age that contradicts the age group, on create and on edit', async () => {
+    const { world, seeded } = await setup()
+    const sentence = 'The age does not match the age group: under 18 needs an age below 18, and adult an age of 18 or more.'
+    for (const body of [{ ...ACCOUNT, label: 'A', ageGroup: 'under_18', age: 18 }, { ...ACCOUNT, label: 'B', ageGroup: 'adult', age: 12 }]) {
+      const res = await addAccount(world, body)
+      expect(res.status).toBe(400)
+      expect(res.body).toEqual({ error: sentence })
+    }
+    expect((await addAccount(world, { ...ACCOUNT, label: 'C', ageGroup: 'adult', age: 18 })).status).toBe(201)
+    expect((await addAccount(world, { ...ACCOUNT, label: 'D', ageGroup: 'under_18', age: null })).status).toBe(201)
+    // The seeded account is an adult of 30: a new age alone, or a new group alone, is checked against the other.
+    const auth = world.auth(USERS.auditor)
+    const path = `/api/projects/${P1}/test-accounts/${seeded.accountId}`
+    expect((await request(world.app).patch(path).set(auth).send({ age: 15 })).body).toEqual({ error: sentence })
+    expect((await request(world.app).patch(path).set(auth).send({ ageGroup: 'under_18' })).body).toEqual({ error: sentence })
+    expect((await request(world.app).patch(path).set(auth).send({ ageGroup: 'under_18', age: 15 })).status).toBe(200)
   })
 
   it('validates the account body', async () => {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { byLabel } from './accountOrder.js'
-import type { AppRepository } from './appRepository.js'
+import { TestAccountLabelTakenError, type AppRepository } from './appRepository.js'
 import type { AppChange, AppSource, AppStep, TestAccount } from './appTypes.js'
 
 const copy = <T>(v: T): T => structuredClone(v)
@@ -48,7 +48,7 @@ export function createMemoryAppRepository(): AppRepository {
     },
     async addTestAccount(input) {
       if (labelTaken(input.projectId, input.label)) {
-        throw new Error('addTestAccount: the project already has an account with this label')
+        throw new TestAccountLabelTakenError('addTestAccount')
       }
       const now = new Date().toISOString()
       const row: TestAccount = { ...copy(input), createdAt: now, updatedAt: now }
@@ -60,7 +60,7 @@ export function createMemoryAppRepository(): AppRepository {
       if (index < 0) throw new Error(`updateTestAccount: account ${id} not found`)
       const current = accounts[index]
       if (patch.label !== undefined && labelTaken(current.projectId, patch.label, id)) {
-        throw new Error('updateTestAccount: the project already has an account with this label')
+        throw new TestAccountLabelTakenError('updateTestAccount')
       }
       accounts[index] = { ...current, ...copy(defined(patch)), updatedAt: new Date().toISOString() }
       return copy(accounts[index])

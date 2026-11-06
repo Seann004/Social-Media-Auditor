@@ -9,6 +9,14 @@ import type {
   TestAccountPatch,
 } from './appTypes.js'
 
+/** A test account's label is already used in its project: the unique (projectId, label) of migration 002. */
+export class TestAccountLabelTakenError extends Error {
+  constructor(op: string) {
+    super(`${op}: the project already has an account with this label`)
+    this.name = 'TestAccountLabelTakenError'
+  }
+}
+
 export interface AppSourceInput {
   appUrl: string
   loginDomains: string[]
@@ -28,8 +36,9 @@ export interface AppRepository {
   /** In label order. */
   listTestAccounts(projectId: string): Promise<TestAccount[]>
   getTestAccount(id: string): Promise<TestAccount | null>
-  /** Throws when the project already has an account with the label. */
+  /** Throws TestAccountLabelTakenError when the project already has an account with the label. */
   addTestAccount(input: NewTestAccount): Promise<TestAccount>
+  /** Throws TestAccountLabelTakenError when the new label is taken. */
   updateTestAccount(id: string, patch: TestAccountPatch): Promise<TestAccount>
   deleteTestAccount(id: string): Promise<void>
 

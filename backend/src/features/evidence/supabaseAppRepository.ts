@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { byLabel } from './accountOrder.js'
-import type { AppRepository } from './appRepository.js'
+import { TestAccountLabelTakenError, type AppRepository } from './appRepository.js'
 import type { AppChange, AppSource, AppStep, TestAccount } from './appTypes.js'
 
 interface DbResult<T> {
@@ -10,6 +10,14 @@ interface DbResult<T> {
 
 /** Postgres: invalid text representation, as when an id that is not a uuid is compared with a uuid column. */
 const INVALID_TEXT_REPRESENTATION = '22P02'
+/** Postgres: unique violation. On Evidence_Test_Account that is the (projectId, label) pair. */
+const UNIQUE_VIOLATION = '23505'
+
+/** A taken label as its own error, so the route can answer with the label sentence. */
+function labelChecked<T>(op: string, res: DbResult<T>): DbResult<T> {
+  if (res.error?.code === UNIQUE_VIOLATION) throw new TestAccountLabelTakenError(op)
+  return res
+}
 
 // Rows use the same camelCase names as our types; only nullable columns need mapping.
 type Row = Record<string, any>
@@ -96,7 +104,7 @@ export function createSupabaseAppRepository(admin: SupabaseClient): AppRepositor
     async addTestAccount(input) {
       const row = required(
         'addTestAccount',
-        await admin.from('Evidence_Test_Account').insert(input).select('*').single(),
+        labelChecked('addTestAccount', await admin.from('Evidence_Test_Account').insert(input).select('*').single()),
         [input.passwordCiphertext],
       )
       return toAccount(row)
@@ -104,12 +112,15 @@ export function createSupabaseAppRepository(admin: SupabaseClient): AppRepositor
     async updateTestAccount(id, patch) {
       const row = required(
         'updateTestAccount',
-        await admin
-          .from('Evidence_Test_Account')
-          .update({ ...patch, updatedAt: new Date().toISOString() })
-          .eq('id', id)
-          .select('*')
-          .single(),
+        labelChecked(
+          'updateTestAccount',
+          await admin
+            .from('Evidence_Test_Account')
+            .update({ ...patch, updatedAt: new Date().toISOString() })
+            .eq('id', id)
+            .select('*')
+            .single(),
+        ),
         patch.passwordCiphertext ? [patch.passwordCiphertext] : [],
       )
       return toAccount(row)

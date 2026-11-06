@@ -1,7 +1,7 @@
 /**
  * The login domains an auditor lists for an app: the sign-in sites (SSO, accounts.*) the app sends its
- * users to. Each one widens where the browser may go, so a shared ending (co.uk, github.io) or an IP
- * address is refused: it would open every site under it.
+ * users to. Each one widens where the browser may go, so a shared ending (co.uk, github.io), a reserved
+ * or local name (x.localhost, x.internal) or an IP address is refused.
  */
 import { isIP } from 'node:net'
 import { APP_MAX_LOGIN_DOMAINS } from './config.js'
@@ -40,17 +40,40 @@ const PUBLIC_SUFFIXES: ReadonlySet<string> = new Set([
   'com.mx', 'org.mx', 'gob.mx', 'edu.mx', 'com.ar',
   'co.za', 'org.za', 'gov.za', 'com.ng', 'com.eg', 'co.ke',
   'com.sa', 'co.il', 'org.il', 'ac.il', 'com.tr', 'com.ua',
+  'com.np', 'com.lk', 'com.kh', 'com.mm', 'com.qa', 'com.kw', 'com.om', 'com.bh', 'co.ae', 'com.jo', 'com.lb',
+  'com.co', 'com.pe', 'com.ve', 'com.uy', 'com.ec', 'com.gt', 'net.ar', 'org.ar', 'gob.ar',
+  'co.tz', 'co.ug', 'com.gh', 'co.zw', 'com.es', 'co.at', 'or.at', 'gv.at', 'ac.at', 'com.pl', 'org.ru', 'com.ru',
   // Hosting where every customer gets a subdomain
   'github.io', 'gitlab.io', 'herokuapp.com', 'vercel.app', 'netlify.app', 'pages.dev', 'workers.dev',
   'web.app', 'firebaseapp.com', 'appspot.com', 'blogspot.com', 'azurewebsites.net', 'azurestaticapps.net',
   'cloudfront.net', 's3.amazonaws.com', 'amplifyapp.com', 'onrender.com', 'fly.dev', 'glitch.me',
   'ngrok.io', 'ngrok-free.app', 'trycloudflare.com', 'wordpress.com', 'wixsite.com', 'myshopify.com',
-  'supabase.co',
+  'supabase.co', 'amazonaws.com', 'compute.amazonaws.com', 'elasticbeanstalk.com', 'googleusercontent.com',
+  'azureedge.net', 'cloudapp.net', 'run.app', 'r2.dev',
+])
+
+/**
+ * Special-use and local-only top-level names: no public sign-in site lives under them, and some
+ * (localhost) reach this machine without asking DNS.
+ */
+const RESERVED_TLDS: ReadonlySet<string> = new Set([
+  'localhost', 'local', 'internal', 'test', 'example', 'invalid', 'onion', 'arpa', 'lan', 'home', 'corp', 'localdomain',
 ])
 
 export type LoginDomainsResult = { ok: true; domains: string[] } | { ok: false; error: string }
 
 const refuse = (error: string): LoginDomainsResult => ({ ok: false, error })
+
+/** True when `host` is itself a shared ending such as co.uk or github.io; a tenant under one (user.github.io) is not. */
+export function isPublicSuffix(host: string): boolean {
+  return PUBLIC_SUFFIXES.has(host.toLowerCase().replace(/\.$/, ''))
+}
+
+/** True when the last label is a special-use or local-only name, at any depth (a.b.localhost, nas.home.arpa). */
+export function isReservedName(host: string): boolean {
+  const labels = host.toLowerCase().split('.')
+  return RESERVED_TLDS.has(labels[labels.length - 1])
+}
 
 /** True for an IP literal, including the short and hex forms a browser still reads as one (127.1, 0x7f.1). */
 function isIpLiteral(host: string): boolean {
@@ -62,7 +85,8 @@ function isIpLiteral(host: string): boolean {
 function refusalOf(host: string, n: number): string | null {
   if (!HOST_NAME.test(host)) return `Login domain ${n} is not a host name such as accounts.example.com.`
   if (isIpLiteral(host)) return `Login domain ${n} is an IP address: enter the sign-in site's host name.`
-  if (PUBLIC_SUFFIXES.has(host)) {
+  if (isReservedName(host)) return `Login domain ${n} is a reserved or local name: enter the sign-in site's public host name.`
+  if (isPublicSuffix(host)) {
     return `Login domain ${n} is a shared ending such as co.uk or github.io: enter the sign-in site's own host name.`
   }
   return null
@@ -70,7 +94,7 @@ function refusalOf(host: string, n: number): string | null {
 
 /**
  * Checks what the auditor typed: at most APP_MAX_LOGIN_DOMAINS entries, each a host name that is
- * neither a public suffix nor an IP address. Returns them lower-cased and without repeats, in the
+ * not a public suffix, a reserved name or an IP address. Returns them lower-cased and without repeats, in the
  * order typed. A refusal is one sentence and names the entry by its position, never by its text.
  */
 export function checkLoginDomains(raw: readonly string[]): LoginDomainsResult {
@@ -82,3 +106,4 @@ export function checkLoginDomains(raw: readonly string[]): LoginDomainsResult {
   }
   return { ok: true, domains: [...new Set(hosts)] }
 }
+

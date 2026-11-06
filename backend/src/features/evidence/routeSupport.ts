@@ -96,3 +96,22 @@ export function projectGate(audit: Pick<AuditData, 'getProjectAccess'>): Project
 
   return { authorise, onProject }
 }
+
+/**
+ * One piece of work at a time per project, inside this process: a second call waits for the first to
+ * settle, whether it succeeded or failed. Unlike createProjectLock, nobody is refused.
+ */
+export function createProjectQueue(): <T>(projectId: string, work: () => Promise<T>) => Promise<T> {
+  const tails = new Map<string, Promise<unknown>>()
+  return (projectId, work) => {
+    const previous = tails.get(projectId) ?? Promise.resolve()
+    const run = previous.then(work)
+    const tail = run.catch(() => undefined)
+    tails.set(projectId, tail)
+    // Forget the project once nothing is waiting behind this call.
+    void tail.then(() => {
+      if (tails.get(projectId) === tail) tails.delete(projectId)
+    })
+    return run
+  }
+}

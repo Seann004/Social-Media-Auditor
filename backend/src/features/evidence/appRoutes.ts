@@ -7,10 +7,10 @@ import { randomUUID } from 'node:crypto'
 import express, { Router, type RequestHandler, type Response } from 'express'
 import { z } from 'zod'
 import { requireSession, type Sessions } from '../auth/session.js'
-import { checkLoginDomains } from './appLoginDomains.js'
-import type { AppRepository } from './appRepository.js'
+import { checkLoginDomains, isPublicSuffix } from './appLoginDomains.js'
+import { TestAccountLabelTakenError, type AppRepository } from './appRepository.js'
 import { startAppRun } from './appRunStart.js'
-import type { TestAccount, TestAccountPatch } from './appTypes.js'
+import type { AgeGroup, TestAccount, TestAccountPatch } from './appTypes.js'
 import { toAppChangeView, toAppSourceView, toAppStepView, toTestAccountView } from './appViews.js'
 import type { AuditData, ProjectAccess } from './auditData.js'
 import {
@@ -24,7 +24,7 @@ import {
 } from './config.js'
 import type { RunQueue } from './queue.js'
 import type { EvidenceRepository } from './repository.js'
-import { jsonErrorHandler, projectGate, route, sessionOf, userLimiter, validParams } from './routeSupport.js'
+import { createProjectQueue, jsonErrorHandler, projectGate, route, sessionOf, userLimiter, validParams } from './routeSupport.js'
 import { sweepStaleRuns, type RunStartDeps, type StartOutcome } from './runStart.js'
 import { encryptSecret, secretAad } from './secrets.js'
 import type { PageSummary } from './types.js'
@@ -43,7 +43,7 @@ export interface AppRouterDeps {
   acquire: (projectId: string) => (() => void) | null
   /** False when GROQ_API_KEY is missing: app runs cannot start. */
   aiConfigured: boolean
-  /** Null when EVIDENCE_SECRET_KEY is not set: test accounts cannot be changed and app runs cannot start. */
+  /** Null when EVIDENCE_SECRET_KEY is not set: no password can be saved and app runs cannot start. Removing an account still works. */
   secretKey: Buffer | null
   requestsPerMinute?: number
 }
@@ -52,6 +52,10 @@ export const APP_NOT_CONFIGURED = "Checking inside the app isn't configured: set
 
 const AI_NOT_CONFIGURED = 'AI assessment is not configured on this server: GROQ_API_KEY is missing.'
 const PUBLIC_APP_ADDRESS = 'Use a public http or https address for the app.'
+const SHARED_APP_ADDRESS = "Use the app's own address, not a shared ending such as github.io or co.uk."
+const APP_ADDRESS_USERINFO = 'Leave the user name and password out of the app address.'
+const AGE_MISMATCH = 'The age does not match the age group: under 18 needs an age below 18, and adult an age of 18 or more.'
+const ADULT_AGE = 18
 const TOO_MANY_ACCOUNTS = `This project already has ${APP_MAX_TEST_ACCOUNTS} test accounts.`
 const LABEL_TAKEN = 'A test account with this label already exists.'
 const RUN_IN_PROGRESS = "Test accounts can't be removed while a run is in progress."
@@ -92,32 +96,53 @@ const invalid = (res: Response): void => fail(res, 400, 'Invalid request')
 const notFound = (res: Response, error = 'Not found'): void => fail(res, 404, error)
 
 /**
- * Runs an account write. Should it throw, the error is passed on with the password and ciphertext cut
- * out of its message, so the error log never holds them whatever the database said.
+ * A repository error made safe to log: its message with every secret cut out. The original is kept as
+ * `cause` for a debugger; the error log prints only the message.
+ */
+export function wrapAccountError(err: unknown, secrets: readonly string[]): Error {
+  let message = err instanceof Error ? err.message : 'unknown error'
+  for (const secret of secrets) if (secret) message = message.split(secret).join('[redacted]')
+  return new Error(message, { cause: err })
+}
+
+/**
+ * Runs an account write. A taken label is passed on as it is, for the 409; any other error is passed
+ * on through wrapAccountError, so the error log never holds the password or ciphertext.
  */
 async function writeAccount<T>(secrets: string[], write: () => Promise<T>): Promise<T> {
   try {
     return await write()
   } catch (err) {
-    let message = err instanceof Error ? err.message : 'unknown error'
-    for (const secret of secrets) if (secret) message = message.split(secret).join('[redacted]')
-    throw new Error(message)
+    if (err instanceof TestAccountLabelTakenError) throw err
+    throw wrapAccountError(err, secrets)
   }
 }
+
+/** False when a known age contradicts the age group the AI will be told. */
+const ageFitsGroup = (ageGroup: AgeGroup, age: number | null): boolean =>
+  age === null || (ageGroup === 'under_18' ? age < ADULT_AGE : age >= ADULT_AGE)
 
 const labelTaken = (accounts: readonly TestAccount[], wanted: string, exceptId?: string): boolean =>
   accounts.some((a) => a.label === wanted && a.id !== exceptId)
 
-/** True for an http(s) address the guard lets the browser open. */
-async function isPublicAppUrl(guard: UrlGuard, url: string): Promise<boolean> {
+/**
+ * The refusal for an app address, or null when it is usable: http(s), no user name or password, not a
+ * shared ending (navigation is allowed to the app host's subdomains, so github.io would open every
+ * tenant), and let through by the guard. A reserved or private name is left to the guard, which allows
+ * one only when EVIDENCE_ALLOWED_PRIVATE_HOSTS lists it.
+ */
+async function appUrlRefusal(guard: UrlGuard, url: string): Promise<string | null> {
   let parsed: URL
   try {
     parsed = new URL(url)
   } catch {
-    return false
+    return PUBLIC_APP_ADDRESS
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-  return (await guard.check(url)).allowed
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return PUBLIC_APP_ADDRESS
+  if (parsed.username !== '' || parsed.password !== '') return APP_ADDRESS_USERINFO
+  if (isPublicSuffix(parsed.hostname)) return SHARED_APP_ADDRESS
+  // One sentence for every guard refusal: the reason would tell whether an internal name exists.
+  return (await guard.check(url)).allowed ? null : PUBLIC_APP_ADDRESS
 }
 
 export function createAppRouter(deps: AppRouterDeps): Router {
@@ -127,8 +152,11 @@ export function createAppRouter(deps: AppRouterDeps): Router {
   const json = express.json({ limit: MAX_BODY_SIZE })
   const { authorise, onProject } = projectGate(deps.audit)
   const runDeps: RunStartDeps & { appRepo: AppRepository } = { repo, audit: deps.audit, queue: deps.queue, acquire: deps.acquire, appRepo }
+  // Account writes of a project one at a time, so the 6-account and label checks hold. Separate from
+  // the run lock: a write waits its turn instead of being refused while a run starts.
+  const oneAtATime = createProjectQueue()
 
-  /** Without the key nothing can be encrypted or typed: the account and run routes answer 503. */
+  /** Without the key no password can be encrypted: adding an account answers 503. */
   const needsKey: RequestHandler = (_req, res, next) => {
     if (deps.secretKey) next()
     else fail(res, 503, APP_NOT_CONFIGURED)
@@ -141,6 +169,17 @@ export function createAppRouter(deps: AppRouterDeps): Router {
     if (account && account.projectId === projectId) return account
     notFound(res)
     return null
+  }
+
+  /** An account write; a label the database refuses is answered 409, and null is returned. */
+  async function saveOrLabelTaken(res: Response, secrets: string[], write: () => Promise<TestAccount>): Promise<TestAccount | null> {
+    try {
+      return await writeAccount(secrets, write)
+    } catch (err) {
+      if (!(err instanceof TestAccountLabelTakenError)) throw err
+      fail(res, 409, LABEL_TAKEN)
+      return null
+    }
   }
 
   const answerStart = (res: Response, outcome: StartOutcome): void => {
@@ -166,8 +205,8 @@ export function createAppRouter(deps: AppRouterDeps): Router {
     route(async (req, res) => {
       const body = appSourceBody.safeParse(req.body)
       if (!body.success) return invalid(res)
-      // One sentence for every refusal: the reason would tell whether an internal name exists.
-      if (!(await isPublicAppUrl(deps.guard(), body.data.appUrl))) return fail(res, 400, PUBLIC_APP_ADDRESS)
+      const refusal = await appUrlRefusal(deps.guard(), body.data.appUrl)
+      if (refusal) return fail(res, 400, refusal)
       const domains = checkLoginDomains(body.data.loginDomains)
       if (!domains.ok) return fail(res, 400, domains.error)
       const input = { appUrl: body.data.appUrl, loginDomains: domains.domains }
@@ -185,27 +224,30 @@ export function createAppRouter(deps: AppRouterDeps): Router {
     route(async (req, res) => {
       const body = createAccountBody.safeParse(req.body)
       if (!body.success) return invalid(res)
-      const projectId = req.params.id
-      const existing = await appRepo.listTestAccounts(projectId)
-      if (existing.length >= APP_MAX_TEST_ACCOUNTS) return fail(res, 409, TOO_MANY_ACCOUNTS)
       const { password, ...fields } = body.data
-      if (labelTaken(existing, fields.label)) return fail(res, 409, LABEL_TAKEN)
-      // The id is made first: it is part of what the ciphertext is bound to.
-      const id = randomUUID()
-      const passwordCiphertext = encryptSecret(password, keyOf(), secretAad(projectId, id))
-      const account = await writeAccount([password, passwordCiphertext], () =>
-        appRepo.addTestAccount({
-          ...fields,
-          id,
-          projectId,
-          age: fields.age ?? null,
-          // Never the login name: with no handle, actions toward this account are refused.
-          handles: fields.handles ?? [],
-          passwordCiphertext,
-          createdBy: sessionOf(res).userId,
-        }),
-      )
-      res.status(201).json({ account: toTestAccountView(account) })
+      if (!ageFitsGroup(fields.ageGroup, fields.age ?? null)) return fail(res, 400, AGE_MISMATCH)
+      const projectId = req.params.id
+      await oneAtATime(projectId, async () => {
+        const existing = await appRepo.listTestAccounts(projectId)
+        if (existing.length >= APP_MAX_TEST_ACCOUNTS) return fail(res, 409, TOO_MANY_ACCOUNTS)
+        if (labelTaken(existing, fields.label)) return fail(res, 409, LABEL_TAKEN)
+        // The id is made first: it is part of what the ciphertext is bound to.
+        const id = randomUUID()
+        const passwordCiphertext = encryptSecret(password, keyOf(), secretAad(projectId, id))
+        const account = await saveOrLabelTaken(res, [password, passwordCiphertext], () =>
+          appRepo.addTestAccount({
+            ...fields,
+            id,
+            projectId,
+            age: fields.age ?? null,
+            // Never the login name: with no handle, actions toward this account are refused.
+            handles: fields.handles ?? [],
+            passwordCiphertext,
+            createdBy: sessionOf(res).userId,
+          }),
+        )
+        if (account) res.status(201).json({ account: toTestAccountView(account) })
+      })
     }),
   )
 
@@ -214,22 +256,30 @@ export function createAppRouter(deps: AppRouterDeps): Router {
     ...common,
     json,
     onProject(BOTH),
-    needsKey,
     route(async (req, res) => {
       const body = patchAccountBody.safeParse(req.body)
       if (!body.success) return invalid(res)
-      const projectId = req.params.id
-      const current = await accountOf(res, projectId, req.params.accountId)
-      if (!current) return
       const { password, ...fields } = body.data
-      if (fields.label !== undefined && labelTaken(await appRepo.listTestAccounts(projectId), fields.label, current.id)) {
-        return fail(res, 409, LABEL_TAKEN)
-      }
-      // Without a new password the stored ciphertext is left as it is.
-      const passwordCiphertext = password === undefined ? undefined : encryptSecret(password, keyOf(), secretAad(projectId, current.id))
-      const patch: TestAccountPatch = { ...fields, ...(passwordCiphertext ? { passwordCiphertext } : {}) }
-      const account = await writeAccount([password ?? '', passwordCiphertext ?? ''], () => appRepo.updateTestAccount(current.id, patch))
-      res.json({ account: toTestAccountView(account) })
+      // Only a new password needs the key: a label, age or handles change touches no secret.
+      if (password !== undefined && !deps.secretKey) return fail(res, 503, APP_NOT_CONFIGURED)
+      const projectId = req.params.id
+      await oneAtATime(projectId, async () => {
+        const current = await accountOf(res, projectId, req.params.accountId)
+        if (!current) return
+        if (!ageFitsGroup(fields.ageGroup ?? current.ageGroup, fields.age === undefined ? current.age : fields.age)) {
+          return fail(res, 400, AGE_MISMATCH)
+        }
+        if (fields.label !== undefined && labelTaken(await appRepo.listTestAccounts(projectId), fields.label, current.id)) {
+          return fail(res, 409, LABEL_TAKEN)
+        }
+        // Without a new password the stored ciphertext is left as it is.
+        const passwordCiphertext = password === undefined ? undefined : encryptSecret(password, keyOf(), secretAad(projectId, current.id))
+        const patch: TestAccountPatch = { ...fields, ...(passwordCiphertext ? { passwordCiphertext } : {}) }
+        const account = await saveOrLabelTaken(res, [password ?? '', passwordCiphertext ?? ''], () =>
+          appRepo.updateTestAccount(current.id, patch),
+        )
+        if (account) res.json({ account: toTestAccountView(account) })
+      })
     }),
   )
 
@@ -237,7 +287,7 @@ export function createAppRouter(deps: AppRouterDeps): Router {
     '/projects/:id/test-accounts/:accountId',
     ...common,
     onProject(BOTH),
-    needsKey,
+    // No key needed (ruling A24): removing a stored secret must always be possible.
     route(async (req, res) => {
       const projectId = req.params.id
       const account = await accountOf(res, projectId, req.params.accountId)
@@ -306,3 +356,4 @@ export function createAppRouter(deps: AppRouterDeps): Router {
   router.use(jsonErrorHandler)
   return router
 }
+
