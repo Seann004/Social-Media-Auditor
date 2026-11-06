@@ -1,13 +1,25 @@
 import type { Browser } from 'playwright'
 import { GroqLimitError } from '../../lib/groq.js'
+import type { DecideStep } from './appAgent.js'
+import type { AppRepository } from './appRepository.js'
 import type { AssessInput, AssessItem, AssessOutput } from './assess.js'
 import type { AuditData } from './auditData.js'
 import type { CaptureOptions } from './capture.js'
 import type { HighlightOptions } from './highlight.js'
 import type { EvidenceRepository, RunPatch, ScreenshotStore } from './repository.js'
 import type { RobotsChecker } from './robots.js'
+import type { TokenMeter } from './runnerAssess.js'
 import type { EvidenceRun } from './types.js'
 import type { UrlGuard } from './urlGuard.js'
+
+/** What an app run needs besides a pages run's dependencies. */
+export interface AppRunnerDeps {
+  appRepo: AppRepository
+  /** The key the test-account passwords are encrypted with. Null when the server has none. */
+  secretKey: Buffer | null
+  /** Defaults to the Groq step call. */
+  decideStep?: DecideStep
+}
 
 export interface RunnerDeps {
   repo: EvidenceRepository
@@ -24,7 +36,9 @@ export interface RunnerDeps {
   highlights?: (opts: HighlightOptions) => Promise<Map<string, Buffer>>
   /** Defaults to assessBatch. */
   assessBatch?: (input: AssessInput) => Promise<AssessOutput>
-  /** For tests. Defaults to RUN_TIMEOUT_MS. */
+  /** For app runs. Without it, an app run fails with a sentence saying so. */
+  app?: AppRunnerDeps | null
+  /** For tests. Defaults to the run's own timeout: runTimeoutMsOf. */
   runTimeoutMs?: number
   /** Waits between tries at an update that failed. For tests. Defaults to RUN_UPDATE_RETRY_DELAYS_MS. */
   retryDelaysMs?: readonly number[]
@@ -160,6 +174,32 @@ export async function readRunReliably(deps: RunHandle['deps'], runId: string): P
       if (attempt >= deps.retryDelaysMs.length) throw err
       await sleep(deps.retryDelaysMs[attempt])
     }
+  }
+}
+
+/** Counts the tokens of one run. */
+export function createMeter(): TokenMeter {
+  let used = 0
+  return {
+    used: () => used,
+    add(tokens) {
+      used += tokens
+    },
+  }
+}
+
+const CHECKLIST_UNREADABLE = 'The checklist of this project could not be read because the database did not answer. Start the run again later.'
+
+/** The project's checklist and platform, or a RunFailure with a sentence for the auditor. */
+export async function loadChecklist(ctx: RunCtx): Promise<{ items: AssessItem[]; platform: string }> {
+  try {
+    const { audit } = ctx.deps
+    const items = await audit.listChecklistItems(ctx.run.projectId)
+    return { items, platform: await audit.getPlatform(ctx.run.projectId) }
+  } catch (err) {
+    if (await isRunGone(ctx)) throw new RunGoneError()
+    logRunProblem(ctx, 'Could not read the checklist', err)
+    throw new RunFailure(CHECKLIST_UNREADABLE)
   }
 }
 

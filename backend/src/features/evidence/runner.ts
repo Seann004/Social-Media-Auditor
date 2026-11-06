@@ -1,18 +1,22 @@
 import type { Browser } from 'playwright'
+import { executeAppRun } from './appRunner.js'
 import { assessBatch as defaultAssessBatch, type AssessItem } from './assess.js'
 import { getBrowser } from './browser.js'
 import { capturePages } from './capture.js'
-import { MAX_TOKENS_PER_RUN, RUN_TIMEOUT_MS, RUN_UPDATE_RETRY_DELAYS_MS } from './config.js'
+import { MAX_TOKENS_PER_RUN, RUN_UPDATE_RETRY_DELAYS_MS } from './config.js'
 import { captureHighlights } from './highlight.js'
 import { relevantFailedPages } from './failedPages.js'
 import { createRobotsChecker } from './robots.js'
 import { planCategories, unfinishedCategories, type Category } from './runPlan.js'
 import { assessAndStore, type BatchContext, type TokenMeter } from './runnerAssess.js'
+import { runTimeoutMsOf } from './runStart.js'
 import { capturePhase } from './runnerCapture.js'
 import { autoMatchAnswers, carryForward, partialSummary, type StopReason } from './runnerFinish.js'
 import {
+  createMeter,
   isGroqLimit,
   isRunGone,
+  loadChecklist,
   logRunProblem,
   readRunReliably,
   RunAbortedError,
@@ -34,7 +38,6 @@ const GENERIC_FAILURE = 'The run stopped unexpectedly. Start it again, or contac
 const NO_PAGE_READ = 'No page could be read: every page needed a login, was blocked, or returned an error.'
 const PAGES_NOT_SAVED = 'The pages were captured but could not be saved, so there was nothing to assess. Start the run again.'
 const OUT_OF_TIME_NO_PAGE = 'The run ran out of time before any page could be read.'
-const CHECKLIST_UNREADABLE = 'The checklist of this project could not be read because the database did not answer. Start the run again later.'
 const COULD_NOT_START = 'The run could not be started because it could not be read from the database. Start it again.'
 
 interface Progress {
@@ -57,6 +60,7 @@ function resolve(deps: RunnerDeps): ResolvedDeps {
     highlights: deps.highlights ?? captureHighlights,
     assessBatch: deps.assessBatch ?? defaultAssessBatch,
     retryDelaysMs: deps.retryDelaysMs ?? RUN_UPDATE_RETRY_DELAYS_MS,
+    app: deps.app ?? null,
   }
 }
 
@@ -112,18 +116,6 @@ async function assessCategories(ctx: RunCtx, categories: Category[], batch: Batc
   return progress
 }
 
-async function loadChecklist(ctx: RunCtx): Promise<{ items: AssessItem[]; platform: string }> {
-  try {
-    const { audit } = ctx.deps
-    const items = await audit.listChecklistItems(ctx.run.projectId)
-    return { items, platform: await audit.getPlatform(ctx.run.projectId) }
-  } catch (err) {
-    if (await isRunGone(ctx)) throw new RunGoneError()
-    logRunProblem(ctx, 'Could not read the checklist', err)
-    throw new RunFailure(CHECKLIST_UNREADABLE)
-  }
-}
-
 /** Failed pages that count towards the "inaccessible" flag; see relevantFailedPages. */
 async function failedPagesOf(ctx: RunCtx, pages: CapturedPage[]): Promise<BatchContext['failedPages']> {
   let startUrls: string[] | null = null
@@ -133,16 +125,6 @@ async function failedPagesOf(ctx: RunCtx, pages: CapturedPage[]): Promise<BatchC
     logRunProblem(ctx, 'Could not read the start links, so every failed page counts', err)
   }
   return relevantFailedPages(pages, startUrls)
-}
-
-function createMeter(): TokenMeter {
-  let used = 0
-  return {
-    used: () => used,
-    add(tokens) {
-      used += tokens
-    },
-  }
 }
 
 async function execute(ctx: RunCtx): Promise<void> {
@@ -205,14 +187,19 @@ async function endAfterCrash(ctx: RunCtx, err: unknown): Promise<void> {
   return fail(ctx, GENERIC_FAILURE)
 }
 
-async function startContext(run: EvidenceRun, deps: ResolvedDeps, signal: AbortSignal): Promise<RunCtx> {
-  // Without a permission on record, robots.txt applies.
-  let granted = false
+/** Without a permission on record, robots.txt applies to a pages run. An app run reads neither. */
+async function robotsGranted(run: EvidenceRun, deps: ResolvedDeps): Promise<boolean> {
+  if (run.source === 'app') return true
   try {
-    granted = (await deps.repo.getPermission(run.projectId))?.granted === true
+    return (await deps.repo.getPermission(run.projectId))?.granted === true
   } catch (err) {
     logRunProblem({ run, deps }, 'Could not read the permission, so robots.txt is respected', err)
+    return false
   }
+}
+
+async function startContext(run: EvidenceRun, deps: ResolvedDeps, signal: AbortSignal): Promise<RunCtx> {
+  const granted = await robotsGranted(run, deps)
   let started: Promise<Browser> | null = null
   return {
     run,
@@ -237,21 +224,24 @@ async function readRun(runId: string, deps: ResolvedDeps): Promise<EvidenceRun |
 
 /**
  * Runs one evidence job: capture (or reuse the pages of an earlier run), then assess category by
- * category, store suggestions, and end the run as completed, partial or failed. It never changes
- * an answer or the score, and it never rejects: whatever goes wrong ends up on the run.
+ * category, store suggestions, and end the run as completed, partial or failed. An app run goes to
+ * executeAppRun instead. It never changes an answer or the score, and it never rejects: whatever
+ * goes wrong ends up on the run.
  */
 export async function runEvidenceJob(runId: string, deps: RunnerDeps): Promise<void> {
   const resolved = resolve(deps)
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), deps.runTimeoutMs ?? RUN_TIMEOUT_MS)
+  let timer: ReturnType<typeof setTimeout> | undefined
   let ctx: RunCtx | null = null
   try {
     const run = await readRun(runId, resolved)
     if (!run) return
     // A run failed as lost, or already taken by a job, stays as it is.
     if (run.status !== 'queued') return
+    // The run's own time starts once it is known which kind of run it is.
+    timer = setTimeout(() => controller.abort(), deps.runTimeoutMs ?? runTimeoutMsOf(run))
     ctx = await startContext(run, resolved, controller.signal)
-    await execute(ctx)
+    await (run.source === 'app' ? executeAppRun(ctx) : execute(ctx))
   } catch (err) {
     try {
       if (ctx) await endAfterCrash(ctx, err)

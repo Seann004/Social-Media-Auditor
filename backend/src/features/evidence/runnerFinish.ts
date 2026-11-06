@@ -26,17 +26,26 @@ export function partialSummary(stop: StopReason | null, unassessed: number, notK
  * names the suggestion first assessed, so that a decision made on any copy still counts for it. Items
  * no longer on the checklist are left out. The copies are not counted as assessed by this run.
  *
+ * With `anyCapture`, as an app run does, the latest result run is copied from whatever its capture,
+ * so that the items an app run did not check keep the suggestion they had.
+ *
  * Returns the keys of the categories that lost a suggestion because a copy failed, so that the run
  * can list them as not assessed and Re-assess can bring them back.
  */
-export async function carryForward(ctx: RunCtx, items: AssessItem[], ownItemIds: ReadonlySet<string>): Promise<string[]> {
+export async function carryForward(
+  ctx: RunCtx,
+  items: AssessItem[],
+  ownItemIds: ReadonlySet<string>,
+  opts: { anyCapture?: boolean } = {},
+): Promise<string[]> {
   const { repo } = ctx.deps
   const lost = new Set<string>()
   const keyOf = new Map(items.map((i) => [i.id, categoryKey(i)]))
   let earlier: Suggestion[]
   try {
     const prior = await repo.latestResultRun(ctx.run.projectId)
-    if (!prior || prior.id === ctx.run.id || prior.capturedInRunId !== ctx.run.capturedInRunId) return []
+    if (!prior || prior.id === ctx.run.id) return []
+    if (!opts.anyCapture && prior.capturedInRunId !== ctx.run.capturedInRunId) return []
     earlier = await repo.listSuggestions(prior.id)
   } catch (err) {
     await endIfRunGone(ctx)
