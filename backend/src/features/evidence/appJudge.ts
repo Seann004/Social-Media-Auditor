@@ -8,22 +8,18 @@ import type { AppSession, AppSessionPool } from './appSession.js'
 import type { AppStep, StoppedBy } from './appTypes.js'
 import { estimateTokens, type AssessItem } from './assess.js'
 import { MAX_INPUT_TOKENS_PER_CALL } from './config.js'
-import { computeFlags } from './flags.js'
 import { normaliseForMatch } from './quotes.js'
-import type { NewSuggestion } from './repository.js'
-import { storeRound, storeSuggestion, type BatchContext, type Highlighter, type TokenMeter } from './runnerAssess.js'
+import { storeRound, storeSuggestion, withoutEvidence, type BatchContext, type Highlighter, type Round, type TokenMeter } from './runnerAssess.js'
 import { highlightKey } from './runnerHighlights.js'
 import { abortable, logRunProblem, type RunCtx } from './runnerShared.js'
 import type { CapturedPage, Passage, Suggestion } from './types.js'
 
 export const APP_NO_STEPS_REASON = 'The check ended before any page of the app could be recorded.'
 
-/** What the judge reads in place of text the AI typed (ruling A20). */
+/** What the judge's copy of a step line says in place of the text the AI typed (ruling A20). */
 const TYPED_IN_LINE = 'typed text into'
-const TYPED_PLACEHOLDER = '[typed text]'
-/** Shorter typed texts are left where they stand: they cannot make a quote on their own, and removing them would garble the passage. */
-const MIN_SCRUBBED_CHARS = 3
 const STEP_LINE_POSITION = 0
+const EDGE_PUNCTUATION = /^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu
 
 export interface JudgeInput {
   item: AssessItem
@@ -68,27 +64,42 @@ export function selectStepPassages(stepLines: Passage[], pagePassages: Passage[]
   return selected
 }
 
-/** Every text the AI typed in this check, longest first, so that a longer one is replaced before a part of it. */
-function typedTexts(steps: AppStep[]): string[] {
-  const texts = steps.flatMap((s) => (s.action.type === 'type' ? [s.action.text] : []))
-  return [...new Set(texts)].sort((a, b) => b.length - a.length)
+/** Every text the AI wrote in this check: what it typed, and every option it named in a select, whatever the outcome. */
+function aiWrittenTexts(steps: AppStep[]): string[] {
+  return steps.flatMap((s) => {
+    if (s.action.type === 'type') return [s.action.text]
+    if (s.action.type === 'select') return [s.action.option]
+    return []
+  })
+}
+
+/** How A20b compares a quote with what the AI wrote: NFKC, whitespace collapsed, lower case, no punctuation at either end. */
+function comparable(text: string): string {
+  return normaliseForMatch(text).toLowerCase().replace(EDGE_PUNCTUATION, '')
+}
+
+/** The judge's copy of a step line says `typed text into ...`: what the AI typed is not the app's. The stored line keeps it. */
+function withoutTypedText(passage: Passage, steps: AppStep[]): Passage {
+  if (passage.position !== STEP_LINE_POSITION) return passage
+  const step = steps.find((s) => s.pageId === passage.pageId)
+  if (step?.action.type !== 'type') return passage
+  const text = passage.text.split(`typed "${step.action.text}" into`).join(TYPED_IN_LINE)
+  return text === passage.text ? passage : { ...passage, text }
 }
 
 /**
- * The passage as the judge reads it: text the AI typed itself is not evidence, so it is taken out of
- * the step line (`typed text into ...`) and out of anything else that shows it, such as a text box's
- * value or a posted message (ruling A20). The stored passage keeps it.
+ * Ruling A20b. A quote is unproven when it is contained in anything the AI wrote (a typed text or a
+ * select option, however the app showed it: cut short, in capitals), or when it names the line of a
+ * refused, failed or stopped step: that line is SafetyAudit's own rule or error, not the app's doing.
  */
-function withoutTyped(passage: Passage, typed: string[]): Passage {
-  let text = passage.text
-  for (const t of typed) text = text.split(`typed "${t}" into`).join(TYPED_IN_LINE)
-  for (const t of typed) {
-    const wanted = normaliseForMatch(t)
-    if (wanted.length < MIN_SCRUBBED_CHARS) continue
-    const normalised = normaliseForMatch(text)
-    if (normalised.includes(wanted)) text = normalised.split(wanted).join(TYPED_PLACEHOLDER)
+function unprovenRule(steps: AppStep[]): (quote: string, passage: Passage) => boolean {
+  const written = aiWrittenTexts(steps).map(comparable)
+  const notDoneLines = new Set(steps.flatMap((s) => (s.pageId !== null && s.outcome !== 'done' ? [s.pageId] : [])))
+  return (quote, passage) => {
+    if (passage.position === STEP_LINE_POSITION && notDoneLines.has(passage.pageId)) return true
+    const wanted = comparable(quote)
+    return written.some((text) => text.includes(wanted))
   }
-  return text === passage.text ? passage : { ...passage, text }
 }
 
 /** Page ids: the pages of the evidence steps, in the order named, then the other step pages, newest first. */
@@ -105,33 +116,6 @@ function groupByPage(passages: Passage[]): Map<string, Passage[]> {
   return byPage
 }
 
-function noStepsSuggestion(ctx: RunCtx, input: JudgeInput): NewSuggestion {
-  return {
-    runId: ctx.run.id,
-    projectId: ctx.run.projectId,
-    itemId: input.item.id,
-    suggestedResult: null,
-    reason: APP_NO_STEPS_REASON,
-    confidence: 'medium',
-    flags: computeFlags({
-      suggestedResult: null,
-      evidenceSufficient: false,
-      conflicting: false,
-      webAssessable: true,
-      confidence: 'medium',
-      aiReason: APP_NO_STEPS_REASON,
-      passagesFound: 0,
-      quotes: [],
-      failedPages: [],
-      source: 'app',
-      stoppedBy: input.stoppedBy,
-    }),
-    passageIdsSent: [],
-    source: 'app',
-    quotes: [],
-  }
-}
-
 /**
  * Judges the item from its steps and stores one suggestion with source `app`. Stores a null
  * suggestion without calling the AI when no step recorded a page. Returns null when the AI left the
@@ -139,25 +123,7 @@ function noStepsSuggestion(ctx: RunCtx, input: JudgeInput): NewSuggestion {
  * on to the caller.
  */
 export async function judgeItem(ctx: RunCtx, input: JudgeInput): Promise<Suggestion | null> {
-  const stepPages = [...input.steps].filter((s) => s.pageId !== null).sort((a, b) => a.position - b.position)
-  if (stepPages.length === 0) return storeSuggestion(ctx, noStepsSuggestion(ctx, input))
-
-  const typed = typedTexts(input.steps)
-  const passages = await ctx.deps.repo.listPassagesOfPages(stepPages.map((s) => s.pageId as string))
-  const byPage = groupByPage(passages.map((p) => withoutTyped(p, typed)))
-  const stepLines = stepPages.flatMap((s) => (byPage.get(s.pageId as string) ?? []).filter((p) => p.position === STEP_LINE_POSITION))
-  const pagePassages = pagePriority(stepPages, input.evidenceSteps).map((id) =>
-    (byPage.get(id) ?? []).filter((p) => p.position !== STEP_LINE_POSITION),
-  )
-  const selected = selectStepPassages(stepLines, pagePassages)
-
   const { item, platform } = input
-  const output = await abortable(
-    ctx.deps.assessBatch({ items: [item], passages: selected, platform, apiKey: ctx.deps.apiKey, model: ctx.deps.model, evidenceKind: 'app' }),
-    ctx.signal,
-  )
-  input.meter.add(output.tokensUsed)
-
   const batch: BatchContext = {
     platform,
     pages: new Map(),
@@ -165,10 +131,30 @@ export async function judgeItem(ctx: RunCtx, input: JudgeInput): Promise<Suggest
     source: 'app',
     stoppedBy: input.stoppedBy === null ? undefined : new Map([[item.id, input.stoppedBy]]),
   }
-  const round = {
+  const stepPages = [...input.steps].filter((s) => s.pageId !== null).sort((a, b) => a.position - b.position)
+  if (stepPages.length === 0) return storeSuggestion(ctx, withoutEvidence(ctx, item, batch, APP_NO_STEPS_REASON))
+
+  const passages = await ctx.deps.repo.listPassagesOfPages(stepPages.map((s) => s.pageId as string))
+  const byPage = groupByPage(passages.map((p) => withoutTypedText(p, input.steps)))
+  const stepLines = stepPages.flatMap((s) => (byPage.get(s.pageId as string) ?? []).filter((p) => p.position === STEP_LINE_POSITION))
+  const pagePassages = pagePriority(stepPages, input.evidenceSteps).map((id) =>
+    (byPage.get(id) ?? []).filter((p) => p.position !== STEP_LINE_POSITION),
+  )
+  const selected = selectStepPassages(stepLines, pagePassages)
+
+  const output = await abortable(
+    ctx.deps.assessBatch({ items: [item], passages: selected, platform, apiKey: ctx.deps.apiKey, model: ctx.deps.model, evidenceKind: 'app' }),
+    ctx.signal,
+  )
+  input.meter.add(output.tokensUsed)
+
+  const round: Round = {
     selected,
     found: new Map([[item.id, selected.length]]),
     results: output.results.filter((r) => r.itemId === item.id),
+    isUnproven: unprovenRule(input.steps),
+    // A step line is SafetyAudit's own words, never on the page: close-ups are for page text.
+    takesCloseUp: (p) => p.position !== STEP_LINE_POSITION,
   }
   const [stored] = await storeRound(ctx, round, batch, input.highlighter)
   return stored ?? null
@@ -202,9 +188,21 @@ async function photograph(ctx: RunCtx, session: AppSession, quote: string, pageU
   }
 }
 
+/** Each account's newest recorded step page: the only page of that account the live session can still show. */
+function newestPageOfEach(steps: AppStep[]): Map<string, string> {
+  const newest = new Map<string, AppStep>()
+  for (const step of steps) {
+    if (step.pageId === null || step.accountId === null) continue
+    const known = newest.get(step.accountId)
+    if (known === undefined || step.position > known.position) newest.set(step.accountId, step)
+  }
+  return new Map([...newest.values()].map((s) => [s.pageId as string, s.accountId as string]))
+}
+
 /**
- * Close-ups from the live sessions. A quote is photographed only while its step's account session
- * is still on that page's address, so the picture is of the page the quote came from. A quote that
+ * Close-ups from the live sessions. A quote is photographed only on its account's newest step page,
+ * and only while that session is still on the page's address, so the picture is of the page the
+ * quote came from (an older step on the same address may no longer look the same). A quote that
  * cannot be photographed is left out. Never rejects and never opens a browser.
  */
 export function liveHighlighter(
@@ -213,7 +211,7 @@ export function liveHighlighter(
   steps: AppStep[],
   pages: ReadonlyMap<string, CapturedPage>,
 ): Highlighter {
-  const accountOfPage = new Map(steps.flatMap((s) => (s.pageId === null ? [] : [[s.pageId, s.accountId] as const])))
+  const accountOfPage = newestPageOfEach(steps)
   return async (quotesByPage) => {
     const paths = new Map<string, string>()
     for (const [pageId, quotes] of quotesByPage) {

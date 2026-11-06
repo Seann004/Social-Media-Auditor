@@ -223,7 +223,8 @@ describe('judgeItem', () => {
 
     const sent = kit.calls[0].passages
     expect(sent[0].text).toBe('Step 1 · Teen 15 · typed text into textbox "Message" → page unchanged')
-    expect(sent.some((p) => p.text.includes(TYPED))).toBe(false)
+    // Only the step line is rewritten (ruling A20b): the controls passage is sent as the app showed it.
+    expect(sent.find((p) => p.kind === 'controls')?.text).toContain(TYPED)
     expect(s?.suggestedResult).toBe('yes')
     expect(s?.quotes.every((q) => !q.verified)).toBe(true)
     expect(s?.flags.map((f) => f.type)).toContain('unverified_quote')
@@ -231,6 +232,128 @@ describe('judgeItem', () => {
     expect(kit.steps[0].line).toContain(`typed "${TYPED}"`)
     const stored = await kit.repo.listPassagesOfPages([kit.steps[0].pageId as string])
     expect(stored[0].text).toContain(`typed "${TYPED}"`)
+  })
+
+  describe('quotes of what the AI wrote are unverified (ruling A20b)', () => {
+    const LONG = `${TYPED} on this platform by default, and only approved followers can see the posts they share with them.`
+
+    it('a typed text over 100 characters, quoted from its cut-short textbox value', async () => {
+      expect(LONG.length).toBeGreaterThan(100)
+      const kit = await createKit()
+      const composer = view('/messages', 'Messages', [el('e2', 'textbox', 'Message', { tag: 'textarea', state: { value: LONG.slice(0, 100) } })])
+      await kit.record({ action: { type: 'type', ref: 'e2', text: LONG }, detail: 'page unchanged', view: composer })
+      const quote = `${TYPED} on this platform by default`
+      kit.answer.current = (input) => ({ results: [result({ quotes: [quoting((p) => p.kind === 'controls', quote)(input)] })], missingItemIds: [], tokensUsed: 5 })
+
+      const s = await judge(kit, { evidenceSteps: [1] })
+
+      expect(kit.calls[0].passages.find((p) => p.kind === 'controls')?.text).toContain(quote)
+      expect(s?.quotes[0].verified).toBe(false)
+      expect(s?.flags.map((f) => f.type)).toContain('unverified_quote')
+    })
+
+    it('a made-up option in a refused select', async () => {
+      const kit = await createKit()
+      const audience = el('e5', 'combobox', 'Audience', { tag: 'select', state: { value: 'Public', options: ['Public', 'Friends'] } })
+      const page = view('/settings', SETTINGS_TEXT, [audience])
+      await kit.record({
+        action: { type: 'select', ref: 'e5', option: 'Only teens can see this' },
+        outcome: 'refused',
+        refusalReason: 'That option is not on the page.',
+        view: page,
+      })
+      kit.answer.current = (input) => ({
+        results: [result({ quotes: [quoting(isLine(1), '"Only teens can see this"')(input)] })],
+        missingItemIds: [],
+        tokensUsed: 5,
+      })
+
+      const s = await judge(kit, { evidenceSteps: [1] })
+
+      expect(kit.calls[0].passages[0].text).toContain('Only teens can see this')
+      expect(s?.quotes[0].verified).toBe(false)
+      expect(s?.flags.map((f) => f.type)).toContain('unverified_quote')
+    })
+
+    it('a made-up option in a done select is unverified too', async () => {
+      const kit = await createKit()
+      const audience = el('e5', 'combobox', 'Audience', { tag: 'select', state: { value: 'Only teens can see this' } })
+      await kit.record({
+        action: { type: 'select', ref: 'e5', option: 'Only teens can see this' },
+        detail: 'page unchanged',
+        view: view('/settings', SETTINGS_TEXT, [audience]),
+      })
+      kit.answer.current = (input) => ({
+        results: [result({ quotes: [quoting((p) => p.kind === 'controls', 'Only teens can see this')(input)] })],
+        missingItemIds: [],
+        tokensUsed: 5,
+      })
+
+      const s = await judge(kit, { evidenceSteps: [1] })
+
+      expect(s?.quotes[0].passageId).not.toBeNull()
+      expect(s?.quotes[0].verified).toBe(false)
+    })
+
+    it('the app showing the typed text in capitals', async () => {
+      const kit = await createKit()
+      const composer = view('/messages', `Draft\n${TYPED.toUpperCase()}`, [el('e2', 'textbox', 'Message', { tag: 'textarea' })])
+      await kit.record({ action: { type: 'type', ref: 'e2', text: TYPED }, detail: 'page unchanged', view: composer })
+      kit.answer.current = (input) => ({
+        results: [result({ quotes: [quoting((p) => p.text.includes(TYPED.toUpperCase()), TYPED.toUpperCase())(input)] })],
+        missingItemIds: [],
+        tokensUsed: 5,
+      })
+
+      const s = await judge(kit, { evidenceSteps: [1] })
+
+      expect(s?.quotes[0].passageId).not.toBeNull()
+      expect(s?.quotes[0].verified).toBe(false)
+    })
+
+    it('typing "private" in search leaves "Your account is private." quotable, with the page passages sent as stored', async () => {
+      const kit = await createKit()
+      const page = view('/settings', `${SETTINGS_TEXT}\nStart a new post.`, [
+        el('e3', 'searchbox', 'Search settings', { tag: 'input', inputType: 'search' }),
+        el('e4', 'switch', 'Private account', { state: { checked: true } }),
+      ])
+      await kit.record({ action: { type: 'type', ref: 'e3', text: 'private' }, detail: 'page unchanged', view: page })
+      kit.answer.current = (input) => ({
+        results: [result({ quotes: [quoting((p) => p.text.includes('Your account'), 'Your account is private.')(input)] })],
+        missingItemIds: [],
+        tokensUsed: 5,
+      })
+
+      const s = await judge(kit, { evidenceSteps: [1] })
+
+      expect(s?.quotes[0].verified).toBe(true)
+      const stored = await kit.repo.listPassagesOfPages([kit.steps[0].pageId as string])
+      const sent = new Map(kit.calls[0].passages.map((p) => [p.id, p.text]))
+      for (const p of stored.filter((x) => x.position > 0)) expect(sent.get(p.id)).toBe(p.text)
+      expect(stored.some((p) => p.position > 0 && p.text.includes('\n'))).toBe(true)
+    })
+
+    it('a quote of a Refused line supporting yes is unverified and flagged', async () => {
+      const kit = await createKit()
+      const page = view('/u/stranger', 'A stranger profile.', [el('e1', 'button', 'Message')])
+      await kit.record({
+        action: { type: 'click', ref: 'e1' },
+        outcome: 'refused',
+        refusalReason: 'Messaging an account that is not a test account is not allowed.',
+        view: page,
+      })
+      kit.answer.current = (input) => ({
+        results: [result({ quotes: [quoting(isLine(1), 'Refused: clicked button "Message"')(input)] })],
+        missingItemIds: [],
+        tokensUsed: 5,
+      })
+
+      const s = await judge(kit, { evidenceSteps: [1] })
+
+      expect(s?.suggestedResult).toBe('yes')
+      expect(s?.quotes[0].verified).toBe(false)
+      expect(s?.flags.map((f) => f.type)).toContain('unverified_quote')
+    })
   })
 
   it('a yes with no quote gets missing_evidence: a claim no step supports is flagged', async () => {
@@ -350,7 +473,9 @@ describe('judgeItem', () => {
 
     expect(highlighter).toHaveBeenCalledTimes(1)
     const asked = highlighter.mock.calls[0][0]
-    expect(asked.get(settingsPage)).toContain(pageQuote)
+    expect(asked.get(settingsPage)).toEqual([pageQuote])
+    // A step line is not page text: it never goes to the highlighter.
+    expect([...asked.values()].flat()).not.toContain(lineQuote)
     expect(s?.quotes.map((q) => q.verified)).toEqual([true, true, true])
     expect(s?.quotes[0].highlightScreenshotPath).toBe('proj-1/run/highlight-x.jpg')
     expect(s?.quotes[1].highlightScreenshotPath).toBeNull()
@@ -469,6 +594,25 @@ describe('liveHighlighter', () => {
     const paths = await highlighter(new Map([[pageId, ['Your feed shows the newest posts first.']]]))
 
     expect(paths.has(highlightKey(pageId, 'Your feed shows the newest posts first.'))).toBe(true)
+  })
+
+  it('photographs only the newest step page of the account, even when an older step was on the same address', async () => {
+    const kit = await createKit()
+    await kit.record({ action: { type: 'open_link', url: '/settings' }, detail: 'page /settings opened', view: SETTINGS })
+    await kit.record({ action: { type: 'toggle', ref: 'e6' }, detail: 'page unchanged', view: SETTINGS })
+    const session = fakeSession(() => SETTINGS.url)
+    const [older, newer] = [kit.steps[0].pageId as string, kit.steps[1].pageId as string]
+    const quote = 'Only approved followers see your posts.'
+
+    const paths = await liveHighlighter(kit.ctx, poolOf({ [TEEN.id]: session }), kit.steps, await pagesOf(kit))(
+      new Map([
+        [older, [quote]],
+        [newer, [quote]],
+      ]),
+    )
+
+    expect([...paths.keys()]).toEqual([highlightKey(newer, quote)])
+    expect(session.photographQuote).toHaveBeenCalledTimes(1)
   })
 
   it('leaves out a quote it cannot photograph, and a page whose account has no session', async () => {

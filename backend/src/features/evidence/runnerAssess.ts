@@ -49,27 +49,29 @@ function queryOf(item: AssessItem): string {
   return [item.name, item.text, item.helpText].filter(Boolean).join(' ')
 }
 
-function draftQuotes(result: AssessedItem, sent: ReadonlyMap<string, Passage>): QuoteDraft[] {
+function draftQuotes(result: AssessedItem, sent: ReadonlyMap<string, Passage>, round: Round): QuoteDraft[] {
   return result.quotes.map((q) => {
     // A quote counts only against the passage it names, and only if that passage was sent.
     const passage = q.passageId === null ? undefined : sent.get(q.passageId)
-    return { text: q.text, passage, verified: passage !== undefined && isQuoteVerified(q.text, passage.text) }
+    const verified = passage !== undefined && isQuoteVerified(q.text, passage.text) && !(round.isUnproven?.(q.text, passage) ?? false)
+    return { text: q.text, passage, verified }
   })
 }
 
 /** Indexes of the quotes that get a close-up: the first few verified ones on page text. */
-function highlightCandidates(drafts: QuoteDraft[]): number[] {
+function highlightCandidates(drafts: QuoteDraft[], round: Round): number[] {
   const wanted: number[] = []
   drafts.forEach((d, index) => {
-    if (wanted.length < MAX_HIGHLIGHTS_PER_SUGGESTION && d.verified && d.passage?.kind === 'text') wanted.push(index)
+    const onPageText = d.passage?.kind === 'text' && (round.takesCloseUp?.(d.passage) ?? true)
+    if (wanted.length < MAX_HIGHLIGHTS_PER_SUGGESTION && d.verified && onPageText) wanted.push(index)
   })
   return wanted
 }
 
-function collectByPage(drafted: QuoteDraft[][]): Map<string, string[]> {
+function collectByPage(drafted: QuoteDraft[][], round: Round): Map<string, string[]> {
   const byPage = new Map<string, string[]>()
   for (const drafts of drafted) {
-    for (const index of highlightCandidates(drafts)) {
+    for (const index of highlightCandidates(drafts, round)) {
       const { passage, text } = drafts[index]
       const pageId = (passage as Passage).pageId
       const list = byPage.get(pageId) ?? []
@@ -99,13 +101,14 @@ export async function storeSuggestion(ctx: RunCtx, input: NewSuggestion): Promis
   }
 }
 
-function withoutEvidence(ctx: RunCtx, item: AssessItem, batch: BatchContext): NewSuggestion {
+/** A null suggestion for an item with nothing to send the AI, with the batch's source and the item's stoppedBy. */
+export function withoutEvidence(ctx: RunCtx, item: AssessItem, batch: BatchContext, reason: string = NO_PASSAGES_REASON): NewSuggestion {
   return {
     runId: ctx.run.id,
     projectId: ctx.run.projectId,
     itemId: item.id,
     suggestedResult: null,
-    reason: NO_PASSAGES_REASON,
+    reason,
     confidence: 'medium',
     flags: computeFlags({
       suggestedResult: null,
@@ -113,12 +116,15 @@ function withoutEvidence(ctx: RunCtx, item: AssessItem, batch: BatchContext): Ne
       conflicting: false,
       webAssessable: true,
       confidence: 'medium',
-      aiReason: NO_PASSAGES_REASON,
+      aiReason: reason,
       passagesFound: 0,
       quotes: [],
       failedPages: batch.failedPages,
+      source: batch.source,
+      stoppedBy: batch.stoppedBy?.get(item.id) ?? null,
     }),
     passageIdsSent: [],
+    source: batch.source,
     quotes: [],
   }
 }
@@ -128,6 +134,10 @@ export interface Round {
   /** How many passages of each asked item went in the call. */
   found: Map<string, number>
   results: AssessedItem[]
+  /** For app checks: a quote this names is unverified whatever its passage says (ruling A20b). */
+  isUnproven?: (quote: string, passage: Passage) => boolean
+  /** Whether quotes of a page-text passage may get a close-up. Defaults to all of them. */
+  takesCloseUp?: (passage: Passage) => boolean
 }
 
 async function closeUps(ctx: RunCtx, highlighter: Highlighter | null, quotesByPage: Map<string, string[]>): Promise<Map<string, string>> {
@@ -148,13 +158,13 @@ async function closeUps(ctx: RunCtx, highlighter: Highlighter | null, quotesByPa
 export async function storeRound(ctx: RunCtx, round: Round, batch: BatchContext, highlighter: Highlighter | null): Promise<Suggestion[]> {
   const sent = new Map(round.selected.map((p) => [p.id, p]))
   const passageIdsSent = round.selected.map((p) => p.id)
-  const drafted = round.results.map((r) => draftQuotes(r, sent))
-  const paths = await closeUps(ctx, highlighter, collectByPage(drafted))
+  const drafted = round.results.map((r) => draftQuotes(r, sent, round))
+  const paths = await closeUps(ctx, highlighter, collectByPage(drafted, round))
 
   const created: Suggestion[] = []
   for (const [index, result] of round.results.entries()) {
     const drafts = drafted[index]
-    const candidates = new Set(highlightCandidates(drafts))
+    const candidates = new Set(highlightCandidates(drafts, round))
     const quotes = drafts.map((d, i) => ({
       passageId: d.passage?.id ?? null,
       pageId: d.passage?.pageId ?? null,
