@@ -510,6 +510,113 @@ describe('fields that stay secret', () => {
   })
 })
 
+describe('the session’s secrets', () => {
+  /** Reads, lets the page change, reads again with the secrets, and takes a masked screenshot with them. */
+  async function afterChange(html: string, before: (read: AppRead) => Promise<void>, change: string) {
+    await page.setContent(html)
+    const first = await readAppView(page, null)
+    await before(first)
+    await page.evaluate(change)
+    const second = await readAppView(page, first.world, [SECRET])
+    const shot = await screenshotMasked(page, second.world, [SECRET])
+    expect(shot).not.toBeNull()
+    return { view: second.view, shot: shot! }
+  }
+  const typeSecret = async (selector: string) => {
+    await page.focus(selector)
+    await page.keyboard.insertText(SECRET)
+  }
+
+  it('V1b: blacks out a re-created field with a new id and a new name, by its value', async () => {
+    const { view, shot } = await afterChange(
+      `<form><input id="a" name="x1" type="password" style="${RED_FIELD}"></form>`,
+      () => typeSecret('#a'),
+      `const o = document.getElementById('a'); const n = document.createElement('input'); n.type = 'text'; n.id = 'b'; n.name = 'y1';
+       n.value = o.value; n.style.cssText = o.style.cssText; o.replaceWith(n)`,
+    )
+    expect(JSON.stringify(view)).not.toContain(SECRET)
+    expect((await readPixels(shot, await boxOf('#b'))).red).toBe(0)
+  })
+
+  it('V2: blacks out a field re-created in a new form under the same name, by its value', async () => {
+    const { view, shot } = await afterChange(
+      `<form><input name="x1" type="password" style="${RED_FIELD}"></form>`,
+      () => typeSecret('input'),
+      `const o = document.querySelector('input'); const f = document.createElement('form'); const n = document.createElement('input');
+       n.type = 'text'; n.name = 'x1'; n.value = o.value; n.style.cssText = o.style.cssText; f.appendChild(n); document.body.replaceChildren(f)`,
+    )
+    expect(JSON.stringify(view)).not.toContain(SECRET)
+    expect((await readPixels(shot, await boxOf('input'))).red).toBe(0)
+  })
+
+  it('V3: blacks out a clone of a marked field that has no id or name, by its value', async () => {
+    const { view, shot } = await afterChange(
+      `<div><input style="${RED_FIELD}"></div>`,
+      async ({ view, world }) => {
+        await typeSecret('input')
+        await markSecretField(world, view.elements[0].ref)
+      },
+      `const o = document.querySelector('input'); const n = o.cloneNode(); n.value = o.value; o.replaceWith(n)`,
+    )
+    expect(JSON.stringify(view)).not.toContain(SECRET)
+    expect((await readPixels(shot, await boxOf('input'))).red).toBe(0)
+  })
+
+  it('V4: blacks out page text the typed value was copied into', async () => {
+    const { view, shot } = await afterChange(
+      `<input type="password" id="p"><p><span id="s" style="${RED_FIELD};display:inline-block"></span></p>`,
+      () => typeSecret('#p'),
+      `document.getElementById('s').textContent = document.getElementById('p').value`,
+    )
+    expect(JSON.stringify(view)).not.toContain(SECRET)
+    expect((await readPixels(shot, await boxOf('#s'))).red).toBe(0)
+  })
+
+  it('blacks out a secret split across elements, in any case, and scrubs it from the view', async () => {
+    await page.setContent(`<p id="split" style="${RED_FIELD};height:auto">T<span style="display:block">een-Pass-111</span></p>
+      <p id="upper" style="${RED_FIELD}">TEEN-PASS-111</p><p>Nothing here.</p>`)
+    const { view, world } = await readAppView(page, null, [SECRET])
+
+    expect(view.text.toLowerCase()).not.toContain('pass-111')
+    expect(view.text).toContain('Nothing here.')
+    const shot = (await screenshotMasked(page, world, [SECRET]))!
+    expect((await readPixels(shot, await boxOf('#split'))).red).toBe(0)
+    expect((await readPixels(shot, await boxOf('#upper'))).red).toBe(0)
+  })
+
+  it('never writes the secrets into the page while masking', async () => {
+    await page.setContent(`<input id="u" style="${RED_FIELD}"><p>Plain text.</p>`)
+    await typeSecret('#u')
+    const { world } = await readAppView(page, null, [SECRET])
+    const during = await withMasks(page, world, () => page.content(), [SECRET])
+    expect(during).not.toContain(SECRET)
+    expect(during).not.toContain('Teen')
+    expect(await page.getAttribute('#u', 'style')).toBe(RED_FIELD)
+  })
+
+  it('ignores secrets shorter than 4 characters in the view, so refs, roles and the url stay whole', async () => {
+    await go('/shifting')
+    const plain = await readAppView(page, null)
+    const short = await readAppView(page, plain.world, ['e', 'o', '1', 'k', 'ab'])
+
+    expect(short.view.url).toBe(plain.view.url)
+    expect(short.view.elements.map((el) => [el.ref, el.role, el.name, el.tag])).toEqual(
+      plain.view.elements.map((el) => [el.ref, el.role, el.name, el.tag]),
+    )
+    expect(short.view.text).toBe(plain.view.text)
+    expect(await followLink(short.world, find(short.view, 'link', 'All drafts').ref)).toBe(true)
+    // Not signed in, so /home sends the browser to /login, a redirect app mode follows.
+    await page.waitForURL(`${social.url}/login`)
+  })
+
+  it('scrubs only free text: refs, roles and tags are never touched, even by a secret they contain', async () => {
+    await page.setContent(`<button>Go button</button><p>link e1 button</p>`)
+    const { view } = await readAppView(page, null, ['button', 'link'])
+    expect(view.elements[0]).toMatchObject({ ref: 'e1', role: 'button', tag: 'button', name: 'Go [secret]' })
+    expect(view.text).toBe('Go [secret] [secret] e1 [secret]')
+  })
+})
+
 describe('outlineLines', () => {
   const element = (over: Partial<AppElement>): AppElement => ({
     ref: 'e1',

@@ -98,12 +98,16 @@ export const APP_HISTORY_LINES = 12
 // Reading and typing
 export const APP_CONTEXT_TEXT_CHARS = 400
 export const APP_MAX_TYPE_CHARS = 500
+/** Shorter secrets are not looked for in the view or the page text: they would match everywhere. */
+export const APP_MIN_SECRET_CHARS = 4
 
 // Timing
 export const APP_ACTION_TIMEOUT_MS = 15_000
 export const APP_SETTLE_MS = 500
 export const APP_NETWORK_IDLE_WAIT_MS = 2_000
 export const APP_RUN_TIMEOUT_MS = 1_800_000
+/** How long the response a followed redirect ended on waits for the browser's navigation to it. */
+export const APP_REDIRECT_ARRIVAL_MS = 10_000
 
 // Project limits
 export const APP_MAX_TEST_ACCOUNTS = 6

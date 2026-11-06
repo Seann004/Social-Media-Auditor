@@ -11,6 +11,8 @@ let browser: Browser
 let app: PageServer
 let other: PageServer
 let opened: GuardedContext | null = null
+/** The method of every request that reached /final. */
+let finalMethods: string[] = []
 
 const found = (res: import('node:http').ServerResponse, location: string) => {
   res.writeHead(302, { location })
@@ -27,6 +29,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   quietLogUnlessTestFails()
+  finalMethods = []
   other = await startPageServer({ '/landing': html('Elsewhere', '<p>Another site.</p>') })
   app = await startPageServer({
     '/start': html(
@@ -36,7 +39,11 @@ beforeEach(async () => {
     ),
     '/post': (res) => found(res, '/mid'),
     '/mid': (res) => found(res, '/final'),
-    '/final': html('Final', '<p>Final page</p>'),
+    '/final': (res, req) => {
+      finalMethods = [...finalMethods, req.method ?? '']
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(html('Final', `<p>Final page ${finalMethods.length}</p>`))
+    },
     '/out': (res) => found(res, `${other.url}/landing`),
     '/r': (res, req) => found(res, `/r?n=${Number(new URL(req.url ?? '', 'http://x').searchParams.get('n')) + 1}`),
   })
@@ -50,8 +57,13 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
-async function openStart(contextGuard: UrlGuard, followPageRedirects: boolean, navigationGuard = contextGuard): Promise<Page> {
-  opened = await createGuardedContext(browser, contextGuard, { followPageRedirects })
+async function openStart(
+  contextGuard: UrlGuard,
+  followPageRedirects: boolean,
+  navigationGuard = contextGuard,
+  arrivalTtlMs?: number,
+): Promise<Page> {
+  opened = await createGuardedContext(browser, contextGuard, { followPageRedirects, arrivalTtlMs })
   const page = await opened.context.newPage()
   const navigation = await gotoGuarded(page, `${app.url}/start`, navigationGuard, TEST_PAGE_TIMEOUT_MS)
   expect(navigation.blockedReason).toBeNull()
@@ -64,9 +76,74 @@ describe('redirects on navigations the page starts itself', () => {
 
     await page.click('#go')
     await page.waitForURL(`${app.url}/final`)
-    expect(await page.textContent('p')).toBe('Final page')
+    expect(await page.textContent('p')).toBe('Final page 1')
     expect(opened!.violations).toEqual([])
     expect([app.hits('/post'), app.hits('/mid'), app.hits('/final')]).toEqual([1, 1, 1])
+  })
+
+  /**
+   * Follows the chain, but the test answers the browser's own navigation to /final itself, so the
+   * response the walk fetched is left waiting, as if the page had gone somewhere else meanwhile.
+   */
+  async function leaveAnArrivalWaiting(page: Page): Promise<void> {
+    let claimed = false
+    await page.route(`${app.url}/final`, async (route) => {
+      if (claimed) return route.fallback()
+      claimed = true
+      await route.fulfill({ status: 200, contentType: 'text/html', body: '<p>Answered by the test</p>' })
+    })
+    await page.click('#go')
+    await expect.poll(() => claimed).toBe(true)
+    await page.waitForLoadState('domcontentloaded')
+    expect(finalMethods).toEqual(['GET'])
+  }
+
+  it('in app mode, serves a held response once only', async () => {
+    const page = await openStart(app.guard('127.0.0.1'), true)
+
+    await page.click('#go')
+    await page.waitForURL(`${app.url}/final`)
+    await page.evaluate(() => location.reload())
+    await expect.poll(() => finalMethods).toEqual(['GET', 'GET'])
+    await expect.poll(() => page.textContent('p')).toBe('Final page 2')
+  })
+
+  it('in app mode, never serves a held response to a POST', async () => {
+    const page = await openStart(app.guard('127.0.0.1'), true)
+    await leaveAnArrivalWaiting(page)
+
+    await page.evaluate((target) => {
+      const form = document.createElement('form')
+      form.method = 'post'
+      form.action = target
+      document.body.append(form)
+      form.submit()
+    }, `${app.url}/final`)
+    await expect.poll(() => finalMethods).toEqual(['GET', 'POST'])
+    await expect.poll(() => page.textContent('p')).toBe('Final page 2')
+  })
+
+  it('in app mode, drops a held response that waited past its expiry', async () => {
+    const page = await openStart(app.guard('127.0.0.1'), true, undefined, 200)
+    await leaveAnArrivalWaiting(page)
+
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    await page.evaluate((target) => {
+      location.href = target
+    }, `${app.url}/final`)
+    await expect.poll(() => finalMethods).toEqual(['GET', 'GET'])
+    await expect.poll(() => page.textContent('p')).toBe('Final page 2')
+  })
+
+  it('in app mode, still serves a held response to the GET it waits for, within its expiry', async () => {
+    const page = await openStart(app.guard('127.0.0.1'), true)
+    await leaveAnArrivalWaiting(page)
+
+    await page.evaluate((target) => {
+      location.href = target
+    }, `${app.url}/final`)
+    await expect.poll(() => page.textContent('p')).toBe('Final page 1')
+    expect(finalMethods).toEqual(['GET'])
   })
 
   it('in app mode, refuses a hop the navigation guard refuses, and requests nothing past it', async () => {

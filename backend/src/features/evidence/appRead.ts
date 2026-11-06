@@ -1,13 +1,13 @@
 import type { Page } from 'playwright'
 import { z } from 'zod'
 import { APP_READ_SOURCE } from './appReadSource.js'
+import { scrubView, secretPatterns } from './appSecrets.js'
 import type { AppElement, AppElementState, AppView } from './appTypes.js'
 import { withinTimeout } from './browser.js'
 import { logCaptureFailure } from './captureLog.js'
 import { APP_ACTION_TIMEOUT_MS, APP_ELEMENT_LINE_CHARS, JPEG_QUALITY } from './config.js'
 import { HIGHLIGHT_SOURCE } from './highlightSource.js'
 import { DECIDE_HIDDEN_SOURCE, openIsolatedWorld, type IsolatedWorld } from './pageRead.js'
-import { normaliseForMatch } from './quotes.js'
 import { redactUrl } from './secrets.js'
 
 export interface AppRead {
@@ -21,8 +21,7 @@ export interface Point {
 }
 
 const APP_WORLD_NAME = 'evidence-app'
-/** What stands in the view wherever a secret of the session was found. */
-export const SECRET_PLACEHOLDER = '[secret]'
+export { SECRET_PLACEHOLDER } from './appSecrets.js'
 /** The only errors that mean a world's document is gone, rather than that something else went wrong. */
 const DEAD_WORLD_ERROR = /Cannot find context with specified id|Execution context was destroyed|Target (page, context or browser )?(has been )?closed|Session closed|has been closed/i
 
@@ -83,27 +82,6 @@ async function isAlive(world: IsolatedWorld): Promise<boolean> {
   }
 }
 
-/** Every string in the value, with each secret replaced by the placeholder. A new value: nothing is changed in place. */
-function scrubbed<T>(value: T, secrets: readonly string[]): T {
-  if (typeof value === 'string') {
-    return secrets.reduce((text, secret) => text.split(secret).join(SECRET_PLACEHOLDER), value as string) as T
-  }
-  if (Array.isArray(value)) return value.map((item) => scrubbed(item, secrets)) as T
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrubbed(item, secrets)])) as T
-  }
-  return value
-}
-
-/** Each secret as typed, as it reads once the page text is normalised, and as it is written in an address. Blank ones are left out. */
-function secretForms(secrets: readonly string[]): string[] {
-  const forms = secrets
-    .filter((secret) => secret.trim() !== '')
-    .flatMap((secret) => [secret, normaliseForMatch(secret), encodeURIComponent(secret), new URLSearchParams({ s: secret }).toString().slice(2)])
-  // Longest first, so that a secret that contains another is replaced whole.
-  return [...new Set(forms)].sort((a, b) => b.length - a.length)
-}
-
 async function openAppWorld(page: Page, previous: IsolatedWorld | null): Promise<IsolatedWorld> {
   await previous?.cdp.detach().catch(() => undefined)
   const world = await openIsolatedWorld(page, APP_WORLD_NAME, { scriptsOff: false })
@@ -118,15 +96,15 @@ async function openAppWorld(page: Page, previous: IsolatedWorld | null): Promise
  * Refs are renumbered on every read, and only refs from the latest read mean anything.
  *
  * `secrets` are the credentials typed in this session. As a backstop to the secret fields, every
- * occurrence of one, anywhere in the view, is replaced with SECRET_PLACEHOLDER before it is returned.
+ * occurrence of one in the view's free text is replaced with SECRET_PLACEHOLDER (see scrubView).
  */
 export async function readAppView(page: Page, previous: IsolatedWorld | null, secrets: readonly string[] = []): Promise<AppRead> {
   const world = previous !== null && (await isAlive(previous)) ? previous : await openAppWorld(page, previous)
   const raw = rawViewSchema.parse(await world.evaluate(READ_EXPRESSION))
-  return { view: scrubbed(toView(raw), secretForms(secrets)), world }
+  return { view: scrubView(toView(raw), secrets), world }
 }
 
-function call(name: string, ...args: string[]): string {
+function call(name: string, ...args: unknown[]): string {
   return `globalThis.__evidenceApp.${name}(${args.map((arg) => JSON.stringify(arg)).join(', ')})`
 }
 
@@ -167,12 +145,16 @@ async function setScriptsOff(world: IsolatedWorld, off: boolean): Promise<void> 
  * Runs `work` with every password field and every secret field painted black, and the page's own
  * scripts off, so that no script can take the paint away. The paint is on the field itself, so it
  * moves with the field when a close-up scrolls the page. Paint and scripts are put back in the end.
+ *
+ * `secrets` are the credentials typed in this session. Any field whose value holds one, and the
+ * smallest elements whose text holds one, are painted black too, matched as secretPatterns does.
+ * The patterns go to the isolated world only, and are never written to the page or a log.
  */
-export async function withMasks<T>(page: Page, world: IsolatedWorld, work: () => Promise<T>): Promise<T> {
+export async function withMasks<T>(page: Page, world: IsolatedWorld, work: () => Promise<T>, secrets: readonly string[] = []): Promise<T> {
   await setScriptsOff(world, true)
   try {
     try {
-      await world.evaluate(call('mask'))
+      await world.evaluate(call('mask', secretPatterns(secrets)))
       return await work()
     } finally {
       await world.evaluate(call('unmask')).catch((err: unknown) => logCaptureFailure('Could not remove the masks', redactUrl(page.url()), err))
@@ -185,10 +167,14 @@ export async function withMasks<T>(page: Page, world: IsolatedWorld, work: () =>
 }
 
 /** A JPEG of the viewport with every password and secret field black, or null when it could not be taken. */
-export async function screenshotMasked(page: Page, world: IsolatedWorld): Promise<Buffer | null> {
+export async function screenshotMasked(page: Page, world: IsolatedWorld, secrets: readonly string[] = []): Promise<Buffer | null> {
   try {
-    const shot = await withMasks(page, world, () =>
-      withinTimeout(world.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: JPEG_QUALITY }), APP_ACTION_TIMEOUT_MS, 'Taking the screenshot'),
+    const shot = await withMasks(
+      page,
+      world,
+      () =>
+        withinTimeout(world.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: JPEG_QUALITY }), APP_ACTION_TIMEOUT_MS, 'Taking the screenshot'),
+      secrets,
     )
     return Buffer.from(screenshotSchema.parse(shot).data, 'base64')
   } catch (err) {

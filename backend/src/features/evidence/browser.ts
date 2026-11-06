@@ -12,6 +12,7 @@ import {
 } from 'playwright'
 import { logCaptureFailure } from './captureLog.js'
 import {
+  APP_REDIRECT_ARRIVAL_MS,
   BROWSER_CLOSE_TIMEOUT_MS,
   MAX_REDIRECT_HOPS,
   MAX_RESPONSE_BYTES,
@@ -243,8 +244,38 @@ interface RouteSetup {
   guard: UrlGuard
   violations: string[]
   followPageRedirects: boolean
-  /** In app mode: the final response of a followed redirect, held for the navigation the page is sent on to it. */
-  arrivals: Map<string, { page: Page | null; response: APIResponse }>
+  arrivalTtlMs: number
+  /**
+   * In app mode: the final response of a followed redirect, held for the one GET navigation the
+   * page is sent on to it, until it expires. Keyed by the exact url, fragment aside.
+   */
+  arrivals: Map<string, Arrival>
+}
+
+interface Arrival {
+  page: Page | null
+  response: APIResponse
+  expiresAt: number
+}
+
+/** Drops every held response that has waited too long. */
+async function dropExpiredArrivals(setup: RouteSetup): Promise<void> {
+  const now = Date.now()
+  for (const [url, arrival] of [...setup.arrivals]) {
+    if (arrival.expiresAt > now) continue
+    setup.arrivals.delete(url)
+    await arrival.response.dispose().catch(() => undefined)
+  }
+}
+
+/** The held response for this navigation, taken out so that it is served once. Never for a POST or another page. */
+function takeArrival(setup: RouteSetup, request: Request, page: Page | null): APIResponse | null {
+  if (request.method() !== 'GET') return null
+  const url = withoutFragment(request.url())
+  const arrival = setup.arrivals.get(url)
+  if (!arrival || arrival.page !== page) return null
+  setup.arrivals.delete(url)
+  return arrival.response
 }
 
 function pageOf(request: Request): Page | null {
@@ -287,12 +318,11 @@ function movedOnDocument(finalUrl: string): string {
 async function followNavigation(route: Route, setup: RouteSetup): Promise<void> {
   const request = route.request()
   const page = pageOf(request)
-  const url = withoutFragment(request.url())
-  const arrival = setup.arrivals.get(url)
-  if (arrival && arrival.page === page) {
-    setup.arrivals.delete(url)
-    await route.fulfill({ response: arrival.response })
-    await arrival.response.dispose()
+  await dropExpiredArrivals(setup)
+  const held = takeArrival(setup, request, page)
+  if (held) {
+    await route.fulfill({ response: held })
+    await held.dispose()
     return
   }
   const navigationGuard = (page && gates.get(page)?.guard) || setup.guard
@@ -319,7 +349,7 @@ async function followNavigation(route: Route, setup: RouteSetup): Promise<void> 
   }
   const finalUrl = withoutFragment(walk.finalUrl)
   await setup.arrivals.get(finalUrl)?.response.dispose()
-  setup.arrivals.set(finalUrl, { page, response: walk.response })
+  setup.arrivals.set(finalUrl, { page, response: walk.response, expiresAt: Date.now() + setup.arrivalTtlMs })
   await route.fulfill({
     status: 200,
     contentType: 'text/html; charset=utf-8',
@@ -358,6 +388,8 @@ export interface GuardedContextOptions {
    * using an app needs. Off for a capture, which refuses them (Phase 1).
    */
   followPageRedirects?: boolean
+  /** For tests. How long a followed redirect's final response waits for its navigation. */
+  arrivalTtlMs?: number
 }
 
 /**
@@ -380,7 +412,14 @@ export async function createGuardedContext(browser: Browser, guard: UrlGuard, op
     )
   })
 
-  const setup: RouteSetup = { context, guard, violations, followPageRedirects: opts.followPageRedirects ?? false, arrivals: new Map() }
+  const setup: RouteSetup = {
+    context,
+    guard,
+    violations,
+    followPageRedirects: opts.followPageRedirects ?? false,
+    arrivalTtlMs: opts.arrivalTtlMs ?? APP_REDIRECT_ARRIVAL_MS,
+    arrivals: new Map(),
+  }
   await context.route('**/*', guardRoute(setup))
   return { context, violations }
 }

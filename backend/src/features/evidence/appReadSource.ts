@@ -101,6 +101,7 @@ export const APP_READ_SOURCE = String.raw`(() => {
     isConnected: getter(Node.prototype, 'isConnected'),
     contains: method(Node.prototype, 'contains'),
     data: getter(CharacterData.prototype, 'data'),
+    textContent: getter(Node.prototype, 'textContent'),
     tagName: getter(Element.prototype, 'tagName'),
     getAttribute: method(Element.prototype, 'getAttribute'),
     setAttribute: method(Element.prototype, 'setAttribute'),
@@ -133,6 +134,7 @@ export const APP_READ_SOURCE = String.raw`(() => {
     anchorHref: getter(HTMLAnchorElement.prototype, 'href'),
     iframeSrc: getter(HTMLIFrameElement.prototype, 'src'),
     root: getter(Document.prototype, 'documentElement'),
+    body: getter(Document.prototype, 'body'),
     title: getter(Document.prototype, 'title'),
     activeElement: getter(Document.prototype, 'activeElement'),
     getElementById: method(Document.prototype, 'getElementById'),
@@ -450,15 +452,50 @@ export const APP_READ_SOURCE = String.raw`(() => {
     }
   }
 
-  // Paints every password field and every secret field black, where it is, so the paint moves with it.
-  const mask = () => {
+  const paint = (el) => {
+    let target = el
+    while (target && !(target instanceof HTMLElement)) target = dom.parentElement(target)
+    if (!target || painted.some(([done]) => done === target)) return
+    painted.push([target, dom.getAttribute(target, 'style')])
+    const style = dom.style(target)
+    for (const [name, value] of MASK_STYLE) dom.setProperty(style, name, value, 'important')
+  }
+
+  // The smallest elements whose text holds a secret. Text split between a child that holds one
+  // and the rest is caught on the parent, by the text that is left once those children are set aside.
+  const paintTextHolding = (el, holds) => {
+    if (!holds(dom.textContent(el))) return
+    const rest = []
+    for (const child of Array.from(dom.childNodes(el))) {
+      const type = dom.nodeType(child)
+      if (type === Node.TEXT_NODE) rest.push(dom.data(child))
+      else if (type !== Node.ELEMENT_NODE) continue
+      else if (holds(dom.textContent(child))) {
+        paintTextHolding(child, holds)
+        rest.push(' ')
+      } else rest.push(dom.textContent(child))
+    }
+    if (holds(rest.join(''))) paint(el)
+  }
+
+  // Paints every password field and every secret field black, where it is, so the paint moves with
+  // it. With the session's secret patterns (sources, as secretPatterns makes them), also every field
+  // whose value holds a secret, and the smallest elements whose text does. The patterns live here only.
+  const mask = (sources = []) => {
     unmask()
     notePasswordFields()
     for (const el of dom.querySelectorAll(document, '*')) {
-      if (!(el instanceof HTMLElement) || !isSecret(el)) continue
-      painted.push([el, dom.getAttribute(el, 'style')])
-      const style = dom.style(el)
-      for (const [name, value] of MASK_STYLE) dom.setProperty(style, name, value, 'important')
+      if (el instanceof HTMLElement && isSecret(el)) paint(el)
+    }
+    if (sources.length > 0) {
+      const patterns = sources.map((source) => new RegExp(source, 'iu'))
+      const holds = (text) => typeof text === 'string' && patterns.some((pattern) => pattern.test(text))
+      for (const field of dom.querySelectorAll(document, 'input, textarea')) {
+        const value = field instanceof HTMLInputElement ? dom.inputValue(field) : dom.textareaValue(field)
+        if (holds(value)) paint(field)
+      }
+      const body = dom.body(document)
+      if (body) paintTextHolding(body, holds)
     }
     return painted.length
   }
