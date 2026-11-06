@@ -1,11 +1,15 @@
 /** Small text helpers for the safety rules. Pure. */
 
-const MENTION = /(?<![\p{L}\p{N}_])@([\p{L}\p{N}_]+(?:[.-][\p{L}\p{N}_]+)*)/gu
-const HANDLE = /^[\p{L}\p{N}_]+(?:[.-][\p{L}\p{N}_]+)*$/u
+/** Letters, digits, combining marks and `_`: anything that can continue a name. */
+const CHAR = '\\p{L}\\p{N}\\p{M}_'
+const NAME = `[${CHAR}]+(?:[.-][${CHAR}]+)*`
+/** A handle runs to the end of an `@server.tld` tail: `@teen15@evil.social` is one whole handle. */
+const MENTION = new RegExp(`(?<![${CHAR}])@(${NAME}(?:@${NAME})?)`, 'gu')
+const HANDLE = new RegExp(`^${NAME}(?:@${NAME})?$`, 'u')
 
 /** Compatibility-normalised (so a full-width at-sign is an at-sign) and with curly quotes made straight. */
 export function normalised(text: string): string {
-  return text.normalize('NFKC').replace(/[‘’ʼ]/g, "'")
+  return text.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/[‘’ʼ]/g, "'")
 }
 
 /** Every @name in the text, lower-cased and whole: `@teen15.real` is `teen15.real`, never `teen15`. */
@@ -25,7 +29,7 @@ function escapeRegExp(text: string): string {
 
 /** The bare name standing alone in the text: no letter, digit, `_`, `.` or `-` continues it either way. */
 export function holdsBareName(text: string, name: string): boolean {
-  const pattern = new RegExp(`(?<![\\p{L}\\p{N}_.-])${escapeRegExp(name)}(?![\\p{L}\\p{N}_]|[.-][\\p{L}\\p{N}_])`, 'iu')
+  const pattern = new RegExp(`(?<![${CHAR}.-])${escapeRegExp(name)}(?![${CHAR}@]|[.-][${CHAR}])`, 'iu')
   return pattern.test(normalised(text))
 }
 

@@ -114,9 +114,9 @@ describe('nothing public: final-looking buttons', () => {
   it('allows Next page, which is navigation', () => {
     allowed(CLICK, view([submit('Next page', null)]))
   })
-  it('allows a form-ending button for a proven test account without an audience', () => {
+  it('refuses a form-ending button even with a proven test account as target', () => {
     for (const name of ['Submit', 'Done', 'Save', 'Next']) {
-      allowed(CLICK_TEEN, view([el('e1', name, { groupId: 'g1', contextText: '@teen15' }), textBox]))
+      refused(CLICK_TEEN, view([el('e1', name, { groupId: 'g1', contextText: '@teen15' }), textBox]), 'nothing_public')
       refused(CLICK, view([el('e1', name, { groupId: 'g1' }), textBox]), 'nothing_public')
     }
   })

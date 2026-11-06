@@ -226,13 +226,17 @@ describe('own accounts: fine points', () => {
     ])
     allowed(CLICK, v)
   })
-  it.each(['Send', 'Post', 'Done', 'Share'])('typing beside a "%s" button is typing into a composer', (name) => {
+  it.each(['Send', 'Message', 'Reply', 'Comment'])('typing beside a "%s" button is typing to a person', (name) => {
     const v = view([el('e1', 'Write here', { tag: 'textarea', role: 'textbox', groupId: 'g1' }), el('s', name, { groupId: 'g1' })])
     refused({ type: 'type', ref: 'e1', text: 'hi' }, v, 'own_accounts')
   })
-  it('typing in a login form is not allowed either', () => {
+  it.each(['Post', 'Done', 'Share', 'Save'])('typing beside a "%s" button reaches no one (the button is judged when pressed)', (name) => {
+    const v = view([el('e1', 'Write here', { tag: 'textarea', role: 'textbox', groupId: 'g1' }), el('s', name, { groupId: 'g1' })])
+    allowed({ type: 'type', ref: 'e1', text: 'hi' }, v)
+  })
+  it('typing a username is refused as an account change, even in a login form', () => {
     const v = view([el('e1', 'Username', { tag: 'input', inputType: 'text', groupId: 'g1' }), el('n', 'Next', { groupId: 'g1' })], { url: 'https://app.test/login' })
-    refused({ type: 'type', ref: 'e1', text: 'hi' }, v, 'own_accounts')
+    refused({ type: 'type', ref: 'e1', text: 'hi' }, v, 'destructive')
   })
   it('tells the AI a target is needed', () => {
     const verdict = checkAction(CLICK, one('Message'), CTX)

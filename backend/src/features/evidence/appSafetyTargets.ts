@@ -4,15 +4,15 @@
  * that the control belongs to that account. Anything the rule cannot tell is refused.
  */
 import type { AgentAccount, AppAction, AppElement, AppView } from './appTypes.js'
-import { FINAL_ACTION, LOGIN_PATH, PERSON_ACTION, PUBLISH_ACTION, RECIPIENT_FIELD, SAFE_NAVIGATION } from './appSafetyWords.js'
-import { handleName, holdsBareName, mentionsOf, parseUrl, pathSegments } from './appSafetyText.js'
+import { AUDIENCE_CONTROL, FINAL_ACTION, LOGIN_PATH, PERSON_ACTION, PRIVATE_AUDIENCE, PUBLISH_ACTION, RECIPIENT_FIELD, SAFE_NAVIGATION, WIDENED_AUDIENCE } from './appSafetyWords.js'
+import { handleName, holdsBareName, mentionsOf, normalised, parseUrl, pathSegments } from './appSafetyText.js'
 
 export interface TargetContext {
   accounts: AgentAccount[]
   currentAccount: AgentAccount | null
 }
 
-const LINE_BREAK = new RegExp('[\r\n\u2028\u2029]')
+const LINE_BREAK = new RegExp('[\r\n\u0085\v\f\u2028\u2029]')
 
 export type Check = { ok: true } | { ok: false; reason: string }
 const OK: Check = { ok: true }
@@ -38,8 +38,22 @@ export function isAuthForm(view: AppView, element: AppElement): boolean {
   return parsed !== null && LOGIN_PATH.test(parsed.pathname)
 }
 
-function composerMate(view: AppView, element: AppElement): boolean {
-  return sameGroup(view, element).some((other) => PERSON_ACTION.test(other.name) || PUBLISH_ACTION.test(other.name) || FINAL_ACTION.test(other.name))
+/** Typing beside a person word (Send, Reply...) is typing to a person; beside Post it is not, the button is judged when pressed. */
+function personMate(view: AppView, element: AppElement): boolean {
+  return sameGroup(view, element).some((other) => PERSON_ACTION.test(other.name))
+}
+
+/** The text of an option that is private and not widened ("Only me", but not "Private group"). */
+export function isPrivateOption(text: string): boolean {
+  return PRIVATE_AUDIENCE.test(text) && !WIDENED_AUDIENCE.test(text)
+}
+
+/** Choosing a private audience option is always safe: its only effect is to narrow who can see. */
+export function choosesPrivateOption(action: AppAction, element: AppElement): boolean {
+  if (action.type === 'select') return isPrivateOption(action.option)
+  if (action.type !== 'click' && action.type !== 'toggle') return false
+  const audience = AUDIENCE_CONTROL.test(element.contextText) || AUDIENCE_CONTROL.test(element.name) || element.role === 'radio' || element.role === 'option'
+  return audience && isPrivateOption(element.name)
 }
 
 /** True when the action could reach a person, or when it cannot be told that it does not. */
@@ -51,8 +65,35 @@ export function reachesPeople(action: AppAction, element: AppElement, view: AppV
   // A submit button of a form is judged by the nothing-public rule, not by what the form holds.
   if (PUBLISH_ACTION.test(element.name) || FINAL_ACTION.test(element.name)) return false
   const mates = sameGroup(view, element)
-  if (action.type === 'type') return composerMate(view, element)
+  if (action.type === 'type') return personMate(view, element)
   return mates.some((other) => isTextBox(other) || isMediaInput(other))
+}
+
+function isRecipientInput(element: AppElement): boolean {
+  const input = element.tag === 'input' || element.tag === 'textarea' || element.role === 'textbox'
+  return input && RECIPIENT_FIELD.test(element.name) && element.state.value !== undefined && element.state.value.trim() !== ''
+}
+
+/** The handle held by the form's recipient field: null when there is none, false when it holds anything but exactly one handle. */
+function recipientOf(view: AppView, element: AppElement): string | null | false {
+  const fields = [element, ...sameGroup(view, element)].filter(isRecipientInput)
+  const names = new Set<string>()
+  for (const field of fields) {
+    const tokens = normalised(field.state.value ?? '').split(/[\s,;]+/).filter((token) => token !== '')
+    const name = tokens.length === 1 ? handleName(tokens[0]) : null
+    if (name === null) return false
+    names.add(name)
+  }
+  if (names.size > 1) return false
+  return [...names][0] ?? null
+}
+
+/** Everything the page shows about who a control belongs to: @names around it, and the recipient field's value. */
+function shownHandles(element: AppElement, view: AppView): string[] | null {
+  const recipient = recipientOf(view, element)
+  if (recipient === false) return null
+  const seen = mentionsOf(`${element.name} ${element.contextText}`)
+  return recipient === null ? seen : [...seen, recipient]
 }
 
 function accountNamed(ctx: TargetContext, label: string): AgentAccount | null {
@@ -71,7 +112,8 @@ export function checkTarget(label: string | undefined, element: AppElement, view
   if (ctx.currentAccount !== null && target.id === ctx.currentAccount.id) return no(`${label} is the account in use, so it cannot be the target.`)
   const handles = target.handles.map(handleName).filter((name): name is string => name !== null)
   if (handles.length === 0) return no(`${label} has no display handle, so nothing can be sent to it.`)
-  const seen = mentionsOf(`${element.name} ${element.contextText}`)
+  const seen = shownHandles(element, view)
+  if (seen === null) return no('The recipient field does not hold exactly one handle.')
   if (seen.length > 0) {
     const onlyTarget = seen.every((name) => handles.includes(name)) && seen.some((name) => handles.includes(name))
     return onlyTarget ? OK : no(`The page does not show that this belongs to ${label} alone.`)
@@ -82,8 +124,8 @@ export function checkTarget(label: string | undefined, element: AppElement, view
 }
 
 /** A box has no target of its own: its surroundings must show one other test account, and nobody else. */
-export function checkTypeBox(element: AppElement, ctx: TargetContext): Check {
-  const seen = mentionsOf(`${element.name} ${element.contextText}`)
+export function checkTypeBox(element: AppElement, view: AppView, ctx: TargetContext): Check {
+  const seen = shownHandles(element, view) ?? []
   const others = ctx.accounts.filter((account) => account.id !== ctx.currentAccount?.id)
   const shown = seen.length > 0 && others.some((account) => {
     const handles = account.handles.map(handleName)

@@ -55,7 +55,9 @@ export const DESTRUCTIVE_ACTION = new RegExp(
 /** A price or a recurring charge. Tested on the text as written, before its punctuation is dropped. */
 export const PRICE = /[$€£]\s?\d|\d\s?(?:usd|eur|gbp)\b|\bper (?:month|year|week)\b|\/\s?(?:mo|month|yr|year)\b/i
 
-export const PRIVATE_AUDIENCE = /\b(?:only me|just me|private)\b/i
+export const PRIVATE_AUDIENCE = /\b(?:only me|just me|private|test accounts? only)\b/i
+/** Words that turn a private-sounding audience into a wider one: "not private", "private group (visible to all members)". */
+export const WIDENED_AUDIENCE = /\b(?:not|non|un)[- ]?private\b|\bvisible to (?:all|everyone|anyone|members)\b|\ball members\b|\bgroup\b|\bunlisted\b|\blink\b/i
 export const PUBLIC_AUDIENCE = /\b(?:public|everyone|anyone|anybody|friends|followers|community|world|network|contacts|connections)\b/i
 /** What marks a control as the audience control of a composer. */
 export const AUDIENCE_CONTROL = /audience|visibility|privacy|who can (?:see|view)|share with|shared with|visible to/i

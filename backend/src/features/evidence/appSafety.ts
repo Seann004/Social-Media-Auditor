@@ -10,6 +10,7 @@ import { audienceIsPrivate, checkPublishing } from './appSafetyPublic.js'
 import {
   checkLabel,
   checkTarget,
+  choosesPrivateOption,
   checkTypeBox,
   checkTypedText,
   reachesPeople,
@@ -46,7 +47,7 @@ const LOGIN_INPUT_TYPES = ['text', 'email', 'tel']
 const CHANGE_CREDENTIAL = /\b(?:new|confirm|current|old|repeat|re-?enter|change|update|reset)\b/i
 const LOGIN_TITLE = /log ?in|sign ?in/i
 /** An address that does something when it is opened, rather than showing a page. */
-const ACTING_PATH = /(?:^|\/)(?:api|intent|follow|unfollow|send|share|publish|compose|tweet|repost|retweet|poke|wave|invite|connect|add-?friend|friend-?request|block|report)(?:\/|$)/i
+const ACTING_PATH = /(?:^|\/)(?:api|graphql|intent|follow|unfollow|send|share|publish|compose|tweet|repost|retweet|poke|wave|invite|connect|add-?friend|friend-?request|block|report)(?:[\/_-]|$)/i
 const ACTING_QUERY = /(?:^|[?&])(?:action|text|status|message|follow)=/i
 const DESTRUCTIVE_TYPES = ['click', 'toggle', 'select', 'type', 'open_link']
 
@@ -74,8 +75,9 @@ function checkOwnAccounts(action: AppAction, element: AppElement | null, view: A
   if (!typed.ok) return refuse('own_accounts', typed.reason)
   if (!['click', 'toggle', 'select', 'type'].includes(action.type)) return ALLOWED
   const target = targetOf(action)
+  if (choosesPrivateOption(action, element)) return ALLOWED
   if (target === undefined && !reachesPeople(action, element, view)) return ALLOWED
-  if (action.type === 'type') return fromCheck('own_accounts', checkTypeBox(element, ctx))
+  if (action.type === 'type') return fromCheck('own_accounts', checkTypeBox(element, view, ctx))
   return fromCheck('own_accounts', checkTarget(target, element, view, ctx))
 }
 
@@ -136,7 +138,7 @@ function checkDestructive(action: AppAction, element: AppElement | null, view: A
 
 function checkPublic(action: AppAction, element: AppElement | null, view: AppView | null): SafetyVerdict {
   if (!['click', 'toggle', 'select'].includes(action.type) || element === null || view === null) return ALLOWED
-  const result = checkPublishing(element.name, element, view, targetOf(action) !== undefined)
+  const result = checkPublishing(element.name, element, view)
   return result.ok ? ALLOWED : refuse('nothing_public', result.reason)
 }
 
