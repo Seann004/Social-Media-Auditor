@@ -4,8 +4,19 @@
  * that the control belongs to that account. Anything the rule cannot tell is refused.
  */
 import type { AgentAccount, AppAction, AppElement, AppView } from './appTypes.js'
-import { AUDIENCE_CONTROL, FINAL_ACTION, LOGIN_PATH, PERSON_ACTION, PRIVATE_AUDIENCE, PUBLISH_ACTION, DIRECT_THREAD, RECIPIENT_FIELD, SAFE_NAVIGATION, WIDENED_AUDIENCE } from './appSafetyWords.js'
-import { handleName, holdsBareName, mentionsOf, parseUrl, pathSegments } from './appSafetyText.js'
+import {
+  AUDIENCE_CONTROL,
+  DIRECT_THREAD,
+  FINAL_ACTION,
+  LEAVE_FORM,
+  LOGIN_PATH,
+  PERSON_ACTION,
+  PRIVATE_OPTION,
+  PUBLISH_ACTION,
+  RECIPIENT_FIELD,
+  SAFE_NAVIGATION,
+} from './appSafetyWords.js'
+import { handleName, holdsBareName, mentionsOf, parseUrl, pathSegments, plain } from './appSafetyText.js'
 
 export interface TargetContext {
   accounts: AgentAccount[]
@@ -43,17 +54,32 @@ function personMate(view: AppView, element: AppElement): boolean {
   return sameGroup(view, element).some((other) => PERSON_ACTION.test(other.name))
 }
 
-/** The text of an option that is private and not widened ("Only me", but not "Private group"). */
+/** The whole text of the option is a private audience ("Only me", "Private."), and nothing more. */
 export function isPrivateOption(text: string): boolean {
-  return PRIVATE_AUDIENCE.test(text) && !WIDENED_AUDIENCE.test(text)
+  return PRIVATE_OPTION.test(plain(text))
 }
 
-/** Choosing a private audience option is always safe: its only effect is to narrow who can see. */
+const OPTION_ROLES = ['radio', 'option', 'menuitem', 'menuitemradio']
+const LIST_ROLES = ['combobox', 'listbox']
+
+/** The control picks one option of several: a select for `select`, a radio, option or menu item for a click. */
+function isOptionControl(action: AppAction, element: AppElement): boolean {
+  if (action.type === 'select') return element.tag === 'select' || LIST_ROLES.includes(element.role)
+  return OPTION_ROLES.includes(element.role) || element.inputType === 'radio'
+}
+
+/**
+ * Choosing a private audience option is always safe: its only effect is to narrow who can see. Only an
+ * option control in an audience group counts, and only when its name holds no person, publish, final or reply word.
+ */
 export function choosesPrivateOption(action: AppAction, element: AppElement): boolean {
-  if (action.type === 'select') return isPrivateOption(action.option)
-  if (action.type !== 'click' && action.type !== 'toggle') return false
-  const audience = AUDIENCE_CONTROL.test(element.contextText) || AUDIENCE_CONTROL.test(element.name) || element.role === 'radio' || element.role === 'option'
-  return audience && isPrivateOption(element.name)
+  if (action.type !== 'select' && action.type !== 'click' && action.type !== 'toggle') return false
+  const option = action.type === 'select' ? action.option : element.name
+  if (!isPrivateOption(option) || !isOptionControl(action, element)) return false
+  const inAudience = AUDIENCE_CONTROL.test(element.name) || AUDIENCE_CONTROL.test(element.contextText)
+  // (Reply and Comment are person words, so PERSON_ACTION covers the reply words.)
+  const acts = [PERSON_ACTION, PUBLISH_ACTION, FINAL_ACTION].some((words) => words.test(element.name))
+  return inAudience && !acts
 }
 
 function buttonLike(element: AppElement): boolean {
@@ -66,11 +92,19 @@ function composes(element: AppElement): boolean {
   return (isTextBox(element) && !search) || isMediaInput(element)
 }
 
-/** A submit button (type=submit, or the last button) of a form that has a text or media input. Such a button is judged by what it submits, whatever its label. */
+/** Cancel, Close or Back that is not type=submit: it leaves the form without sending it. */
+function leavesForm(element: AppElement): boolean {
+  return element.inputType !== 'submit' && LEAVE_FORM.test(element.name)
+}
+
+/**
+ * A submit button (type=submit, or the last button that does not just leave the form) of a form that has a
+ * text or media input. Such a button is judged by what it submits, whatever its label.
+ */
 export function isComposerSubmit(element: AppElement, view: AppView): boolean {
   if (element.groupId === null || !sameGroup(view, element).some(composes)) return false
   if (element.inputType === 'submit') return true
-  const buttons = view.elements.filter((other) => other.groupId === element.groupId && buttonLike(other))
+  const buttons = view.elements.filter((other) => other.groupId === element.groupId && buttonLike(other) && !leavesForm(other))
   return buttonLike(element) && buttons[buttons.length - 1]?.ref === element.ref
 }
 
@@ -160,12 +194,16 @@ export function checkTypedText(text: string, ctx: TargetContext): Check {
   return stranger === undefined ? OK : no(`The text mentions @${stranger}, who is not a test account.`)
 }
 
-/** The page is a private conversation with exactly one other test account: a recipient field holding its handle, or a thread address naming it. */
+/**
+ * The page is a private conversation with exactly one other test account: a recipient field holding its
+ * handle, or an address ending in a conversation word and then exactly that handle (`/messages/teen15`).
+ */
 export function isDirectThread(element: AppElement, view: AppView, ctx: TargetContext): boolean {
   const others = ctx.accounts.filter((account) => account.id !== ctx.currentAccount?.id)
   const handles = others.flatMap((account) => account.handles.map(handleName)).filter((name): name is string => name !== null)
   const recipient = recipientOf(view, element)
   if (typeof recipient === 'string') return handles.includes(recipient)
   const segments = pathSegments(view.url)
-  return segments.some((segment) => DIRECT_THREAD.test(segment)) && segments.some((segment) => handles.includes(segment))
+  const [conversation = '', last = ''] = segments.slice(-2)
+  return DIRECT_THREAD.test(conversation) && handles.includes(last)
 }

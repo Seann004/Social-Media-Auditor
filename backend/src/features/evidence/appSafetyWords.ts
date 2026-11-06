@@ -55,9 +55,11 @@ export const DESTRUCTIVE_ACTION = new RegExp(
 /** A price or a recurring charge. Tested on the text as written, before its punctuation is dropped. */
 export const PRICE = /[$€£]\s?\d|\d\s?(?:usd|eur|gbp)\b|\bper (?:month|year|week)\b|\/\s?(?:mo|month|yr|year)\b/i
 
-export const PRIVATE_AUDIENCE = /\b(?:only me|just me|private|test accounts? only)\b/i
-/** Words that turn a private-sounding audience into a wider one: "not private", "private group (visible to all members)". */
-export const WIDENED_AUDIENCE = /\b(?:not|non|un)[- ]?private\b|\bvisible to (?:all|everyone|anyone|members)\b|\ball members\b|\bgroup\b|\bunlisted\b|\blink\b/i
+/**
+ * The whole text of a private audience option, once its punctuation is dropped (see plain()). Only the whole
+ * text counts: "Private (members can see)", "Only me and friends" and "Send private message" are not private.
+ */
+export const PRIVATE_OPTION = /^(?:only me|just me|me only|only myself|just myself|private|test accounts? only|only test accounts?)$/i
 export const PUBLIC_AUDIENCE = /\b(?:public|everyone|anyone|anybody|friends|followers|community|world|network|contacts|connections)\b/i
 /** What marks a control as the audience control of a composer. */
 export const AUDIENCE_CONTROL = /audience|visibility|privacy|who can (?:see|view)|share with|shared with|visible to/i
@@ -85,5 +87,7 @@ export const NOT_A_SECURITY_CODE = /promo|postal|zip|country|coupon|discount|vou
 
 /** Replying and commenting are visible to everyone who can see the thread, so they publish (verbs only: "Comments" is a tab). */
 export const PUBLIC_REPLY = /\b(?:repl(?:y|ies|ying)|comment(?:ing)?)\b/i
-/** A path segment that says the page is a private conversation. */
-export const DIRECT_THREAD = /^(?:messages?|dms?|chats?|direct|inbox|conversations?)$/i
+/** A path segment that says the page is a private conversation, when the next and last segment is the other person's handle. */
+export const DIRECT_THREAD = /^(?:messages?|dms?|chats?|direct|inbox|conversations?|t)$/i
+/** Buttons that leave a form without sending it: they are its submit button only when they are type=submit. */
+export const LEAVE_FORM = /^\s*(?:cancel|close|back)\s*$/i

@@ -222,15 +222,16 @@ describe('round 2: more recipient and audience-choice cases', () => {
     const box = el('e1', 'Only me', { tag: 'textarea', role: 'textbox', contextText: 'Audience @stranger' })
     refused({ type: 'type', ref: 'e1', text: 'hi' }, view([box]), 'own_accounts')
   })
-  it('a button named Private or Only me counts only inside an audience context', () => {
+  it('a control named Private or Only me counts only as an option control inside an audience context (round 4)', () => {
     const textBoxMate = el('t', 'Say something', { tag: 'textarea', role: 'textbox', groupId: FORM })
     refused(CLICK, view([el('e1', 'Private message', { groupId: FORM }), textBoxMate]), 'own_accounts')
     refused(CLICK, view([el('e1', 'Only me', { groupId: FORM }), textBoxMate]), 'own_accounts')
-    allowed(CLICK, view([el('e1', 'Only me', { groupId: FORM, contextText: 'Audience' }), textBoxMate]))
-    allowed(CLICK, view([el('e1', 'Audience: Only me', { groupId: FORM }), textBoxMate]))
-    allowed(CLICK, view([el('e1', 'Only me', { role: 'radio', groupId: FORM }), textBoxMate]))
-    allowed(CLICK, view([el('e1', 'Only me', { role: 'option', groupId: FORM }), textBoxMate]))
-    allowed({ type: 'toggle', ref: 'e1' }, view([el('e1', 'Only me', { role: 'switch', groupId: FORM, contextText: 'Audience' }), textBoxMate]))
+    refused(CLICK, view([el('e1', 'Only me', { groupId: FORM, contextText: 'Audience' }), textBoxMate]), 'own_accounts')
+    refused(CLICK, view([el('e1', 'Audience: Only me', { groupId: FORM }), textBoxMate]), 'own_accounts')
+    refused(CLICK, view([el('e1', 'Only me', { role: 'radio', groupId: FORM }), textBoxMate]), 'own_accounts')
+    allowed(CLICK, view([el('e1', 'Only me', { role: 'radio', groupId: FORM, contextText: 'Audience' }), textBoxMate]))
+    allowed(CLICK, view([el('e1', 'Only me', { role: 'option', groupId: FORM, contextText: 'Audience' }), textBoxMate]))
+    refused({ type: 'toggle', ref: 'e1' }, view([el('e1', 'Only me', { role: 'switch', groupId: FORM, contextText: 'Audience' }), textBoxMate]), 'own_accounts')
   })
   it('a form-ending name takes the publishing path even when it also holds a person word', () => {
     const publicButton = el('b', 'Audience: Public', { role: 'button', groupId: FORM })

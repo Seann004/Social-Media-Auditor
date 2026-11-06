@@ -100,7 +100,7 @@ describe('A12: only plain ASCII handles match', () => {
 })
 
 describe('A13: a submit button of a composer takes no safe-list exemption', () => {
-  it.each(['Open', 'OK', 'Go', 'View', 'More', 'Close', 'Menu'])('refuses "%s" as the last button of a form with a text box beside a Public audience', (name) => {
+  it.each(['Open', 'OK', 'Go', 'View', 'More', 'Menu'])('refuses "%s" as the last button of a form with a text box beside a Public audience', (name) => {
     refused(CLICK_TEEN, view([box, publicButton, withTarget(name)]), 'nothing_public')
     expect(checkAction(CLICK, view([box, publicButton, el('e1', name, { groupId: FORM })]), CTX).allowed).toBe(false)
   })
@@ -150,7 +150,7 @@ describe('round 3: the audience control itself', () => {
 describe('round 3: what counts as the submit button of a composer', () => {
   const at = (...rest: ReturnType<typeof el>[]) => view([box, onlyMe, ...rest])
   it('a safe-list label on the submit button is still treated as reaching people', () => {
-    refused(CLICK, at(el('e1', 'Close', { groupId: FORM })), 'own_accounts')
+    refused(CLICK, at(el('e1', 'Open', { groupId: FORM })), 'own_accounts')
   })
   it('only the last button of the form is the submit button', () => {
     allowed(CLICK, view([el('e1', 'Open', { groupId: FORM }), box, onlyMe, el('x', 'Go', { groupId: FORM })]))
@@ -164,11 +164,11 @@ describe('round 3: what counts as the submit button of a composer', () => {
     ['a button element', { role: 'link', tag: 'button' }],
     ['an input type=button', { role: 'generic', tag: 'input', inputType: 'button' }],
   ])('%s can be the submit button', (_name, extra) => {
-    refused(CLICK, at(el('e1', 'Close', { groupId: FORM, ...extra })), 'own_accounts')
+    refused(CLICK, at(el('e1', 'Open', { groupId: FORM, ...extra })), 'own_accounts')
   })
   it('a form with only a file input is a composer', () => {
     const media = el('m', 'Photo', { tag: 'input', inputType: 'file', groupId: FORM, role: 'generic' })
-    refused(CLICK, view([media, el('e1', 'Close', { groupId: FORM })]), 'own_accounts')
+    refused(CLICK, view([media, el('e1', 'Open', { groupId: FORM })]), 'own_accounts')
   })
   it('a search form is not a composer, however the search box is marked', () => {
     allowed(CLICK, view([el('s', 'Find', { role: 'searchbox', tag: 'input', inputType: 'text', groupId: FORM }), el('e1', 'Search', { groupId: FORM })]))

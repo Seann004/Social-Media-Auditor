@@ -3,8 +3,13 @@
 /** Letters, digits, combining marks and `_`: anything that can continue a name. */
 const CHAR = '\\p{L}\\p{N}\\p{M}\\p{Cf}_'
 const NAME = `[${CHAR}]+(?:[.-][${CHAR}]+)*`
-/** A handle runs to the end of an `@server.tld` tail: `@teen15@evil.social` is one whole handle. */
-const MENTION = new RegExp(`(?<![${CHAR}])@(${NAME}(?:@${NAME})?)`, 'gu')
+/** What makes an `@` part of a word (an address) rather than a mention. A combining mark does not: a mark then `@stranger` is a mention. */
+const WORD_BEFORE_AT = '\\p{L}\\p{N}_'
+/**
+ * A handle runs to the end of an `@server.tld` tail: `@teen15@evil.social` is one whole handle. An `@` right
+ * after the handle (`@teen15@`, `@teen15@-x`: no valid server) is caught by the last group and marks it.
+ */
+const MENTION = new RegExp(`(?<![${WORD_BEFORE_AT}])@(${NAME}(?:@${NAME})?)(@?)`, 'gu')
 const ASCII_NAME = '[A-Za-z0-9_]+(?:[.-][A-Za-z0-9_]+)*'
 const ASCII_MENTION = new RegExp(`(?<![A-Za-z0-9_])@(${ASCII_NAME}(?:@${ASCII_NAME})?)`, 'g')
 const HANDLE = new RegExp(`^${ASCII_NAME}(?:@${ASCII_NAME})?$`)
@@ -24,17 +29,19 @@ export function normalised(text: string): string {
 /**
  * Every @name in the text, whole and with ASCII letters lower-cased: `@teen15.real` is `teen15.real`,
  * never `teen15`. A name that is not plain ASCII as written (full-width letters, Cyrillic look-alikes,
- * invisible characters, a full-width at-sign) is kept but marked, so it matches no handle.
+ * invisible characters, a full-width at-sign), or that is followed by an `@` with no valid server, is kept
+ * but marked, so it matches no handle. So is a plain @name that only the raw text shows (after a letter
+ * that a combining mark joins into a non-ASCII letter, `e` + U+0301 + `@stranger`): it is a stranger.
  */
 export function mentionsOf(text: string): string[] {
   const plainNames = [...text.matchAll(ASCII_MENTION)].map((match) => asciiLower(match[1]))
-  return [...normalised(text).matchAll(MENTION)].map((match) => {
+  const names = [...normalised(text).matchAll(MENTION)].map((match) => {
     const name = asciiLower(match[1])
     const at = plainNames.indexOf(name)
-    if (at < 0) return NOT_ASCII + name
-    plainNames.splice(at, 1)
-    return name
+    if (at >= 0) plainNames.splice(at, 1)
+    return at < 0 || match[2] !== '' ? NOT_ASCII + name : name
   })
+  return [...names, ...plainNames.map((name) => NOT_ASCII + name)]
 }
 
 /** The handle as a bare name with ASCII letters lower-cased, or null when it is not a plain ASCII @-style name. */

@@ -39,9 +39,9 @@ export type PublishCheck = { ok: true } | { ok: false; reason: string }
  * Naming a target exempts nothing: a form-ending name always needs a private audience.
  */
 export function checkPublishing(name: string, element: AppElement, view: AppView, ctx: TargetContext): PublishCheck {
-  // Choosing the audience is not publishing; the control itself is always allowed.
-  if (isAudienceControl(element)) return { ok: true }
   const submit = isComposerSubmit(element, view)
+  // Choosing the audience is not publishing; the control itself is allowed, unless it is what submits the form.
+  if (isAudienceControl(element) && !submit) return { ok: true }
   if (SAFE_NAVIGATION.test(name) && !submit) return { ok: true }
   const isPrivate = audienceIsPrivate(view, element)
   if (PUBLIC_REPLY.test(name)) {
