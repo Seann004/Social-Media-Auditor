@@ -331,9 +331,10 @@ async function gateFor(page: Page, guard: UrlGuard): Promise<NavigationGate> {
   return gate
 }
 
-async function waitForNetworkIdle(page: Page, timeoutMs: number): Promise<void> {
+/** Waits for the network to go quiet, for at most the smaller of the two limits. A busy page is not an error. */
+export async function waitForNetworkIdle(page: Page, timeoutMs: number, maxWaitMs = NETWORK_IDLE_WAIT_MS): Promise<void> {
   try {
-    await page.waitForLoadState('networkidle', { timeout: Math.min(timeoutMs, NETWORK_IDLE_WAIT_MS) })
+    await page.waitForLoadState('networkidle', { timeout: Math.min(timeoutMs, maxWaitMs) })
   } catch (err) {
     // Busy pages never go idle. What has loaded by now is what gets captured.
     if (!(err instanceof errors.TimeoutError)) throw err

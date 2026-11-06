@@ -326,14 +326,24 @@ export interface IsolatedWorld {
   evaluate(expression: string): Promise<unknown>
 }
 
+export interface IsolatedWorldOptions {
+  /** Switch the page's own scripts off for the life of the page. Defaults to true. */
+  scriptsOff?: boolean
+}
+
 /**
  * Switches the page's scripts off and opens an isolated world in it, whose native functions the
  * page's own scripts cannot replace. A named form field still shadows the property of that name
- * on its form, and CSS applies in every world. The scripts stay off for the life of the page.
+ * on its form, and CSS applies in every world. The scripts stay off for the life of the page,
+ * unless `scriptsOff` is false, as for using an app, whose pages must keep working.
  */
-export async function openIsolatedWorld(page: Page, worldName = 'evidence-capture'): Promise<IsolatedWorld> {
+export async function openIsolatedWorld(
+  page: Page,
+  worldName = 'evidence-capture',
+  opts: IsolatedWorldOptions = {},
+): Promise<IsolatedWorld> {
   const cdp = await page.context().newCDPSession(page)
-  await cdp.send('Emulation.setScriptExecutionDisabled', { value: true })
+  if (opts.scriptsOff ?? true) await cdp.send('Emulation.setScriptExecutionDisabled', { value: true })
   const { frameTree } = await cdp.send('Page.getFrameTree')
   const { executionContextId } = await cdp.send('Page.createIsolatedWorld', {
     frameId: frameTree.frame.id,

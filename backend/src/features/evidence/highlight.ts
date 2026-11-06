@@ -1,6 +1,6 @@
 import type { Browser, BrowserContext, Page } from 'playwright'
 import { z } from 'zod'
-import { gotoGuarded, isMainFrameNavigation, openRunContext, watchAbort, withinTimeoutOrAbort } from './browser.js'
+import { gotoGuarded, isMainFrameNavigation, openRunContext, watchAbort, withinTimeout, withinTimeoutOrAbort } from './browser.js'
 import { logCaptureFailure } from './captureLog.js'
 import {
   BROWSER_CLOSE_TIMEOUT_MS,
@@ -95,6 +95,21 @@ async function shootQuote(world: IsolatedWorld, quote: string, pageUrl: string, 
   }
   logCaptureFailure('Left a quote out of the close-ups', pageUrl, 'The page kept moving while its picture was taken.')
   return null
+}
+
+/**
+ * A close-up of one quote on a page that is already open, with its world from the last read, for
+ * app evidence. Null when the quote is left out. Each step is bounded by timeoutMs. The box is
+ * cleared afterwards, so that it shows in no later picture. Callers run it inside `withMasks`,
+ * so that password and secret fields are black before the shot.
+ */
+export async function photographQuote(world: IsolatedWorld, quote: string, pageUrl: string, timeoutMs: number): Promise<Buffer | null> {
+  const step: Step = (work, what, limitMs) => withinTimeout(work, limitMs, what)
+  try {
+    return await shootQuote(world, quote, pageUrl, step, timeoutMs)
+  } finally {
+    await step(world.evaluate('globalThis.__evidenceHighlighter.clear()'), 'Clearing the highlight', timeoutMs).catch(() => undefined)
+  }
 }
 
 /** Resolves with null when the page starts a new document of its own after it was loaded. */
