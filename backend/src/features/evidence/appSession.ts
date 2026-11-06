@@ -1,6 +1,6 @@
-import type { Browser, Page } from 'playwright'
+import type { Browser, Page, Request } from 'playwright'
 import { createAppGuard, isInAppScope } from './appGuard.js'
-import { readAppView, screenshotMasked, withMasks } from './appRead.js'
+import { isWorldAlive, readAppView, screenshotMasked, withMasks } from './appRead.js'
 import {
   isPageChanged,
   PAGE_CHANGED,
@@ -9,9 +9,11 @@ import {
   type ActionResult,
   type SessionAction,
 } from './appSessionActions.js'
+import { shownAddress } from './appSessionUrl.js'
 import type { AppSource, AppView, TestAccount } from './appTypes.js'
 import {
   gotoGuarded,
+  isMainFrameNavigation,
   isTimeoutError,
   openRunContext,
   waitForNetworkIdle,
@@ -56,7 +58,7 @@ export interface AppSession {
   screenshot(): Promise<Buffer | null>
   gotoInApp(url: string): Promise<GuardedNavigation>
   photographQuote(quote: string): Promise<Buffer | null>
-  /** `redactUrl(page.url())`, the only form of the live address that leaves the session. */
+  /** The live address with typed credentials and secret parameters hidden: the only form of the live address that leaves the session. */
   currentUrl(): string
 }
 
@@ -70,6 +72,8 @@ export interface AppSessionPool {
 }
 
 const OUTSIDE_APP = 'The app moved to an address outside it, so the page was left.'
+const LINK_OUTSIDE = 'The link led outside the app, so it was not followed.'
+const STILL_LOADING = 'The page was still loading.'
 const TOOK_TOO_LONG = 'The action took too long, so it was given up.'
 const FAILED = 'The action could not be carried out.'
 const UNUSABLE_REASON = 'signing in failed twice'
@@ -81,11 +85,11 @@ interface OpenSession {
   reset(): Promise<void>
 }
 
-function describeFailure(err: unknown, page: Page): ActionResult {
+function describeFailure(err: unknown, address: string): ActionResult {
   if (isPageChanged(err)) return { ok: false, detail: PAGE_CHANGED }
   if (isTimeoutError(err)) return { ok: false, detail: TOOK_TOO_LONG }
   // Only the kind of error: its message could hold text that was typed.
-  logCaptureFailure('An action failed', redactUrl(page.url()), err instanceof Error ? err.name : 'error')
+  logCaptureFailure('An action failed', address, err instanceof Error ? err.name : 'error')
   return { ok: false, detail: FAILED }
 }
 
@@ -121,6 +125,24 @@ function buildSession(opts: SessionPoolOptions, guard: UrlGuard, account: TestAc
   let typed: readonly string[] = []
 
   const inScope = (): boolean => isInAppScope(page.url(), app.appUrl, app.loginDomains)
+  const shown = (): string => shownAddress(page.url(), typed)
+
+  // How many main-frame navigations the guard has stopped so far: a stopped link leaves no trace in the address.
+  let stopped = 0
+  page.on('requestfailed', (request) => {
+    if (isMainFrameNavigation(request) && request.failure()?.errorText.includes('ERR_BLOCKED_BY_CLIENT')) stopped += 1
+  })
+
+  // Main-frame navigations that have started and not yet finished, to tell a slow page from a click that did nothing.
+  let loading: ReadonlySet<Request> = new Set()
+  const finished = (request: Request): void => {
+    loading = new Set([...loading].filter((other) => other !== request))
+  }
+  page.on('request', (request) => {
+    if (isMainFrameNavigation(request)) loading = new Set([...loading, request])
+  })
+  page.on('requestfinished', finished)
+  page.on('requestfailed', finished)
 
   const env: ActionEnv = {
     page,
@@ -143,41 +165,52 @@ function buildSession(opts: SessionPoolOptions, guard: UrlGuard, account: TestAc
     if (page.url() !== settling) await page.waitForLoadState('domcontentloaded')
   }
 
-  /** Goes back, and failing that to the app address. Never throws. */
-  async function returnToApp(): Promise<void> {
+  /**
+   * The action has been carried out: waiting for the page has its own budget, and running out of it is
+   * not a failure (a false failure invites the AI to do it again).
+   */
+  async function settle(before: string, done: ActionResult): Promise<ActionResult> {
     try {
+      await withinTimeout(stabilise(before), APP_ACTION_TIMEOUT_MS, 'Waiting for the page')
+      return loading.size > 0 ? { ok: true, detail: `${done.detail} ${STILL_LOADING}` } : done
+    } catch (err) {
+      return isTimeoutError(err) ? { ok: true, detail: `${done.detail} ${STILL_LOADING}` } : describeFailure(err, shown())
+    }
+  }
+
+  /** Goes back, and failing that to the app address. Bounded, and never throws. */
+  async function returnToApp(): Promise<void> {
+    const back = async (): Promise<void> => {
       await page.goBack({ waitUntil: 'domcontentloaded', timeout: APP_ACTION_TIMEOUT_MS }).catch(() => null)
       await page.waitForTimeout(APP_SETTLE_MS)
       if (!inScope()) await gotoGuarded(page, app.appUrl, guard, APP_ACTION_TIMEOUT_MS)
+    }
+    try {
+      await withinTimeout(back(), APP_ACTION_TIMEOUT_MS, 'Returning to the app')
     } catch (err) {
-      logCaptureFailure('Could not return to the app', redactUrl(app.appUrl), err)
+      logCaptureFailure('Could not return to the app', shown(), err)
     }
   }
 
   async function execute(action: SessionAction): Promise<ActionResult> {
     const before = page.url()
+    const stoppedBefore = stopped
     let result: ActionResult
     try {
-      result = await withinTimeout(
-        (async () => {
-          const done = await perform(env, action)
-          if (done.ok) await stabilise(before)
-          return done
-        })(),
-        APP_ACTION_TIMEOUT_MS,
-        'The action',
-      )
+      result = await withinTimeout(perform(env, action), APP_ACTION_TIMEOUT_MS, 'The action')
+      if (result.ok) result = await settle(before, result)
     } catch (err) {
-      result = describeFailure(err, page)
+      result = describeFailure(err, shown())
     }
-    if (inScope()) return result
+    const linkStopped = stopped > stoppedBefore
+    if (inScope()) return linkStopped && result.ok ? { ok: false, detail: LINK_OUTSIDE } : result
     await returnToApp()
-    return { ok: false, detail: OUTSIDE_APP }
+    return { ok: false, detail: linkStopped ? LINK_OUTSIDE : OUTSIDE_APP }
   }
 
   /** The world of the last read while it is the page's document; otherwise a throwaway one, so that the refs of the last read are left alone. */
   async function withWorld<T>(use: (current: IsolatedWorld) => Promise<T>): Promise<T> {
-    if (world !== null && (await isAlive(world))) return use(world)
+    if (world !== null && (await isWorldAlive(world))) return use(world)
     const { world: fresh } = await readAppView(page, null, typed)
     try {
       return await use(fresh)
@@ -196,40 +229,46 @@ function buildSession(opts: SessionPoolOptions, guard: UrlGuard, account: TestAc
         return read.view
       },
       execute,
-      screenshot: () => withWorld((current) => screenshotMasked(page, current, typed)).catch(() => null),
+      screenshot: () =>
+        withinTimeout(
+          withWorld((current) => screenshotMasked(page, current, typed)),
+          APP_ACTION_TIMEOUT_MS,
+          'Taking the screenshot',
+        ).catch((err: unknown) => {
+          logCaptureFailure('Could not take the screenshot', shown(), err)
+          return null
+        }),
       async gotoInApp(url) {
         const navigation = await gotoGuarded(page, url, guard, APP_ACTION_TIMEOUT_MS)
         if (!inScope()) await returnToApp()
         return navigation
       },
       async photographQuote(quote) {
-        if (world === null || !(await isAlive(world))) return null
         const current = world
+        if (current === null) return null
         try {
-          return await withMasks(page, current, () => photographQuoteInWorld(current, quote, redactUrl(page.url()), APP_ACTION_TIMEOUT_MS), typed)
+          const shot = async (): Promise<Buffer | null> =>
+            (await isWorldAlive(current))
+              ? withMasks(page, current, () => photographQuoteInWorld(current, quote, shown(), APP_ACTION_TIMEOUT_MS), typed)
+              : null
+          return await withinTimeout(shot(), APP_ACTION_TIMEOUT_MS, 'Taking the close-up')
         } catch (err) {
-          logCaptureFailure('Could not take the close-up', redactUrl(page.url()), err)
+          logCaptureFailure('Could not take the close-up', shown(), err)
           return null
         }
       },
-      currentUrl: () => redactUrl(page.url()),
+      currentUrl: shown,
     },
     async reset() {
-      await gotoGuarded(page, app.appUrl, guard, APP_ACTION_TIMEOUT_MS)
+      // The old document is gone whatever happens next, so the next read opens a new world on whatever page is showing.
       world = null
+      const reopened = await gotoGuarded(page, app.appUrl, guard, APP_ACTION_TIMEOUT_MS)
+      if (reopened.blockedReason !== null) throw new Error(`The app address could not be reopened: ${reopened.blockedReason}`)
     },
   }
 }
 
-async function isAlive(world: IsolatedWorld): Promise<boolean> {
-  try {
-    return (await world.evaluate(`typeof globalThis.__evidenceApp === 'object'`)) === true
-  } catch {
-    return false
-  }
-}
-
-const NEW_STATE: AccountRunState = { loginFailures: 0, unusable: null }
+const NEW_STATE: AccountRunState = Object.freeze({ loginFailures: 0, unusable: null })
 
 /** One guarded browser context per test account, each signed in once per run. */
 export function createSessionPool(opts: SessionPoolOptions): AppSessionPool {
@@ -281,6 +320,8 @@ export function createSessionPool(opts: SessionPoolOptions): AppSessionPool {
       )
     },
     async closeAll() {
+      // An open still under way finishes first, so that its context is closed too.
+      await Promise.allSettled([...opening.values()])
       const all = [...open.values()]
       open = new Map()
       opening = new Map()

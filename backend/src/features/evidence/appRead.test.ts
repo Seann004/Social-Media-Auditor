@@ -57,7 +57,7 @@ async function go(path: string): Promise<void> {
   expect(navigation.blockedReason).toBeNull()
 }
 
-async function signIn(handle = 'teen15', password = 'Teen-Pass-111'): Promise<void> {
+async function signIn(handle = 'teen.login@example.test', password = 'Teen-Pass-111'): Promise<void> {
   await go('/login')
   await page.fill('#username', handle)
   await page.fill('#password', password)

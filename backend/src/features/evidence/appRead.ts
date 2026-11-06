@@ -23,7 +23,7 @@ export interface Point {
 const APP_WORLD_NAME = 'evidence-app'
 export { SECRET_PLACEHOLDER } from './appSecrets.js'
 /** The only errors that mean a world's document is gone, rather than that something else went wrong. */
-const DEAD_WORLD_ERROR = /Cannot find context with specified id|Execution context was destroyed|Target (page, context or browser )?(has been )?closed|Session closed|has been closed/i
+export const DEAD_WORLD_ERROR = /Cannot find context with specified id|Execution context was destroyed|Target (page, context or browser )?(has been )?closed|Session closed|has been closed/i
 
 /** What is hidden and the page text are decided again at every read, in the same evaluate as the read. */
 const READ_EXPRESSION = `${DECIDE_HIDDEN_SOURCE};\n${HIGHLIGHT_SOURCE};\nglobalThis.__evidenceApp.read()`
@@ -73,7 +73,7 @@ function toView(raw: z.infer<typeof rawViewSchema>): AppView {
  * True while the world's document is the page's document: a navigation destroys the world. Any
  * other failure is passed on, because opening a new world would lose the fields marked secret.
  */
-async function isAlive(world: IsolatedWorld): Promise<boolean> {
+export async function isWorldAlive(world: IsolatedWorld): Promise<boolean> {
   try {
     return (await world.evaluate(`typeof globalThis.__evidenceApp === 'object'`)) === true
   } catch (err) {
@@ -99,7 +99,7 @@ async function openAppWorld(page: Page, previous: IsolatedWorld | null): Promise
  * occurrence of one in the view's free text is replaced with SECRET_PLACEHOLDER (see scrubView).
  */
 export async function readAppView(page: Page, previous: IsolatedWorld | null, secrets: readonly string[] = []): Promise<AppRead> {
-  const world = previous !== null && (await isAlive(previous)) ? previous : await openAppWorld(page, previous)
+  const world = previous !== null && (await isWorldAlive(previous)) ? previous : await openAppWorld(page, previous)
   const raw = rawViewSchema.parse(await world.evaluate(READ_EXPRESSION))
   return { view: scrubView(toView(raw), secrets), world }
 }

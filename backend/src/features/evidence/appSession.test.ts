@@ -4,7 +4,7 @@ import { closeBrowser } from './browser.js'
 import { startPageServer, TEST_TIMEOUT_MS, type PageServer } from './__fixtures__/pages.js'
 import { startAppWorld, TEEN_PASSWORD, type AppWorld } from './__fixtures__/appWorld.js'
 import { SOCIAL_RESHUFFLE_MS } from './__fixtures__/socialApp.js'
-import { outlineLines } from './appRead.js'
+import { isWorldAlive, outlineLines } from './appRead.js'
 import { createSessionPool, type ActionResult, type AppSession, type AppSessionPool } from './appSession.js'
 import type { AppElement, AppView } from './appTypes.js'
 import { APP_LOGIN_FAILURES_BEFORE_UNUSABLE } from './config.js'
@@ -13,6 +13,8 @@ vi.setConfig({ testTimeout: TEST_TIMEOUT_MS })
 
 const COVERED = 'The element was covered or had moved, so it was not clicked.'
 const OUTSIDE = 'The app moved to an address outside it, so the page was left.'
+const LOGIN = 'teen.login@example.test'
+const LINK_OUTSIDE = 'The link led outside the app, so it was not followed.'
 
 let world: AppWorld
 let pool: AppSessionPool
@@ -303,7 +305,7 @@ describe('leaving the app', () => {
 
     const result = await onControl(session, 'link', 'Partner site', 'click')
 
-    expect(result).toEqual({ ok: false, detail: OUTSIDE })
+    expect(result).toEqual({ ok: false, detail: LINK_OUTSIDE })
     expect(other.requests()).toEqual([])
     expect(session.currentUrl()).toBe(`${world.social.url}/home`)
   })
@@ -318,12 +320,16 @@ describe('leaving the app', () => {
     vi.spyOn(session.page.mouse, 'click').mockImplementation(async () => {
       clicked = true
     })
-    vi.spyOn(session.page, 'url').mockImplementation(() => (clicked ? 'http://example.org/elsewhere' : realUrl()))
+    const urlSpy = vi.spyOn(session.page, 'url').mockImplementation(() => (clicked ? 'http://example.org/elsewhere' : realUrl()))
 
     const result = await session.execute({ type: 'click', ref: find(view, 'button', 'Follow').ref })
 
     expect(result).toEqual({ ok: false, detail: OUTSIDE })
     expect(goBack).toHaveBeenCalled()
+    // The session ends back in scope: at the app address, where the fallback took it.
+    urlSpy.mockRestore()
+    expect(session.page.url()).toBe(world.app.appUrl)
+    expect(session.currentUrl()).toBe(world.app.appUrl)
   })
 
   it('a page-started redirect to example.org leaves the session on the app', async () => {
@@ -482,5 +488,89 @@ describe('ending', () => {
 
     expect(teen.page.isClosed()).toBe(true)
     expect(pool.get(world.teen.id)).toBeNull()
+  })
+})
+
+describe('round 1 fixes', () => {
+  async function fillBoth(session: AppSession): Promise<void> {
+    const view = await session.read()
+    expectOk(await session.execute({ type: 'fill_credential', ref: find(view, 'textbox', 'Username').ref, account: 'Teen 15', field: 'login' }))
+    expectOk(await session.execute({ type: 'fill_credential', ref: find(view, 'textbox', 'Password').ref, account: 'Teen 15', field: 'password' }))
+  }
+
+  it.each([
+    ['raw', `u=${LOGIN}&p=${TEEN_PASSWORD}`],
+    ['percent-encoded', `u=${encodeURIComponent(LOGIN)}&p=${encodeURIComponent(TEEN_PASSWORD)}`],
+    ['at sign encoded', `u=${LOGIN.replace('@', '%40')}&p=${TEEN_PASSWORD}`],
+  ])('currentUrl hides the typed login name and password in the query, %s', async (_name, query) => {
+    const session = await pool.open(world.teen.id)
+    await fillBoth(session)
+
+    await session.gotoInApp(`${world.social.url}/login?${query}`)
+
+    const shown = session.currentUrl()
+    for (const leak of [world.teen.loginName, encodeURIComponent(world.teen.loginName), world.teen.loginName.replace('@', '%40'), TEEN_PASSWORD]) {
+      expect(shown).not.toContain(leak)
+    }
+    expect(shown).toContain('[secret]')
+  })
+
+  it('the fixture signs an account in only with its login name, so a handle typed as the login is refused', async () => {
+    const session = await pool.open(world.teen.id)
+    const view = await session.read()
+    expectOk(await session.execute({ type: 'type', ref: find(view, 'textbox', 'Username').ref, text: 'teen15' }))
+    expectOk(await session.execute({ type: 'fill_credential', ref: find(view, 'textbox', 'Password').ref, account: 'Teen 15', field: 'password' }))
+    expectOk(await session.execute({ type: 'click', ref: find(view, 'button', 'Sign in').ref }))
+
+    expect(world.social.state().loginAttempts).toEqual([{ handle: 'teen15', ok: false }])
+    expect(session.currentUrl()).not.toContain('/home')
+  })
+
+  it('isWorldAlive says false for a dead world and rethrows any other error', async () => {
+    const failing = (message: string) => ({ cdp: {} as never, evaluate: () => Promise.reject(new Error(message)) })
+    expect(await isWorldAlive(failing('Cannot find context with specified id'))).toBe(false)
+    await expect(isWorldAlive(failing('something else broke'))).rejects.toThrow('something else broke')
+    expect(await isWorldAlive({ cdp: {} as never, evaluate: () => Promise.resolve(true) })).toBe(true)
+  })
+
+  it('closeAll while an open is pending closes the session that arrives', async () => {
+    const opening = pool.open(world.teen.id).then(
+      (session) => session,
+      () => null,
+    )
+    await pool.closeAll()
+    const session = await opening
+
+    if (session !== null) expect(session.page.isClosed()).toBe(true)
+    expect(pool.get(world.teen.id)).toBeNull()
+  })
+
+  it('the state of an account never seen is frozen', () => {
+    expect(Object.isFrozen(pool.stateOf('never-seen'))).toBe(true)
+  })
+
+  it('a reset whose way back to the app address is refused is logged without the address query, and the session still reads', async () => {
+    let refuse = false
+    pool = createSessionPool({
+      browser: world.browser,
+      baseGuard: { check: (url) => (refuse ? Promise.resolve({ allowed: false, reason: 'Refused for the test.' }) : world.baseGuard.check(url)) },
+      app: { ...world.app, appUrl: `${world.social.url}/login?token=abc` },
+      accounts: [world.teen],
+      secretKey: world.secretKey,
+      signal: world.abort.signal,
+      aborted: world.aborted,
+    })
+    const session = await pool.open(world.teen.id)
+    const errorSpy = vi.spyOn(console, 'error')
+    refuse = true
+
+    await pool.resetAll()
+
+    const logged = errorSpy.mock.calls.flat().join(' ')
+    expect(logged).toContain('Could not reset a session')
+    expect(logged).toContain('Refused for the test.')
+    expect(logged).not.toContain('abc')
+    refuse = false
+    expect((await session.read()).title).toBe('Sign in')
   })
 })

@@ -11,6 +11,9 @@ import type { AddressInfo } from 'node:net'
 /** Longer than APP_SETTLE_MS, so a read made after an action sees the old nodes. */
 export const SOCIAL_RESHUFFLE_MS = 1_500
 
+/** How long /slow takes to answer. */
+export const SOCIAL_SLOW_MS = 4_000
+
 export interface SocialState {
   privateAccount: Record<string, boolean>
   activityStatus: Record<string, boolean>
@@ -40,7 +43,7 @@ export interface SocialApp {
 }
 
 const PASSWORDS: Record<string, string> = { teen15: 'Teen-Pass-111', adult30: 'Adult-Pass-222' }
-/** Signing in also works with a login name, which differs from the handle. */
+/** An account signs in with its login name, which differs from its handle: the handle is refused as a username. */
 const LOGIN_NAMES: Record<string, string> = { 'teen.login@example.test': 'teen15', 'adult.login@example.test': 'adult30' }
 const HANDLES = ['teen15', 'adult30', 'stranger']
 const ADULTS = new Set(['adult30'])
@@ -269,8 +272,9 @@ export async function startSocialApp(): Promise<SocialApp> {
 
   const signIn = (ctx: Ctx) => {
     const typed = ctx.form.get('username') ?? ''
-    const handle = LOGIN_NAMES[typed] ?? typed
-    const ok = PASSWORDS[handle] !== undefined && PASSWORDS[handle] === ctx.form.get('password') && !state.deleted.includes(handle)
+    const account = LOGIN_NAMES[typed]
+    const handle = account ?? typed
+    const ok = account !== undefined && PASSWORDS[account] === ctx.form.get('password') && !state.deleted.includes(account)
     update((s) => ({ ...s, loginAttempts: [...s.loginAttempts, { handle, ok }] }))
     if (!ok) return send(ctx.res, loginPage('Wrong password'))
     if (mode.captchaOnLogin) return redirect(ctx.res, '/captcha')
@@ -336,6 +340,7 @@ export async function startSocialApp(): Promise<SocialApp> {
     'GET /shifting': (ctx) => send(ctx.res, shiftingPage(mode.reshuffleButtons)),
     'GET /covered': (ctx) => send(ctx.res, coveredPage()),
     'GET /leave': (ctx) => send(ctx.res, LEAVE_PAGE),
+    'GET /slow': (ctx) => void setTimeout(() => send(ctx.res, page('Slow', '<p>That took a while.</p>')), SOCIAL_SLOW_MS),
   }
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {

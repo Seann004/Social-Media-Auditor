@@ -1,5 +1,5 @@
 import type { Page } from 'playwright'
-import { chooseOption, elementPoint, focusElement, followLink, markSecretField } from './appRead.js'
+import { chooseOption, DEAD_WORLD_ERROR, elementPoint, focusElement, followLink, markSecretField } from './appRead.js'
 import type { AppAction, AppSource, TestAccount } from './appTypes.js'
 import { gotoGuarded } from './browser.js'
 import { APP_ACTION_TIMEOUT_MS } from './config.js'
@@ -33,9 +33,6 @@ export class PageChangedError extends Error {
     this.name = 'PageChangedError'
   }
 }
-
-/** The only errors that mean a world's document is gone (the same ones readAppView looks for). */
-const DEAD_WORLD_ERROR = /Cannot find context with specified id|Execution context was destroyed|Target (page, context or browser )?(has been )?closed|Session closed|has been closed/i
 
 export function isPageChanged(err: unknown): boolean {
   return err instanceof PageChangedError || (err instanceof Error && DEAD_WORLD_ERROR.test(err.message))
