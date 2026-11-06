@@ -4,6 +4,7 @@ import { getBrowser } from './browser.js'
 import { capturePages } from './capture.js'
 import { MAX_TOKENS_PER_RUN, RUN_TIMEOUT_MS, RUN_UPDATE_RETRY_DELAYS_MS } from './config.js'
 import { captureHighlights } from './highlight.js'
+import { relevantFailedPages } from './failedPages.js'
 import { createRobotsChecker } from './robots.js'
 import { planCategories, unfinishedCategories, type Category } from './runPlan.js'
 import { assessAndStore, type BatchContext, type TokenMeter } from './runnerAssess.js'
@@ -123,8 +124,15 @@ async function loadChecklist(ctx: RunCtx): Promise<{ items: AssessItem[]; platfo
   }
 }
 
-function failedPagesOf(pages: CapturedPage[]): BatchContext['failedPages'] {
-  return pages.filter((p) => p.accessStatus !== 'ok').map((p) => ({ url: p.url, status: p.accessStatus }))
+/** Failed pages that count towards the "inaccessible" flag; see relevantFailedPages. */
+async function failedPagesOf(ctx: RunCtx, pages: CapturedPage[]): Promise<BatchContext['failedPages']> {
+  let startUrls: string[] | null = null
+  try {
+    startUrls = (await ctx.deps.repo.getSource(ctx.run.projectId))?.startUrls ?? null
+  } catch (err) {
+    logRunProblem(ctx, 'Could not read the start links, so every failed page counts', err)
+  }
+  return relevantFailedPages(pages, startUrls)
 }
 
 function createMeter(): TokenMeter {
@@ -167,7 +175,7 @@ async function execute(ctx: RunCtx): Promise<void> {
   const batch: BatchContext = {
     platform,
     pages: new Map(pages.map((p) => [p.id, p])),
-    failedPages: failedPagesOf(pages),
+    failedPages: await failedPagesOf(ctx, pages),
   }
   const meter = createMeter()
   const progress = await assessCategories(ctx, categories, batch, meter)

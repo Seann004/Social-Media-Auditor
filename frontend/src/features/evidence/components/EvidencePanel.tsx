@@ -18,7 +18,7 @@ interface Props {
   locked: boolean
 }
 
-const SIGN_IN_AGAIN = 'Please sign out and sign in again to use AI evidence assessment.'
+const SIGN_IN_AGAIN = 'AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.'
 const ACTIVE = ['queued', 'capturing', 'assessing']
 const spring = { type: 'spring', stiffness: 100, damping: 20 } as const
 

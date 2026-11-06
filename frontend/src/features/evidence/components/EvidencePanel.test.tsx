@@ -287,7 +287,7 @@ describe('EvidencePanel', () => {
     m.getSuggestions.mockRejectedValue(new EvidenceApiError(401, 'x'))
     m.getSources.mockRejectedValue(new EvidenceApiError(401, 'x'))
     render(<Harness />)
-    expect(await screen.findByText('Please sign out and sign in again to use AI evidence assessment.')).toBeInTheDocument()
+    expect(await screen.findByText('AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^run/i })).toBeNull()
   })
 
@@ -297,7 +297,7 @@ describe('EvidencePanel', () => {
     m.getSuggestions.mockRejectedValue(noToken)
     m.getSources.mockRejectedValue(noToken)
     render(<Harness />)
-    expect(await screen.findByText('Please sign out and sign in again to use AI evidence assessment.')).toBeInTheDocument()
+    expect(await screen.findByText('AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.')).toBeInTheDocument()
     m.getLatestRun.mockResolvedValue(latest(null))
     m.getSuggestions.mockResolvedValue(results())
     m.getSources.mockResolvedValue(sources())
@@ -305,7 +305,7 @@ describe('EvidencePanel', () => {
     act(() => useStore.getState().setSessionToken('tok'))
 
     expect(await screen.findByLabelText(/website links/i)).toBeInTheDocument()
-    expect(screen.queryByText('Please sign out and sign in again to use AI evidence assessment.')).toBeNull()
+    expect(screen.queryByText('AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.')).toBeNull()
   })
 
   it('shows the not-configured sentence on a 503 and shows nothing else', async () => {

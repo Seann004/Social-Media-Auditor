@@ -175,6 +175,24 @@ describe('runEvidenceJob', () => {
     expect(s.flags.find((f) => f.type === 'inaccessible')?.reason).toContain('https://p.test/account')
   })
 
+  it('ignores a followed link that failed for an unrelated reason, but names a start link that failed', async () => {
+    const items = [{ ...DEFAULT_ITEMS[0], text: 'Zebra giraffe elephant policy?' }]
+    const careers = page('https://careers.p.test/', 'Jobs', { accessStatus: 'blocked', accessDetail: 'The link redirected away.' })
+    const unrelated = await createWorld({ items, pages: [okPage(), careers], startUrls: ['https://p.test/privacy'] })
+    const run = await unrelated.run()
+    const [s] = await unrelated.suggestions(run.id)
+    expect(s.flags.map((f) => f.type)).toEqual(['missing_evidence'])
+
+    const startFailed = await createWorld({
+      items,
+      pages: [okPage(), page('https://p.test/safety', 'x', { accessStatus: 'timeout' })],
+      startUrls: ['https://p.test/privacy', 'https://p.test/safety/'],
+    })
+    const run2 = await startFailed.run()
+    const [t] = await startFailed.suggestions(run2.id)
+    expect(t.flags.find((f) => f.type === 'inaccessible')?.reason).toContain('https://p.test/safety')
+  })
+
   it('never names a page that was read as inaccessible', async () => {
     const readable = await createWorld({
       items: [{ ...DEFAULT_ITEMS[0], text: 'Zebra giraffe elephant policy?' }],
