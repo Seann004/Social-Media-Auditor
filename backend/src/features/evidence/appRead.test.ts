@@ -42,7 +42,7 @@ beforeEach(async () => {
   quietLogUnlessTestFails()
   social = await startSocialApp()
   guard = createAppGuard(createUrlGuard({ allowedPrivateHosts: [`127.0.0.1:${social.port}`] }), social.url, [])
-  opened = await createGuardedContext(browser, guard)
+  opened = await createGuardedContext(browser, guard, { followPageRedirects: true })
   page = await opened.context.newPage()
 })
 
@@ -94,12 +94,17 @@ async function showPasswordInRed(): Promise<void> {
   })
 }
 
-async function fieldBox(): Promise<Box> {
-  return page.evaluate(() => {
-    const r = document.getElementById('password')!.getBoundingClientRect()
+async function boxOf(selector: string): Promise<Box> {
+  return page.evaluate((sel) => {
+    const r = document.querySelector(sel)!.getBoundingClientRect()
     return { left: r.left, top: r.top, width: r.width, height: r.height }
-  })
+  }, selector)
 }
+
+const fieldBox = (): Promise<Box> => boxOf('#password')
+
+const RED_FIELD = 'color:rgb(255,0,0);font-size:40px;height:60px;width:360px;background:white'
+const SECRET = 'Teen-Pass-111'
 
 /** Points spread over the inside of a box, kept clear of its border. */
 function pointsIn(box: Box): { x: number; y: number }[] {
@@ -153,6 +158,13 @@ function expectBlack(pixels: Pixels): void {
 }
 
 describe('readAppView', () => {
+  it('signs in through the login form, whose POST is answered with a real 302', async () => {
+    await signIn()
+    expect(page.url()).toBe(`${social.url}/home`)
+    expect(opened.violations).toEqual([])
+    expect(social.state().loginAttempts).toEqual([{ handle: 'teen15', ok: true }])
+  })
+
   it('reads visible text and never hidden text', async () => {
     await signIn()
     const { view } = await readAppView(page, null)
@@ -190,6 +202,8 @@ describe('readAppView', () => {
     const { view } = await readAppView(page, null)
 
     expect(view.elements.map((el) => el.name)).not.toContain('Delete account')
+    // Off the page: only the visibility filter catches it.
+    expect(view.elements.map((el) => el.name)).not.toContain('Delete everything')
     expect(outlineLines(view)).not.toContain('Delete account')
     expect(find(view, 'button', 'Post')).toBeDefined()
   })
@@ -279,8 +293,9 @@ describe('readAppView', () => {
     social.setMode({ reshuffleButtons: true })
     await go('/shifting')
     const { view, world } = await readAppView(page, null)
-    expect(view.elements.map((el) => el.name)).toEqual(['Save draft', 'Delete draft'])
+    expect(view.elements.map((el) => el.name)).toEqual(['Save draft', 'Delete draft', 'All drafts'])
     const save = find(view, 'button', 'Save draft').ref
+    const link = find(view, 'link', 'All drafts').ref
     expect(await elementPoint(world, save)).not.toBeNull()
 
     await page.waitForFunction(() => document.querySelector('#buttons button')?.textContent === 'Delete draft')
@@ -288,6 +303,8 @@ describe('readAppView', () => {
     expect(await focusElement(world, save)).toBe(false)
     expect(await chooseOption(world, save, 'x')).toBe(false)
     expect(await followLink(world, save)).toBe(false)
+    expect(await followLink(world, link)).toBe(false)
+    expect(await elementPoint(world, link)).toBeNull()
     expect(await page.textContent('#status')).toBe('Nothing pressed')
 
     const fresh = await readAppView(page, world)
@@ -304,6 +321,20 @@ describe('readAppView', () => {
     expect(await page.inputValue('#audience')).toBe('only_me')
     const second = await readAppView(page, first.world)
     expect(outlineLines(second.view)).toContain('combobox "Audience" [value: Only me]')
+  })
+
+  it('opens a fresh world only when the previous one’s context is gone, and passes any other error on', async () => {
+    await go('/login')
+    const failing = (message: string): IsolatedWorld => ({
+      cdp: { detach: async () => undefined } as unknown as IsolatedWorld['cdp'],
+      evaluate: async () => {
+        throw new Error(message)
+      },
+    })
+
+    await expect(readAppView(page, failing('The page read failed: the browser is busy'))).rejects.toThrow('the browser is busy')
+    const reopened = await readAppView(page, failing('Protocol error (Runtime.evaluate): Cannot find context with specified id'))
+    expect(reopened.view.title).toBe('Sign in')
   })
 
   it(`lists at most ${APP_MAX_ELEMENTS} elements`, async () => {
@@ -391,6 +422,91 @@ describe('masked pictures', () => {
     const { world } = await readAppView(page, null)
     await go('/covered')
     expect(await screenshotMasked(page, world)).toBeNull()
+  })
+})
+
+describe('fields that stay secret', () => {
+  it('a password field the page replaces with a text field of the same id stays secret', async () => {
+    await page.setContent(`<input id="pw" type="password" style="${RED_FIELD}"><button id="show">Show</button>
+      <script>document.getElementById('show').onclick = () => {
+        const old = document.getElementById('pw'); const fresh = document.createElement('input')
+        fresh.type = 'text'; fresh.id = 'pw'; fresh.value = old.value; fresh.style.cssText = old.style.cssText; old.replaceWith(fresh)
+      }</script>`)
+    const first = await readAppView(page, null)
+    await page.focus('#pw')
+    await page.keyboard.insertText(SECRET)
+    await page.click('#show')
+    expect(await page.getAttribute('#pw', 'type')).toBe('text')
+
+    const second = await readAppView(page, first.world)
+    expect(second.world).toBe(first.world)
+    expect(JSON.stringify(second.view)).not.toContain(SECRET)
+    expectBlack(await readPixels((await screenshotMasked(page, second.world))!, await boxOf('#pw')))
+  })
+
+  it('a marked field the page re-mounts as a clone stays secret', async () => {
+    await page.setContent(`<div id="box"><input id="u" style="${RED_FIELD}"></div>`)
+    const first = await readAppView(page, null)
+    await page.focus('#u')
+    await page.keyboard.insertText(SECRET)
+    await markSecretField(first.world, first.view.elements[0].ref)
+    await page.evaluate(() => {
+      const old = document.getElementById('u') as HTMLInputElement
+      const clone = old.cloneNode() as HTMLInputElement
+      clone.value = old.value
+      old.replaceWith(clone)
+    })
+
+    const second = await readAppView(page, first.world)
+    expect(JSON.stringify(second.view)).not.toContain(SECRET)
+    expectBlack(await readPixels((await screenshotMasked(page, second.world))!, await boxOf('#u')))
+  })
+
+  it('a field marked secret is painted black in the masked screenshot', async () => {
+    await page.setContent(`<input id="u" style="${RED_FIELD}">`)
+    const first = await readAppView(page, null)
+    await page.focus('#u')
+    await page.keyboard.insertText(SECRET)
+    await markSecretField(first.world, first.view.elements[0].ref)
+
+    expectBlack(await readPixels((await screenshotMasked(page, first.world))!, await boxOf('#u')))
+  })
+
+  it('treats a field named or completed as a password as secret, though it was never a password field', async () => {
+    await page.setContent(`<form>
+      <input id="a" name="user_pass" value="${SECRET}-a" style="${RED_FIELD}">
+      <input id="b" autocomplete="current-password" value="${SECRET}-b">
+      <input id="c" autocomplete="new-password" value="${SECRET}-c">
+      <input id="pwd-field" value="${SECRET}-d">
+      <input id="plain" name="nickname" value="kept">
+    </form>`)
+    const { view, world } = await readAppView(page, null)
+
+    expect(JSON.stringify(view)).not.toContain(SECRET)
+    expect(view.elements.map((el) => el.state.value)).toEqual([undefined, undefined, undefined, undefined, 'kept'])
+    expectBlack(await readPixels((await screenshotMasked(page, world))!, await boxOf('#a')))
+  })
+
+  it('a field with the name of a password field in the same form stays secret', async () => {
+    await page.setContent(`<form id="f"><input name="secret_word" type="password"></form>`)
+    const first = await readAppView(page, null)
+    await page.evaluate((secret) => {
+      document.getElementById('f')!.innerHTML = `<input name="secret_word" type="text" value="${secret}">`
+    }, SECRET)
+    const second = await readAppView(page, first.world)
+    expect(JSON.stringify(second.view)).not.toContain(SECRET)
+  })
+
+  it('replaces the session’s secrets anywhere in the view with a placeholder', async () => {
+    await page.setContent(`<h1>Hi ${SECRET}</h1><p>Your code is ${SECRET}.</p>
+      <button title="x">Copy ${SECRET}</button><input aria-label="Note" value="note ${SECRET}">
+      <a href="/x?q=${SECRET}">Link</a>`)
+    const { view } = await readAppView(page, null, [SECRET, ''])
+
+    const json = JSON.stringify(view)
+    expect(json).not.toContain(SECRET)
+    expect(view.text).toContain('Your code is [secret].')
+    expect(view.elements.map((el) => el.name)).toContain('Copy [secret]')
   })
 })
 

@@ -115,6 +115,10 @@ describe('secrets', () => {
       const out = redactUrl('https://a.test/?api_key=1&apikey=2&key=3&sid=4&session=5&jwt=6&signature=7&monkey=ok&Key=8')
       expect(out).toBe('https://a.test/?api_key=redacted&apikey=redacted&key=redacted&sid=redacted&session=redacted&jwt=redacted&signature=redacted&monkey=ok&Key=redacted')
     })
+    it('redacts pw, pwd and passwd, and leaves names that only contain pw', () => {
+      const out = redactUrl('https://a.test/?pw=1&PW=2&pwd=3&passwd=4&upwards=ok')
+      expect(out).toBe('https://a.test/?pw=redacted&PW=redacted&pwd=redacted&passwd=redacted&upwards=ok')
+    })
     it('returns a placeholder for an unreadable address', () => {
       expect(redactUrl('not a url')).toBe('[unreadable address]')
     })

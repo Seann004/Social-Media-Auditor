@@ -205,11 +205,18 @@ function recordViolations(violations: string[], urls: string[]): void {
  * A sub-resource or sub-frame gets the final body under the url it asked for, which is harmless.
  * A main frame would then name the wrong source as its evidence, and resolve its links wrongly.
  * gotoGuarded's navigation never gets here, so this is a navigation the page started itself,
- * and if it redirects it is refused, with the redirect target never requested.
+ * and if it redirects it is refused, with the redirect target never requested. In app mode it is
+ * followed instead, by followNavigation.
  */
-async function carryOutRequest(route: Route, context: BrowserContext, guard: UrlGuard, violations: string[]): Promise<void> {
+async function carryOutRequest(route: Route, setup: RouteSetup): Promise<void> {
+  const { context, guard, violations } = setup
   const request = route.request()
-  const maxHops = isMainFrameNavigation(request) ? 0 : MAX_REDIRECT_HOPS
+  const mainFrame = isMainFrameNavigation(request)
+  if (mainFrame && setup.followPageRedirects) {
+    await followNavigation(route, setup)
+    return
+  }
+  const maxHops = mainFrame ? 0 : MAX_REDIRECT_HOPS
   const walk = await walkRedirects(request.url(), guard, maxHops, (url, hop) =>
     hop === 0
       ? route.fetch({ maxRedirects: 0, timeout: PAGE_TIMEOUT_MS })
@@ -230,13 +237,104 @@ async function carryOutRequest(route: Route, context: BrowserContext, guard: Url
   await walk.response.dispose()
 }
 
-function guardRoute(context: BrowserContext, guard: UrlGuard, violations: string[]) {
+/** What the context's route handler works with. */
+interface RouteSetup {
+  context: BrowserContext
+  guard: UrlGuard
+  violations: string[]
+  followPageRedirects: boolean
+  /** In app mode: the final response of a followed redirect, held for the navigation the page is sent on to it. */
+  arrivals: Map<string, { page: Page | null; response: APIResponse }>
+}
+
+function pageOf(request: Request): Page | null {
+  try {
+    return request.frame().page()
+  } catch {
+    // Not known yet, as for a popup's first request.
+    return null
+  }
+}
+
+/** Allows only what both allow. The first refusal is the reason given. */
+function bothGuards(first: UrlGuard, second: UrlGuard): UrlGuard {
+  if (second === first) return first
+  return {
+    async check(url) {
+      const verdict = await first.check(url)
+      return verdict.allowed ? second.check(url) : verdict
+    },
+  }
+}
+
+function escapeAttribute(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`)
+}
+
+/** Sends the browser on to where the redirects ended. A refresh with no delay replaces the history entry. */
+function movedOnDocument(finalUrl: string): string {
+  return `<!doctype html><html><head><meta http-equiv="refresh" content="0;url=${escapeAttribute(finalUrl)}"></head><body></body></html>`
+}
+
+/**
+ * App mode (ruling A3): a navigation the page starts itself may redirect, as a sign-in POST answered
+ * with a 302 or an SSO chain does. Each hop, up to MAX_REDIRECT_HOPS, is fetched from Node only
+ * after the page's navigation guard and the context's guard both allow it. The browser cannot be
+ * handed the 302 (it would follow it unrouted), so it is given a page that sends it on to the
+ * final address, and that navigation is served the response already fetched, so the server is
+ * asked once per hop. A later hop of a 307 or 308 is fetched as a GET: an accepted limit.
+ */
+async function followNavigation(route: Route, setup: RouteSetup): Promise<void> {
+  const request = route.request()
+  const page = pageOf(request)
+  const url = withoutFragment(request.url())
+  const arrival = setup.arrivals.get(url)
+  if (arrival && arrival.page === page) {
+    setup.arrivals.delete(url)
+    await route.fulfill({ response: arrival.response })
+    await arrival.response.dispose()
+    return
+  }
+  const navigationGuard = (page && gates.get(page)?.guard) || setup.guard
+  const walk = await walkRedirects(request.url(), bothGuards(navigationGuard, setup.guard), MAX_REDIRECT_HOPS, (hopUrl, hop) =>
+    hop === 0
+      ? route.fetch({ maxRedirects: 0, timeout: PAGE_TIMEOUT_MS })
+      : setup.context.request.get(hopUrl, { maxRedirects: 0, timeout: PAGE_TIMEOUT_MS, headers: NAVIGATION_HEADERS }),
+  )
+  if (walk.response === null) {
+    recordViolations(setup.violations, walk.chain)
+    await route.abort('blockedbyclient')
+    return
+  }
+  if (await isOversized(walk.response)) {
+    await walk.response.dispose()
+    logCaptureFailure('Refused an oversized response', request.url(), new PageTooLargeError())
+    await route.abort('failed')
+    return
+  }
+  if (walk.chain.length === 1) {
+    await route.fulfill({ response: walk.response })
+    await walk.response.dispose()
+    return
+  }
+  const finalUrl = withoutFragment(walk.finalUrl)
+  await setup.arrivals.get(finalUrl)?.response.dispose()
+  setup.arrivals.set(finalUrl, { page, response: walk.response })
+  await route.fulfill({
+    status: 200,
+    contentType: 'text/html; charset=utf-8',
+    headers: { 'cache-control': 'no-store' },
+    body: movedOnDocument(walk.finalUrl),
+  })
+}
+
+function guardRoute(setup: RouteSetup) {
   return async (route: Route): Promise<void> => {
     const request = route.request()
     try {
       if (request.resourceType() === 'media') await route.abort('aborted')
       else if (isLocalScheme(request.url())) await route.continue()
-      else await carryOutRequest(route, context, guard, violations)
+      else await carryOutRequest(route, setup)
     } catch (err) {
       // A page close ends up here too, and then the abort fails as well, which is harmless.
       if (!isClosedError(err)) logCaptureFailure('A request failed', request.url(), err)
@@ -254,11 +352,19 @@ export interface GuardedContext {
   violations: string[]
 }
 
+export interface GuardedContextOptions {
+  /**
+   * App mode: follow the redirects of navigations the page starts itself, each hop checked, as
+   * using an app needs. Off for a capture, which refuses them (Phase 1).
+   */
+  followPageRedirects?: boolean
+}
+
 /**
  * A browser context in which every request goes through the guard. Only use the context
  * with a browser from getBrowser, or one given LOCKED_DOWN_BROWSER_ARGS. The caller closes it.
  */
-export async function createGuardedContext(browser: Browser, guard: UrlGuard): Promise<GuardedContext> {
+export async function createGuardedContext(browser: Browser, guard: UrlGuard, opts: GuardedContextOptions = {}): Promise<GuardedContext> {
   const context = await browser.newContext({ serviceWorkers: 'block', userAgent: USER_AGENT, acceptDownloads: false })
   const violations: string[] = []
 
@@ -274,7 +380,8 @@ export async function createGuardedContext(browser: Browser, guard: UrlGuard): P
     )
   })
 
-  await context.route('**/*', guardRoute(context, guard, violations))
+  const setup: RouteSetup = { context, guard, violations, followPageRedirects: opts.followPageRedirects ?? false, arrivals: new Map() }
+  await context.route('**/*', guardRoute(setup))
   return { context, violations }
 }
 
@@ -456,6 +563,8 @@ export interface RunContextOptions {
   timeoutMs: number
   /** For the log. */
   logUrl: string
+  /** App mode, as in GuardedContextOptions. */
+  followPageRedirects?: boolean
 }
 
 /**
@@ -465,7 +574,7 @@ export interface RunContextOptions {
  */
 export async function openRunContext(opts: RunContextOptions): Promise<RunContext | null> {
   const { signal, logUrl } = opts
-  const opening = createGuardedContext(opts.browser, opts.guard)
+  const opening = createGuardedContext(opts.browser, opts.guard, { followPageRedirects: opts.followPageRedirects })
   try {
     const opened = await withinTimeoutOrAbort(opening, opts.timeoutMs, 'Opening a browser context', opts.aborted)
     if (opened !== null) return withEnd(opened, signal, logUrl)

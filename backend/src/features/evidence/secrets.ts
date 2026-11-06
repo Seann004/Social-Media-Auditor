@@ -6,7 +6,7 @@ const IV_BYTES = 12
 const TAG_BYTES = 16
 const KEY_ERROR = 'EVIDENCE_SECRET_KEY must be 32 random bytes, base64 encoded'
 const SECRET_PARAM = /pass|pwd|secret|token|otp|code|auth/i
-const SECRET_PARAM_EXACT = /^(api_?key|key|sid|session|jwt|signature)$/i
+const SECRET_PARAM_EXACT = /^(api_?key|key|sid|session|jwt|signature|pw)$/i
 
 function isSecretParam(name: string): boolean {
   return SECRET_PARAM.test(name) || SECRET_PARAM_EXACT.test(name)

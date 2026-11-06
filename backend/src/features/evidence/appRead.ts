@@ -7,6 +7,7 @@ import { logCaptureFailure } from './captureLog.js'
 import { APP_ACTION_TIMEOUT_MS, APP_ELEMENT_LINE_CHARS, JPEG_QUALITY } from './config.js'
 import { HIGHLIGHT_SOURCE } from './highlightSource.js'
 import { DECIDE_HIDDEN_SOURCE, openIsolatedWorld, type IsolatedWorld } from './pageRead.js'
+import { normaliseForMatch } from './quotes.js'
 import { redactUrl } from './secrets.js'
 
 export interface AppRead {
@@ -20,6 +21,10 @@ export interface Point {
 }
 
 const APP_WORLD_NAME = 'evidence-app'
+/** What stands in the view wherever a secret of the session was found. */
+export const SECRET_PLACEHOLDER = '[secret]'
+/** The only errors that mean a world's document is gone, rather than that something else went wrong. */
+const DEAD_WORLD_ERROR = /Cannot find context with specified id|Execution context was destroyed|Target (page, context or browser )?(has been )?closed|Session closed|has been closed/i
 
 /** What is hidden and the page text are decided again at every read, in the same evaluate as the read. */
 const READ_EXPRESSION = `${DECIDE_HIDDEN_SOURCE};\n${HIGHLIGHT_SOURCE};\nglobalThis.__evidenceApp.read()`
@@ -65,13 +70,38 @@ function toView(raw: z.infer<typeof rawViewSchema>): AppView {
   }
 }
 
-/** True while the world's document is the page's document: a navigation destroys the world. */
+/**
+ * True while the world's document is the page's document: a navigation destroys the world. Any
+ * other failure is passed on, because opening a new world would lose the fields marked secret.
+ */
 async function isAlive(world: IsolatedWorld): Promise<boolean> {
   try {
     return (await world.evaluate(`typeof globalThis.__evidenceApp === 'object'`)) === true
-  } catch {
-    return false
+  } catch (err) {
+    if (err instanceof Error && DEAD_WORLD_ERROR.test(err.message)) return false
+    throw err
   }
+}
+
+/** Every string in the value, with each secret replaced by the placeholder. A new value: nothing is changed in place. */
+function scrubbed<T>(value: T, secrets: readonly string[]): T {
+  if (typeof value === 'string') {
+    return secrets.reduce((text, secret) => text.split(secret).join(SECRET_PLACEHOLDER), value as string) as T
+  }
+  if (Array.isArray(value)) return value.map((item) => scrubbed(item, secrets)) as T
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrubbed(item, secrets)])) as T
+  }
+  return value
+}
+
+/** Each secret as typed, as it reads once the page text is normalised, and as it is written in an address. Blank ones are left out. */
+function secretForms(secrets: readonly string[]): string[] {
+  const forms = secrets
+    .filter((secret) => secret.trim() !== '')
+    .flatMap((secret) => [secret, normaliseForMatch(secret), encodeURIComponent(secret), new URLSearchParams({ s: secret }).toString().slice(2)])
+  // Longest first, so that a secret that contains another is replaced whole.
+  return [...new Set(forms)].sort((a, b) => b.length - a.length)
 }
 
 async function openAppWorld(page: Page, previous: IsolatedWorld | null): Promise<IsolatedWorld> {
@@ -86,11 +116,14 @@ async function openAppWorld(page: Page, previous: IsolatedWorld | null): Promise
  * Reuses `previous` while its document is still the page's, so that fields marked secret stay
  * secret for as long as the page; otherwise opens a fresh world, with the page's scripts left on.
  * Refs are renumbered on every read, and only refs from the latest read mean anything.
+ *
+ * `secrets` are the credentials typed in this session. As a backstop to the secret fields, every
+ * occurrence of one, anywhere in the view, is replaced with SECRET_PLACEHOLDER before it is returned.
  */
-export async function readAppView(page: Page, previous: IsolatedWorld | null): Promise<AppRead> {
+export async function readAppView(page: Page, previous: IsolatedWorld | null, secrets: readonly string[] = []): Promise<AppRead> {
   const world = previous !== null && (await isAlive(previous)) ? previous : await openAppWorld(page, previous)
   const raw = rawViewSchema.parse(await world.evaluate(READ_EXPRESSION))
-  return { view: toView(raw), world }
+  return { view: scrubbed(toView(raw), secretForms(secrets)), world }
 }
 
 function call(name: string, ...args: string[]): string {

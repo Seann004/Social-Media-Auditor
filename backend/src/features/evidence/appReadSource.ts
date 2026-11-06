@@ -32,7 +32,11 @@ const INTERACTIVE_SELECTOR = [
  * `secretFields` lasts as long as the world, which is as long as the document. Every read adds
  * each password field it sees, and `markSecret` adds a field a credential was typed into. Nothing
  * is ever taken out, so a field stays secret after "Show password" turns it into a text field.
+ * A page can also re-create a field (a framework's "Show password", a re-mount), so the id of
+ * every secret field, and its name within its form, are kept too: a field with either is secret.
+ * So is any field whose autocomplete says it holds a password, or whose name or id says so.
  * The value of a secret field is never read, and `mask` paints every one of them black.
+ * Fields inside iframes and shadow roots are not reached (ruling A4).
  *
  * The real address of every link stays in `entries`, next to its element. `follow` navigates to it
  * from here. Each read returns addresses for the caller to redact, and replaces `entries`, so refs
@@ -141,13 +145,49 @@ export const APP_READ_SOURCE = String.raw`(() => {
   const cap = (text, max) => (text.length > max ? text.slice(0, max) : text)
 
   const secretFields = new WeakSet()
+  const secretIds = new Set()
+  // Names per form; a field outside any form is filed under the document.
+  const secretNames = new WeakMap()
+  const PASSWORD_AUTOCOMPLETE = /(^|\s)(current|new)-password(\s|$)/i
+  const PASSWORD_NAME = /pass|pwd/i
   let entries = new Map()
   let painted = []
 
   const hiddenNow = () => globalThis.__evidenceHidden || { elements: new Set(), textNodes: new Set() }
   const isPasswordInput = (el) => el instanceof HTMLInputElement && dom.inputType(el) === 'password'
+  const isTextField = (el) => el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
+  const formOf = (el) => dom.closest(el, 'form') || document
+  const namesIn = (form) => {
+    if (!secretNames.has(form)) secretNames.set(form, new Set())
+    return secretNames.get(form)
+  }
+  const addSecret = (el) => {
+    secretFields.add(el)
+    const id = dom.getAttribute(el, 'id')
+    const name = dom.getAttribute(el, 'name')
+    if (id) secretIds.add(id)
+    if (name) namesIn(formOf(el)).add(name)
+  }
+  const saysPassword = (el) => {
+    const autocomplete = dom.getAttribute(el, 'autocomplete') || ''
+    const id = dom.getAttribute(el, 'id') || ''
+    const name = dom.getAttribute(el, 'name') || ''
+    return PASSWORD_AUTOCOMPLETE.test(autocomplete) || PASSWORD_NAME.test(id) || PASSWORD_NAME.test(name)
+  }
+  const sharesSecretKey = (el) => {
+    const id = dom.getAttribute(el, 'id')
+    const name = dom.getAttribute(el, 'name')
+    return Boolean((id && secretIds.has(id)) || (name && namesIn(formOf(el)).has(name)))
+  }
+  // Once secret, always secret: a field that matches is added, so its own id and name count from then on.
+  const isSecret = (el) => {
+    if (secretFields.has(el)) return true
+    if (!isTextField(el) || !(isPasswordInput(el) || saysPassword(el) || sharesSecretKey(el))) return false
+    addSecret(el)
+    return true
+  }
   const notePasswordFields = () => {
-    for (const field of dom.querySelectorAll(document, 'input')) if (isPasswordInput(field)) secretFields.add(field)
+    for (const field of dom.querySelectorAll(document, 'input, textarea')) isSecret(field)
   }
 
   // What a person sees inside an element: the filter's hidden elements and text are left out.
@@ -260,7 +300,7 @@ export const APP_READ_SOURCE = String.raw`(() => {
   }
 
   const valueOf = (el, tag) => {
-    if (secretFields.has(el)) return ''
+    if (isSecret(el)) return ''
     if (tag === 'INPUT') return VALUELESS_INPUTS.has(dom.inputType(el)) ? '' : dom.inputValue(el)
     if (tag === 'TEXTAREA') return dom.textareaValue(el)
     if (tag === 'SELECT') {
@@ -399,7 +439,7 @@ export const APP_READ_SOURCE = String.raw`(() => {
 
   const markSecret = (ref) => {
     const entry = live(ref)
-    if (entry) secretFields.add(entry.el)
+    if (entry) addSecret(entry.el)
   }
 
   const unmask = () => {
@@ -415,7 +455,7 @@ export const APP_READ_SOURCE = String.raw`(() => {
     unmask()
     notePasswordFields()
     for (const el of dom.querySelectorAll(document, '*')) {
-      if (!secretFields.has(el) || !(el instanceof HTMLElement)) continue
+      if (!(el instanceof HTMLElement) || !isSecret(el)) continue
       painted.push([el, dom.getAttribute(el, 'style')])
       const style = dom.style(el)
       for (const [name, value] of MASK_STYLE) dom.setProperty(style, name, value, 'important')
