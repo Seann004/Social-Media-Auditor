@@ -1,3 +1,4 @@
+import type { RunSource, StoppedBy } from './appTypes.js'
 import type { AccessStatus, Confidence, ReviewFlag, SuggestedResult } from './types.js'
 
 export interface FlagInput {
@@ -10,10 +11,18 @@ export interface FlagInput {
   passagesFound: number
   quotes: { text: string; verified: boolean }[]
   failedPages: { url: string; status: AccessStatus }[]
+  /** Defaults to 'pages'. */
+  source?: RunSource
+  /** The page that ended an app check (a captcha, a 2-factor prompt, a bot check). */
+  stoppedBy?: StoppedBy | null
 }
 
 const MAX_URLS_NAMED = 3
 const NO_QUOTE_REASON = 'The AI gave this result without quoting any captured page.'
+const NOT_ASSESSABLE_REASON: Readonly<Record<RunSource, string>> = {
+  pages: "This item needs internal evidence, which a website can't show.",
+  app: "This item needs evidence the app can't show.",
+}
 const CLAIM_RESULTS: readonly SuggestedResult[] = ['yes', 'no', 'partially']
 
 const STATUS_WORDS: Readonly<Record<AccessStatus, string>> = {
@@ -57,7 +66,10 @@ export function computeFlags(input: FlagInput): ReviewFlag[] {
     flags.push({ type: 'missing_evidence', reason: NO_QUOTE_REASON })
   }
 
-  if (evidenceShort && input.failedPages.length > 0) {
+  if (input.stoppedBy) {
+    // Whatever the evidence: the check never got past this page.
+    flags.push({ type: 'inaccessible', reason: `The check stopped at ${input.stoppedBy.url}: ${input.stoppedBy.detail}` })
+  } else if (evidenceShort && input.failedPages.length > 0) {
     flags.push({ type: 'inaccessible', reason: inaccessibleReason(input.failedPages) })
   }
 
@@ -82,7 +94,7 @@ export function computeFlags(input: FlagInput): ReviewFlag[] {
   if (!input.webAssessable) {
     flags.push({
       type: 'not_web_assessable',
-      reason: "This item needs internal evidence, which a website can't show.",
+      reason: NOT_ASSESSABLE_REASON[input.source ?? 'pages'],
     })
   }
 

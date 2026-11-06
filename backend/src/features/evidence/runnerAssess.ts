@@ -1,3 +1,4 @@
+import type { RunSource, StoppedBy } from './appTypes.js'
 import type { AssessedItem, AssessItem } from './assess.js'
 import { selectPassages } from './assess.js'
 import { MAX_HIGHLIGHTS_PER_SUGGESTION, MAX_PASSAGES_PER_ITEM, MAX_TOKENS_PER_RUN } from './config.js'
@@ -5,7 +6,7 @@ import { computeFlags } from './flags.js'
 import type { NewSuggestion } from './repository.js'
 import { isQuoteVerified } from './quotes.js'
 import { highlightKey, takeHighlights } from './runnerHighlights.js'
-import { abortable, endIfRunGone, type RunCtx } from './runnerShared.js'
+import { abortable, endIfRunGone, logRunProblem, type RunCtx } from './runnerShared.js'
 import type { AccessStatus, CapturedPage, Passage, Suggestion } from './types.js'
 
 const NO_PASSAGES_REASON = 'No captured page has text that matches this item.'
@@ -14,7 +15,17 @@ export interface BatchContext {
   platform: string
   pages: ReadonlyMap<string, CapturedPage>
   failedPages: { url: string; status: AccessStatus }[]
+  /** Stored on each suggestion. Defaults to 'pages'. */
+  source?: RunSource
+  /** The page that ended each item's app check, by item id. */
+  stoppedBy?: ReadonlyMap<string, StoppedBy>
 }
+
+/**
+ * Takes the close-ups of the given quotes, by page id. Resolves with the storage path of each quote
+ * that has one, keyed by highlightKey; a quote left out shows its page's full screenshot.
+ */
+export type Highlighter = (quotesByPage: ReadonlyMap<string, string[]>) => Promise<Map<string, string>>
 
 /** The tokens the run has used. A call is counted as soon as the AI has answered it. */
 export interface TokenMeter {
@@ -72,7 +83,7 @@ function collectByPage(drafted: QuoteDraft[][]): Map<string, string[]> {
  * Stores a suggestion. If that fails because the item was deleted meanwhile, the item is skipped;
  * any other failure is the batch's. Returns null when the item was skipped.
  */
-async function storeSuggestion(ctx: RunCtx, input: NewSuggestion): Promise<Suggestion | null> {
+export async function storeSuggestion(ctx: RunCtx, input: NewSuggestion): Promise<Suggestion | null> {
   try {
     return await ctx.deps.repo.addSuggestion(input)
   } catch (err) {
@@ -112,19 +123,33 @@ function withoutEvidence(ctx: RunCtx, item: AssessItem, batch: BatchContext): Ne
   }
 }
 
-interface Round {
+export interface Round {
   selected: Passage[]
   /** How many passages of each asked item went in the call. */
   found: Map<string, number>
   results: AssessedItem[]
 }
 
-/** Quote check, close-ups, flags, then the rows, so that a quote row is never edited afterwards. */
-async function storeRound(ctx: RunCtx, round: Round, batch: BatchContext): Promise<Suggestion[]> {
+async function closeUps(ctx: RunCtx, highlighter: Highlighter | null, quotesByPage: Map<string, string[]>): Promise<Map<string, string>> {
+  if (highlighter === null || quotesByPage.size === 0) return new Map()
+  try {
+    return await highlighter(quotesByPage)
+  } catch (err) {
+    // A close-up is a picture for people: without one, the card shows the page's full screenshot.
+    logRunProblem(ctx, 'Could not take the close-ups', err)
+    return new Map()
+  }
+}
+
+/**
+ * Quote check, close-ups, flags, then the rows, so that a quote row is never edited afterwards.
+ * A null highlighter takes no close-ups and opens no browser.
+ */
+export async function storeRound(ctx: RunCtx, round: Round, batch: BatchContext, highlighter: Highlighter | null): Promise<Suggestion[]> {
   const sent = new Map(round.selected.map((p) => [p.id, p]))
   const passageIdsSent = round.selected.map((p) => p.id)
   const drafted = round.results.map((r) => draftQuotes(r, sent))
-  const paths = await takeHighlights(ctx, batch.pages, collectByPage(drafted))
+  const paths = await closeUps(ctx, highlighter, collectByPage(drafted))
 
   const created: Suggestion[] = []
   for (const [index, result] of round.results.entries()) {
@@ -155,8 +180,11 @@ async function storeRound(ctx: RunCtx, round: Round, batch: BatchContext): Promi
         passagesFound: round.found.get(result.itemId) ?? 0,
         quotes: drafts.map((d) => ({ text: d.text, verified: d.verified })),
         failedPages: batch.failedPages,
+        source: batch.source,
+        stoppedBy: batch.stoppedBy?.get(result.itemId) ?? null,
       }),
       passageIdsSent,
+      source: batch.source,
       quotes,
     })
     if (stored) created.push(stored)
@@ -200,7 +228,8 @@ export async function assessAndStore(ctx: RunCtx, items: AssessItem[], batch: Ba
       ctx.signal,
     )
     meter.add(output.tokensUsed)
-    created.push(...(await storeRound(ctx, { selected, found, results: output.results }, batch)))
+    const highlighter: Highlighter = (quotes) => takeHighlights(ctx, batch.pages, quotes)
+    created.push(...(await storeRound(ctx, { selected, found, results: output.results }, batch, highlighter)))
 
     const answered = new Set(output.results.map((r) => r.itemId))
     unassessed += asked.filter((it) => !answered.has(it.id)).length

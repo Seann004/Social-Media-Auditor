@@ -118,3 +118,21 @@ describe('computeFlags', () => {
     expect(t).toEqual(expect.arrayContaining(['conflicting', 'unverified_quote', 'low_confidence']))
   })
 })
+
+describe('computeFlags for app checks', () => {
+  it('app wording for not_web_assessable', () => {
+    const flag = computeFlags(input({ webAssessable: false, source: 'app' })).find((f) => f.type === 'not_web_assessable')
+    expect(flag?.reason).toBe("This item needs evidence the app can't show.")
+    const pages = computeFlags(input({ webAssessable: false, source: 'pages' })).find((f) => f.type === 'not_web_assessable')
+    expect(pages?.reason).toBe("This item needs internal evidence, which a website can't show.")
+  })
+
+  it('stoppedBy always adds inaccessible naming the url', () => {
+    const stoppedBy = { url: 'http://app.test/challenge', detail: 'The app asked for a captcha.' }
+    const clean = computeFlags(input({ source: 'app', stoppedBy }))
+    expect(clean).toEqual([{ type: 'inaccessible', reason: 'The check stopped at http://app.test/challenge: The app asked for a captcha.' }])
+    const short = computeFlags(input({ source: 'app', stoppedBy, evidenceSufficient: false, suggestedResult: null, quotes: [] }))
+    expect(short.filter((f) => f.type === 'inaccessible')).toHaveLength(1)
+    expect(types(input({ source: 'app', stoppedBy: null }))).not.toContain('inaccessible')
+  })
+})

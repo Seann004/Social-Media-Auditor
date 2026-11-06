@@ -1,0 +1,491 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { APP_NO_STEPS_REASON, judgeItem, liveHighlighter, selectStepPassages } from './appJudge.js'
+import type { AppSession, AppSessionPool } from './appSession.js'
+import { recordStep, type StepContext, type StepInput } from './appSteps.js'
+import type { AgentAccount, AppAction, AppElement, AppStep, AppView, StoppedBy } from './appTypes.js'
+import type { AssessedItem, AssessInput, AssessItem, AssessOutput } from './assess.js'
+import { fakeAudit, PROJECT } from './__fixtures__/runnerWorld.js'
+import { createMemoryAppRepository } from './memoryAppRepository.js'
+import { createMemoryRepository } from './memoryRepository.js'
+import type { EvidenceRepository, ScreenshotStore } from './repository.js'
+import { storeRound, type Highlighter, type TokenMeter } from './runnerAssess.js'
+import { highlightKey } from './runnerHighlights.js'
+import type { ResolvedDeps, RunCtx } from './runnerShared.js'
+import { redactUrl } from './secrets.js'
+import type { CapturedPage, Passage } from './types.js'
+
+const ITEM: AssessItem = {
+  id: 'i1',
+  guidelineId: 'g1',
+  category: 'Privacy',
+  name: null,
+  text: 'Are teen accounts private by default?',
+  helpText: null,
+}
+const TEEN: AgentAccount = { id: 'acc-teen', label: 'Teen 15', ageGroup: 'under_18', age: 15, handles: ['@teen'] }
+const HOME_TEXT = 'Welcome home. Your feed shows the newest posts first.'
+const SETTINGS_TEXT = 'Your account is private. Only approved followers see your posts.'
+const TYPED = 'Teen accounts are private'
+
+function el(ref: string, role: string, name: string, extra: Partial<AppElement> = {}): AppElement {
+  return { ref, role, name, tag: 'button', inputType: null, href: null, groupId: null, state: {}, contextText: '', ...extra }
+}
+
+function view(path: string, text: string, elements: AppElement[] = []): AppView {
+  return { url: `http://app.test${path}`, title: 'App', text, elements, frameUrls: [], hasPasswordField: false }
+}
+
+const HOME = view('/home', HOME_TEXT, [el('e1', 'link', 'Settings', { tag: 'a', href: 'http://app.test/settings' })])
+const SETTINGS = view('/settings', SETTINGS_TEXT, [el('e6', 'switch', 'Private account', { state: { checked: true } })])
+
+type Answer = (input: AssessInput) => AssessOutput
+
+function result(over: Partial<AssessedItem> = {}): AssessedItem {
+  return {
+    itemId: ITEM.id,
+    suggestedResult: 'yes',
+    reason: 'The settings page says the account is private.',
+    quotes: [],
+    evidenceSufficient: true,
+    conflicting: false,
+    webAssessable: true,
+    confidence: 'high',
+    ...over,
+  }
+}
+
+/** Quotes `text`, naming the sent passage that `pick` finds. */
+const quoting = (pick: (p: Passage) => boolean, text: string) => (input: AssessInput) => ({
+  passageId: input.passages.find(pick)?.id ?? null,
+  text,
+})
+
+function meterOf(start = 0): TokenMeter {
+  let used = start
+  return { used: () => used, add: (t) => (used += t) }
+}
+
+interface Kit {
+  repo: EvidenceRepository & ScreenshotStore
+  ctx: RunCtx
+  stepCtx: StepContext
+  calls: AssessInput[]
+  browserProvider: ReturnType<typeof vi.fn>
+  highlights: ReturnType<typeof vi.fn>
+  answer: { current: Answer }
+  steps: AppStep[]
+  record(input: Partial<StepInput> & { action: AppAction }): Promise<AppStep>
+}
+
+async function createKit(): Promise<Kit> {
+  const repo = createMemoryRepository()
+  const appRepo = createMemoryAppRepository()
+  const run = await repo.createRun({ projectId: PROJECT, startedBy: 'u1', scope: 'all', source: 'app' })
+  const calls: AssessInput[] = []
+  const answer: Kit['answer'] = { current: () => ({ results: [result()], missingItemIds: [], tokensUsed: 70 }) }
+  const browserProvider = vi.fn(async () => ({}) as never)
+  const highlights = vi.fn(async () => new Map<string, Buffer>())
+  const deps: ResolvedDeps = {
+    repo,
+    screenshots: repo,
+    audit: fakeAudit([ITEM]),
+    guard: { check: async () => ({ allowed: true }) },
+    apiKey: 'gsk_test_secret_key',
+    model: 'test-model',
+    browserProvider,
+    capture: async () => undefined,
+    highlights,
+    assessBatch: async (input) => {
+      calls.push(input)
+      return answer.current(input)
+    },
+    retryDelaysMs: [0, 0, 0],
+  }
+  const ctx: RunCtx = { run, deps, signal: new AbortController().signal, robots: null, browser: () => browserProvider() }
+  const stepCtx: StepContext = { run, itemId: ITEM.id, repo, screenshots: repo, appRepo }
+  const steps: AppStep[] = []
+  return {
+    repo,
+    ctx,
+    stepCtx,
+    calls,
+    browserProvider,
+    highlights,
+    answer,
+    steps,
+    async record(input) {
+      const step = await recordStep(stepCtx, {
+        position: steps.length + 1,
+        account: TEEN,
+        outcome: 'done',
+        detail: '',
+        refusalReason: null,
+        view: null,
+        screenshot: input.view ? Buffer.from('step-jpeg') : null,
+        ...input,
+      })
+      steps.push(step)
+      return step
+    },
+  }
+}
+
+/** Step 1 opens home, step 2 opens settings, step 3 is the AI's finish. */
+async function recordDefault(kit: Kit): Promise<void> {
+  await kit.record({ action: { type: 'open_link', url: '/home' }, detail: 'page /home opened', view: HOME })
+  await kit.record({ action: { type: 'open_link', ref: 'e1' }, detail: 'page /settings opened', view: SETTINGS, describedOn: HOME })
+  await kit.record({ action: { type: 'finish', observations: 'The account is private.', evidenceSteps: [2] } })
+}
+
+function judge(kit: Kit, over: { evidenceSteps?: number[]; stoppedBy?: StoppedBy | null; meter?: TokenMeter; highlighter?: Highlighter | null } = {}) {
+  return judgeItem(kit.ctx, {
+    item: ITEM,
+    platform: 'TikTok',
+    steps: kit.steps,
+    evidenceSteps: over.evidenceSteps ?? [2],
+    stoppedBy: over.stoppedBy ?? null,
+    meter: over.meter ?? meterOf(),
+    highlighter: over.highlighter === undefined ? null : over.highlighter,
+  })
+}
+
+const isLine = (n: number) => (p: Passage) => p.position === 0 && p.text.startsWith(`Step ${n} `)
+
+let logged: string[]
+beforeEach(() => {
+  logged = []
+  vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    logged.push(args.map(String).join(' '))
+  })
+})
+afterEach(() => vi.restoreAllMocks())
+
+describe('judgeItem', () => {
+  it('sends the step lines and the evidence steps’ pages with evidenceKind app', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+
+    await judge(kit)
+
+    expect(kit.calls).toHaveLength(1)
+    const call = kit.calls[0]
+    expect(call.evidenceKind).toBe('app')
+    expect(call.platform).toBe('TikTok')
+    expect(call.items.map((i) => i.id)).toEqual([ITEM.id])
+    const texts = call.passages.map((p) => p.text)
+    expect(texts[0]).toBe('Step 1 · Teen 15 · opened /home → page /home opened')
+    expect(texts[1]).toBe('Step 2 · Teen 15 · opened link "Settings" → page /settings opened')
+    // The evidence step's page comes before the other page.
+    const settingsAt = texts.findIndex((t) => t.includes('Only approved followers'))
+    const homeAt = texts.findIndex((t) => t.includes('newest posts first'))
+    expect(settingsAt).toBeGreaterThan(1)
+    expect(homeAt).toBeGreaterThan(settingsAt)
+    // No finish observation is ever a passage.
+    expect(texts.some((t) => t.includes('The account is private.'))).toBe(false)
+    expect(new Set(call.passages.map((p) => p.id)).size).toBe(call.passages.length)
+  })
+
+  it('a quote of a step line is verified; a made-up quote is unverified and flagged', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    kit.answer.current = (input) => ({
+      results: [
+        result({
+          quotes: [quoting(isLine(2), 'opened link "Settings"')(input), quoting(isLine(2), 'Teen accounts are always private')(input)],
+        }),
+      ],
+      missingItemIds: [],
+      tokensUsed: 50,
+    })
+
+    const s = await judge(kit)
+
+    expect(s?.quotes.map((q) => q.verified)).toEqual([true, false])
+    expect(s?.quotes[0].pageId).toBe(kit.steps[1].pageId)
+    expect(s?.flags.map((f) => f.type)).toContain('unverified_quote')
+  })
+
+  it('text the AI typed cannot be quoted as proof (ruling A20), while the stored line keeps it', async () => {
+    const kit = await createKit()
+    const composer = view('/messages', 'Messages', [el('e2', 'textbox', 'Message', { tag: 'textarea', state: { value: TYPED } })])
+    await kit.record({ action: { type: 'type', ref: 'e2', text: TYPED }, detail: 'page unchanged', view: composer })
+    kit.answer.current = (input) => ({
+      results: [
+        result({
+          quotes: [quoting(isLine(1), TYPED)(input), quoting((p) => p.kind === 'controls', TYPED)(input)],
+        }),
+      ],
+      missingItemIds: [],
+      tokensUsed: 50,
+    })
+
+    const s = await judge(kit, { evidenceSteps: [1] })
+
+    const sent = kit.calls[0].passages
+    expect(sent[0].text).toBe('Step 1 · Teen 15 · typed text into textbox "Message" → page unchanged')
+    expect(sent.some((p) => p.text.includes(TYPED))).toBe(false)
+    expect(s?.suggestedResult).toBe('yes')
+    expect(s?.quotes.every((q) => !q.verified)).toBe(true)
+    expect(s?.flags.map((f) => f.type)).toContain('unverified_quote')
+    // The stored step row and its passage stay as the check wrote them.
+    expect(kit.steps[0].line).toContain(`typed "${TYPED}"`)
+    const stored = await kit.repo.listPassagesOfPages([kit.steps[0].pageId as string])
+    expect(stored[0].text).toContain(`typed "${TYPED}"`)
+  })
+
+  it('a yes with no quote gets missing_evidence: a claim no step supports is flagged', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+
+    const s = await judge(kit)
+
+    expect(s?.suggestedResult).toBe('yes')
+    expect(s?.quotes).toEqual([])
+    expect(s?.flags.map((f) => f.type)).toContain('missing_evidence')
+  })
+
+  it('a check stopped by a captcha gets an inaccessible flag even when the AI answered', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    const captcha = view('/challenge', 'Prove you are human before you go on.')
+    await kit.record({
+      action: { type: 'finish', observations: '', evidenceSteps: [] },
+      outcome: 'blocked',
+      detail: 'The app asked for a captcha.',
+      view: captcha,
+      blocked: true,
+    })
+    kit.answer.current = (input) => ({
+      results: [result({ quotes: [quoting((p) => p.text.includes('Only approved'), 'Only approved followers see your posts.')(input)] })],
+      missingItemIds: [],
+      tokensUsed: 50,
+    })
+    const stoppedBy = { url: captcha.url, detail: 'The app asked for a captcha.' }
+
+    const s = await judge(kit, { stoppedBy })
+
+    expect(s?.quotes[0].verified).toBe(true)
+    expect(s?.flags).toContainEqual({
+      type: 'inaccessible',
+      reason: 'The check stopped at http://app.test/challenge: The app asked for a captcha.',
+    })
+    // The blocked page keeps its passages.
+    expect(kit.calls[0].passages.some((p) => p.text.includes('Prove you are human'))).toBe(true)
+  })
+
+  it('a check with no recorded page stores a null suggestion without calling the AI', async () => {
+    const kit = await createKit()
+    await kit.record({ action: { type: 'finish', observations: '', evidenceSteps: [] }, outcome: 'failed', detail: "The AI's reply could not be read." })
+    const meter = meterOf()
+
+    const s = await judge(kit, { evidenceSteps: [], meter })
+
+    expect(kit.calls).toHaveLength(0)
+    expect(meter.used()).toBe(0)
+    expect(s?.suggestedResult).toBeNull()
+    expect(s?.reason).toBe(APP_NO_STEPS_REASON)
+    expect(APP_NO_STEPS_REASON).toBe('The check ended before any page of the app could be recorded.')
+    expect(s?.source).toBe('app')
+    expect(s?.flags.map((f) => f.type)).toContain('missing_evidence')
+
+    const empty = await createKit()
+    const t = await judge(empty, { evidenceSteps: [], stoppedBy: { url: 'http://app.test/login', detail: 'A 2-factor prompt.' } })
+    expect(t?.reason).toBe(APP_NO_STEPS_REASON)
+    expect(t?.flags.map((f) => f.type)).toContain('inaccessible')
+  })
+
+  it('stores the suggestion with source app and adds the tokens to the meter', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    const meter = meterOf(100)
+
+    const s = await judge(kit, { meter })
+
+    expect(meter.used()).toBe(170)
+    expect(s?.source).toBe('app')
+    const stored = await kit.repo.listSuggestions(kit.ctx.run.id)
+    expect(stored).toHaveLength(1)
+    expect(stored[0].source).toBe('app')
+    expect(stored[0].passageIdsSent).toEqual(kit.calls[0].passages.map((p) => p.id))
+  })
+
+  it('returns null when the AI left the item out, and throws a Groq limit on', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    kit.answer.current = () => ({ results: [], missingItemIds: [ITEM.id], tokensUsed: 30 })
+    const meter = meterOf()
+
+    await expect(judge(kit, { meter })).resolves.toBeNull()
+    expect(meter.used()).toBe(30)
+    expect(await kit.repo.listSuggestions(kit.ctx.run.id)).toEqual([])
+
+    kit.answer.current = () => {
+      throw new Error('Groq request failed with status 429')
+    }
+    await expect(judge(kit)).rejects.toThrow(/429/)
+  })
+
+  it('uses the highlighter for verified page-text quotes; null means the full step screenshot', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    const pageQuote = 'Only approved followers see your posts.'
+    const lineQuote = 'opened link "Settings"'
+    kit.answer.current = (input) => ({
+      results: [
+        result({
+          quotes: [
+            quoting((p) => p.text.includes('Only approved'), pageQuote)(input),
+            quoting(isLine(2), lineQuote)(input),
+            quoting((p) => p.kind === 'controls', 'switch "Private account" [on]')(input),
+          ],
+        }),
+      ],
+      missingItemIds: [],
+      tokensUsed: 50,
+    })
+    const settingsPage = kit.steps[1].pageId as string
+    const highlighter = vi.fn<Highlighter>(async () => new Map([[highlightKey(settingsPage, pageQuote), 'proj-1/run/highlight-x.jpg']]))
+
+    const s = await judge(kit, { highlighter })
+
+    expect(highlighter).toHaveBeenCalledTimes(1)
+    const asked = highlighter.mock.calls[0][0]
+    expect(asked.get(settingsPage)).toContain(pageQuote)
+    expect(s?.quotes.map((q) => q.verified)).toEqual([true, true, true])
+    expect(s?.quotes[0].highlightScreenshotPath).toBe('proj-1/run/highlight-x.jpg')
+    expect(s?.quotes[1].highlightScreenshotPath).toBeNull()
+    expect(s?.quotes[2].highlightScreenshotPath).toBeNull()
+
+    const plain = await createKit()
+    await recordDefault(plain)
+    plain.answer.current = kit.answer.current
+    const t = await judge(plain, { highlighter: null })
+    expect(t?.quotes[0].verified).toBe(true)
+    expect(t?.quotes[0].highlightScreenshotPath).toBeNull()
+    // The card falls back to the step's full screenshot.
+    const page = await plain.repo.getPage(t?.quotes[0].pageId as string)
+    expect(page?.screenshotPath).toMatch(/step-/)
+    expect(plain.browserProvider).not.toHaveBeenCalled()
+  })
+})
+
+describe('selectStepPassages', () => {
+  const p = (id: string, chars: number, position = 1): Passage => ({ id, pageId: `pg-${id}`, position, kind: 'text', text: 'x'.repeat(chars) })
+
+  it('selectStepPassages keeps the newest step lines within half the budget, dropping the oldest, and never sends a step line twice', () => {
+    const lines = [p('s1', 100, 0), p('s2', 100, 0), p('s3', 100, 0), p('s4', 100, 0)]
+    const pages = [[lines[3], p('a1', 100), p('a2', 100)], [lines[2], p('b1', 100)]]
+
+    const picked = selectStepPassages(lines, pages, 120).map((x) => x.id)
+
+    expect(picked).toEqual(['s3', 's4', 'a1', 'b1'])
+  })
+
+  it('goes round-robin over the pages and skips a passage that does not fit', () => {
+    const pages = [[p('a1', 40), p('a2', 400), p('a3', 40)], [p('b1', 40), p('b2', 40)]]
+    expect(selectStepPassages([], pages, 60).map((x) => x.id)).toEqual(['a1', 'b1', 'b2', 'a3'])
+  })
+})
+
+describe('storeRound', () => {
+  it('storeRound with a null highlighter takes no close-ups and never calls browserProvider', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    const [passage] = (await kit.repo.listPassagesOfPages([kit.steps[1].pageId as string])).filter((x) => x.position === 1)
+    const page = (await kit.repo.getPage(passage.pageId)) as CapturedPage
+
+    const created = await storeRound(
+      kit.ctx,
+      {
+        selected: [passage],
+        found: new Map([[ITEM.id, 1]]),
+        results: [result({ quotes: [{ passageId: passage.id, text: 'Only approved followers see your posts.' }] })],
+      },
+      { platform: 'TikTok', pages: new Map([[page.id, page]]), failedPages: [] },
+      null,
+    )
+
+    expect(created).toHaveLength(1)
+    expect(created[0].quotes[0].verified).toBe(true)
+    expect(created[0].quotes[0].highlightScreenshotPath).toBeNull()
+    expect(created[0].source).toBe('pages')
+    expect(kit.browserProvider).not.toHaveBeenCalled()
+    expect(kit.highlights).not.toHaveBeenCalled()
+  })
+})
+
+describe('liveHighlighter', () => {
+  function fakeSession(url: () => string, rawUrl = url): AppSession & { photographQuote: ReturnType<typeof vi.fn> } {
+    return {
+      currentUrl: url,
+      page: { url: rawUrl } as never,
+      photographQuote: vi.fn(async () => Buffer.from('close-up')),
+    } as unknown as AppSession & { photographQuote: ReturnType<typeof vi.fn> }
+  }
+  function poolOf(sessions: Record<string, AppSession>): AppSessionPool {
+    return { get: (id: string) => sessions[id] ?? null } as unknown as AppSessionPool
+  }
+  async function pagesOf(kit: Kit): Promise<Map<string, CapturedPage>> {
+    const pages = new Map<string, CapturedPage>()
+    for (const step of kit.steps) {
+      if (step.pageId === null) continue
+      pages.set(step.pageId, (await kit.repo.getPage(step.pageId)) as CapturedPage)
+    }
+    return pages
+  }
+
+  it('liveHighlighter skips a quote whose session has moved on to another page', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    const session = fakeSession(() => SETTINGS.url)
+    const highlighter = liveHighlighter(kit.ctx, poolOf({ [TEEN.id]: session }), kit.steps, await pagesOf(kit))
+    const home = kit.steps[0].pageId as string
+    const settings = kit.steps[1].pageId as string
+
+    const paths = await highlighter(new Map([
+      [home, ['Your feed shows the newest posts first.']],
+      [settings, ['Only approved followers see your posts.']],
+    ]))
+
+    expect(session.photographQuote).toHaveBeenCalledTimes(1)
+    expect(session.photographQuote).toHaveBeenCalledWith('Only approved followers see your posts.')
+    expect([...paths.keys()]).toEqual([highlightKey(settings, 'Only approved followers see your posts.')])
+    const path = paths.get(highlightKey(settings, 'Only approved followers see your posts.')) as string
+    expect(path).toMatch(new RegExp(`^${PROJECT}/${kit.ctx.run.id}/highlight-[0-9a-f-]{36}\\.jpg$`))
+    await expect(kit.repo.signedUrl(path, 60)).resolves.toContain(path)
+    expect(kit.browserProvider).not.toHaveBeenCalled()
+  })
+
+  it('liveHighlighter matches a page whose URL had a token, by its redacted form', async () => {
+    const kit = await createKit()
+    const raw = 'http://app.test/feed?token=abc123secret'
+    const shown = redactUrl(raw)
+    expect(shown).not.toBe(raw)
+    await kit.record({ action: { type: 'open_link', url: '/feed' }, detail: 'page /feed opened', view: { ...view('/feed', HOME_TEXT), url: shown } })
+    const session = fakeSession(() => shown, () => raw)
+    const highlighter = liveHighlighter(kit.ctx, poolOf({ [TEEN.id]: session }), kit.steps, await pagesOf(kit))
+    const pageId = kit.steps[0].pageId as string
+
+    const paths = await highlighter(new Map([[pageId, ['Your feed shows the newest posts first.']]]))
+
+    expect(paths.has(highlightKey(pageId, 'Your feed shows the newest posts first.'))).toBe(true)
+  })
+
+  it('leaves out a quote it cannot photograph, and a page whose account has no session', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    const session = fakeSession(() => SETTINGS.url)
+    session.photographQuote.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('boom'))
+    const settings = kit.steps[1].pageId as string
+
+    const paths = await liveHighlighter(kit.ctx, poolOf({ [TEEN.id]: session }), kit.steps, await pagesOf(kit))(
+      new Map([[settings, ['Only approved followers see your posts.', 'Your account is private.']]]),
+    )
+    expect(paths.size).toBe(0)
+
+    const none = await liveHighlighter(kit.ctx, poolOf({}), kit.steps, await pagesOf(kit))(
+      new Map([[settings, ['Only approved followers see your posts.']]]),
+    )
+    expect(none.size).toBe(0)
+  })
+})
