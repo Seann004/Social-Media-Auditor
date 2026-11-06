@@ -6,6 +6,11 @@ const IV_BYTES = 12
 const TAG_BYTES = 16
 const KEY_ERROR = 'EVIDENCE_SECRET_KEY must be 32 random bytes, base64 encoded'
 const SECRET_PARAM = /pass|pwd|secret|token|otp|code|auth/i
+const SECRET_PARAM_EXACT = /^(api_?key|key|sid|session|jwt|signature)$/i
+
+function isSecretParam(name: string): boolean {
+  return SECRET_PARAM.test(name) || SECRET_PARAM_EXACT.test(name)
+}
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/
 
 export class SecretUnreadableError extends Error {
@@ -45,7 +50,7 @@ export function decryptSecret(blob: string, key: Buffer, aad: string): string {
     const tag = Buffer.from(parts[2], 'base64url')
     const ciphertext = Buffer.from(parts[3], 'base64url')
     if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES) throw new Error('bad blob')
-    const decipher = createDecipheriv('aes-256-gcm', key, iv)
+    const decipher = createDecipheriv('aes-256-gcm', key, iv, { authTagLength: TAG_BYTES })
     decipher.setAAD(Buffer.from(aad, 'utf8'))
     decipher.setAuthTag(tag)
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8')
@@ -64,14 +69,11 @@ export function redactUrl(url: string): string {
   }
   parsed.username = ''
   parsed.password = ''
-  const names = [...parsed.searchParams.keys()]
-  for (const name of names) {
-    if (SECRET_PARAM.test(name)) {
-      const next = new URLSearchParams()
-      for (const [k, v] of parsed.searchParams) next.append(k, SECRET_PARAM.test(k) ? 'redacted' : v)
-      parsed.search = next.toString()
-      break
-    }
+  parsed.hash = ''
+  if ([...parsed.searchParams.keys()].some(isSecretParam)) {
+    const next = new URLSearchParams()
+    for (const [k, v] of parsed.searchParams) next.append(k, isSecretParam(k) ? 'redacted' : v)
+    parsed.search = next.toString()
   }
   return parsed.toString()
 }

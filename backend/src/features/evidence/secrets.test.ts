@@ -47,6 +47,21 @@ describe('secrets', () => {
       return { blob: p.join('.'), key, aad }
     }],
     ['not a blob', () => ({ blob: 'not a blob', key, aad })],
+    ['a v2 version', () => {
+      const p = encryptSecret(PW, key, aad).split('.')
+      p[0] = 'v2'
+      return { blob: p.join('.'), key, aad }
+    }],
+    ['a short IV', () => {
+      const p = encryptSecret(PW, key, aad).split('.')
+      p[1] = p[1].slice(0, 8)
+      return { blob: p.join('.'), key, aad }
+    }],
+    ['a 4-byte tag', () => {
+      const p = encryptSecret(PW, key, aad).split('.')
+      p[2] = Buffer.from(p[2], 'base64url').subarray(0, 4).toString('base64url')
+      return { blob: p.join('.'), key, aad }
+    }],
   ]
   it.each(cases)('throws SecretUnreadableError on %s, without echoing the blob', (_n, make) => {
     const c = make()
@@ -69,6 +84,12 @@ describe('secrets', () => {
       expect(Buffer.isBuffer(k)).toBe(true)
       expect(k?.length).toBe(32)
     })
+    it('rejects stray characters that would still decode to 32 bytes', () => {
+      const msg = 'EVIDENCE_SECRET_KEY must be 32 random bytes, base64 encoded'
+      const good = randomBytes(32).toString('base64')
+      expect(() => parseSecretKey(`${good.slice(0, 10)}-${good.slice(11)}`)).toThrow(msg)
+      expect(() => parseSecretKey(`${good.slice(0, 10)} ${good.slice(11)}`)).toThrow(msg)
+    })
     it('throws for 16 bytes or non-base64', () => {
       const msg = 'EVIDENCE_SECRET_KEY must be 32 random bytes, base64 encoded'
       expect(() => parseSecretKey(randomBytes(16).toString('base64'))).toThrow(msg)
@@ -85,6 +106,14 @@ describe('secrets', () => {
     it('redacts every matching name, case-insensitively, including repeats', () => {
       const out = redactUrl('https://a.test/?Token=1&api_secret=2&otp=3&code=4&auth=5&pwd=6&token=7&q=ok')
       expect(out).toBe('https://a.test/?Token=redacted&api_secret=redacted&otp=redacted&code=redacted&auth=redacted&pwd=redacted&token=redacted&q=ok')
+    })
+    it('drops the fragment entirely', () => {
+      expect(redactUrl('https://a.test/p#access_token=abc')).toBe('https://a.test/p')
+      expect(redactUrl('https://a.test/#/login?password=zz')).toBe('https://a.test/')
+    })
+    it('redacts key-like names as whole names only', () => {
+      const out = redactUrl('https://a.test/?api_key=1&apikey=2&key=3&sid=4&session=5&jwt=6&signature=7&monkey=ok&Key=8')
+      expect(out).toBe('https://a.test/?api_key=redacted&apikey=redacted&key=redacted&sid=redacted&session=redacted&jwt=redacted&signature=redacted&monkey=ok&Key=redacted')
     })
     it('returns a placeholder for an unreadable address', () => {
       expect(redactUrl('not a url')).toBe('[unreadable address]')
