@@ -136,9 +136,10 @@ function checkDestructive(action: AppAction, element: AppElement | null, view: A
   return ALLOWED
 }
 
-function checkPublic(action: AppAction, element: AppElement | null, view: AppView | null): SafetyVerdict {
+function checkPublic(action: AppAction, element: AppElement | null, view: AppView | null, ctx: SafetyContext): SafetyVerdict {
   if (!['click', 'toggle', 'select'].includes(action.type) || element === null || view === null) return ALLOWED
-  const result = checkPublishing(element.name, element, view)
+  if (choosesPrivateOption(action, element)) return ALLOWED
+  const result = checkPublishing(element.name, element, view, ctx)
   return result.ok ? ALLOWED : refuse('nothing_public', result.reason)
 }
 
@@ -171,7 +172,7 @@ export function checkAction(action: AppAction, view: AppView | null, ctx: Safety
     () => checkOwnAccounts(action, element, view, ctx),
     () => checkCredentials(action, element, view),
     () => checkDestructive(action, element, view, ctx),
-    () => checkPublic(action, element, view),
+    () => checkPublic(action, element, view, ctx),
     () => checkScope(action, element, view, ctx),
   ]
   for (const check of checks) {

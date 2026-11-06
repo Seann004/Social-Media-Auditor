@@ -1,7 +1,7 @@
 /** Rule: nothing public. Anything that could publish needs a visibly private audience in its own form. */
 import type { AppElement, AppView } from './appTypes.js'
-import { AUDIENCE_CONTROL, FINAL_ACTION, PUBLIC_AUDIENCE, PUBLISH_ACTION, SAFE_NAVIGATION } from './appSafetyWords.js'
-import { isAuthForm, isMediaInput, isPrivateOption, isTextBox, sameGroup } from './appSafetyTargets.js'
+import { AUDIENCE_CONTROL, FINAL_ACTION, PUBLIC_AUDIENCE, PERSON_ACTION, PUBLIC_REPLY, PUBLISH_ACTION, SAFE_NAVIGATION } from './appSafetyWords.js'
+import { isAuthForm, isComposerSubmit, isDirectThread, isMediaInput, isPrivateOption, isTextBox, sameGroup, type TargetContext } from './appSafetyTargets.js'
 
 /** Only controls that say they are the audience (or the options of one) count as proof of privacy. */
 function isAudienceControl(element: AppElement): boolean {
@@ -38,15 +38,21 @@ export type PublishCheck = { ok: true } | { ok: false; reason: string }
  * own-accounts rule already checked, and such a name is neither a publish word nor form-ending.
  * Naming a target exempts nothing: a form-ending name always needs a private audience.
  */
-export function checkPublishing(name: string, element: AppElement, view: AppView): PublishCheck {
+export function checkPublishing(name: string, element: AppElement, view: AppView, ctx: TargetContext): PublishCheck {
   // Choosing the audience is not publishing; the control itself is always allowed.
   if (isAudienceControl(element)) return { ok: true }
-  if (SAFE_NAVIGATION.test(name)) return { ok: true }
+  const submit = isComposerSubmit(element, view)
+  if (SAFE_NAVIGATION.test(name) && !submit) return { ok: true }
   const isPrivate = audienceIsPrivate(view, element)
+  if (PUBLIC_REPLY.test(name)) {
+    return isPrivate || isDirectThread(element, view, ctx)
+      ? { ok: true }
+      : { ok: false, reason: 'A reply or comment is visible to everyone who can see the thread, and the page does not show a private audience or a direct message.' }
+  }
   if (PUBLISH_ACTION.test(name)) {
     return isPrivate ? { ok: true } : { ok: false, reason: 'This could publish something, and the audience is not clearly private.' }
   }
-  const final = name.trim() === '' || FINAL_ACTION.test(name)
+  const final = name.trim() === '' || FINAL_ACTION.test(name) || (submit && !PERSON_ACTION.test(name))
   if (!final || isAuthForm(view, element)) return { ok: true }
   if (element.groupId === null) return { ok: false, reason: 'Cannot tell what this button submits, so it is not pressed.' }
   const mates = sameGroup(view, element)

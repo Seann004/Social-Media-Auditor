@@ -60,7 +60,7 @@ describe('round 2: naming a target never exempts a non-person submit', () => {
     allowed(CLICK_TEEN, view([postBox, audienceSelect('Only me'), submit]))
   })
   it('still lets a person word to a proven test account through', () => {
-    for (const name of ['Send', 'Message', 'Reply']) {
+    for (const name of ['Send', 'Message']) {
       allowed(CLICK_TEEN, view([postBox, publicButton, el('e1', name, { groupId: FORM, contextText: '@teen15' })]))
     }
   })

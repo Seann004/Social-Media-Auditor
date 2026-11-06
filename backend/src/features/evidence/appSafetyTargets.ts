@@ -4,8 +4,8 @@
  * that the control belongs to that account. Anything the rule cannot tell is refused.
  */
 import type { AgentAccount, AppAction, AppElement, AppView } from './appTypes.js'
-import { AUDIENCE_CONTROL, FINAL_ACTION, LOGIN_PATH, PERSON_ACTION, PRIVATE_AUDIENCE, PUBLISH_ACTION, RECIPIENT_FIELD, SAFE_NAVIGATION, WIDENED_AUDIENCE } from './appSafetyWords.js'
-import { handleName, holdsBareName, mentionsOf, normalised, parseUrl, pathSegments } from './appSafetyText.js'
+import { AUDIENCE_CONTROL, FINAL_ACTION, LOGIN_PATH, PERSON_ACTION, PRIVATE_AUDIENCE, PUBLISH_ACTION, DIRECT_THREAD, RECIPIENT_FIELD, SAFE_NAVIGATION, WIDENED_AUDIENCE } from './appSafetyWords.js'
+import { handleName, holdsBareName, mentionsOf, parseUrl, pathSegments } from './appSafetyText.js'
 
 export interface TargetContext {
   accounts: AgentAccount[]
@@ -56,10 +56,28 @@ export function choosesPrivateOption(action: AppAction, element: AppElement): bo
   return audience && isPrivateOption(element.name)
 }
 
+function buttonLike(element: AppElement): boolean {
+  return element.role === 'button' || element.tag === 'button' || element.inputType === 'submit' || element.inputType === 'button'
+}
+
+/** A text or media input that can hold something to be published (a search box cannot). */
+function composes(element: AppElement): boolean {
+  const search = element.inputType === 'search' || element.role === 'searchbox'
+  return (isTextBox(element) && !search) || isMediaInput(element)
+}
+
+/** A submit button (type=submit, or the last button) of a form that has a text or media input. Such a button is judged by what it submits, whatever its label. */
+export function isComposerSubmit(element: AppElement, view: AppView): boolean {
+  if (element.groupId === null || !sameGroup(view, element).some(composes)) return false
+  if (element.inputType === 'submit') return true
+  const buttons = view.elements.filter((other) => other.groupId === element.groupId && buttonLike(other))
+  return buttonLike(element) && buttons[buttons.length - 1]?.ref === element.ref
+}
+
 /** True when the action could reach a person, or when it cannot be told that it does not. */
 export function reachesPeople(action: AppAction, element: AppElement, view: AppView): boolean {
   if (PERSON_ACTION.test(element.name) || RECIPIENT_FIELD.test(element.name)) return true
-  const safe = SAFE_NAVIGATION.test(element.name) || (action.type !== 'type' && isAuthForm(view, element))
+  const safe = (SAFE_NAVIGATION.test(element.name) && !isComposerSubmit(element, view)) || (action.type !== 'type' && isAuthForm(view, element))
   if (safe) return false
   if (mentionsOf(`${element.name} ${element.contextText}`).length > 0) return true
   // A submit button of a form is judged by the nothing-public rule, not by what the form holds.
@@ -79,7 +97,7 @@ function recipientOf(view: AppView, element: AppElement): string | null | false 
   const fields = [element, ...sameGroup(view, element)].filter(isRecipientInput)
   const names = new Set<string>()
   for (const field of fields) {
-    const tokens = normalised(field.state.value ?? '').split(/[\s,;]+/).filter((token) => token !== '')
+    const tokens = (field.state.value ?? '').split(/[\s,;]+/).filter((token) => token !== '')
     const name = tokens.length === 1 ? handleName(tokens[0]) : null
     if (name === null) return false
     names.add(name)
@@ -140,4 +158,14 @@ export function checkTypedText(text: string, ctx: TargetContext): Check {
   const known = new Set(ctx.accounts.map((account) => account.handles.map(handleName)).flat())
   const stranger = mentionsOf(text).find((name) => !known.has(name))
   return stranger === undefined ? OK : no(`The text mentions @${stranger}, who is not a test account.`)
+}
+
+/** The page is a private conversation with exactly one other test account: a recipient field holding its handle, or a thread address naming it. */
+export function isDirectThread(element: AppElement, view: AppView, ctx: TargetContext): boolean {
+  const others = ctx.accounts.filter((account) => account.id !== ctx.currentAccount?.id)
+  const handles = others.flatMap((account) => account.handles.map(handleName)).filter((name): name is string => name !== null)
+  const recipient = recipientOf(view, element)
+  if (typeof recipient === 'string') return handles.includes(recipient)
+  const segments = pathSegments(view.url)
+  return segments.some((segment) => DIRECT_THREAD.test(segment)) && segments.some((segment) => handles.includes(segment))
 }

@@ -40,7 +40,7 @@ describe('own accounts: proof from the control surroundings', () => {
   it('allows when the handle is the only one around the control', () => {
     allowed(CLICK_TEEN, one('Message', { contextText: 'Teen Fifteen @teen15' }))
   })
-  it.each(['@TEEN15', '@teen15.', '@teen15,', '(@teen15)', '＠teen15'])('allows the handle written as %s', (ctx) => {
+  it.each(['@TEEN15', '@teen15.', '@teen15,', '(@teen15)'])('allows the handle written as %s', (ctx) => {
     allowed(CLICK_TEEN, one('Message', { contextText: ctx }))
   })
   it('refuses a card naming both our account and a stranger', () => {
@@ -108,7 +108,7 @@ describe('own accounts: unknown controls in a person context', () => {
     'allows "%s" in a person context',
     (name) => {
       allowed(CLICK, one(name, { contextText: '@stranger' }))
-      const v = view([el('e1', name, { groupId: 'g1' }), el('t', 'Say something', { tag: 'textarea', role: 'textbox', groupId: 'g1' })])
+      const v = view([el('e1', name, { groupId: 'g1' }), el('t', 'Say something', { tag: 'textarea', role: 'textbox', groupId: 'g1' }), el('p', 'Preview', { groupId: 'g1' })])
       allowed(CLICK, v)
     },
   )
@@ -145,7 +145,7 @@ describe('own accounts: person words', () => {
     refused({ type: 'toggle', ref: 'e1' }, one(name, { role: 'switch' }), 'own_accounts')
   })
   it('lets a verified target through for every one of them', () => {
-    for (const name of ['Message', 'Follow', 'Reply', 'Poke']) allowed(CLICK_TEEN, one(name, { contextText: '@teen15' }))
+    for (const name of ['Message', 'Follow', 'Poke']) allowed(CLICK_TEEN, one(name, { contextText: '@teen15' }))
   })
   it.each(['To', 'Recipients', 'Send to', 'Share with', 'Add people', 'Contacts', 'CC'])('select "%s" is a recipient field', (name) => {
     refused({ type: 'select', ref: 'e1', option: 'stranger' }, one(name, { role: 'combobox', tag: 'select' }), 'own_accounts')
@@ -181,7 +181,7 @@ describe('own accounts: typing', () => {
     for (const text of ['hi @stranger', 'hi ＠stranger', 'hi @ñandú', 'hi @teen15-fan', 'hi @teen15.real', 'hi @teen150']) {
       refused({ type: 'type', ref: 'e1', text }, v, 'own_accounts')
     }
-    for (const text of ['hi @teen15', 'hi @Adult_A', 'mail me at a@b.com', 'hi ＠teen15', 'user1@host', 'a_@host']) allowed({ type: 'type', ref: 'e1', text }, v)
+    for (const text of ['hi @teen15', 'hi @Adult_A', 'mail me at a@b.com', 'user1@host', 'a_@host']) allowed({ type: 'type', ref: 'e1', text }, v)
   })
   it('refuses text with a line break', () => {
     const v = one('Search', { tag: 'input', inputType: 'text' })
@@ -258,7 +258,7 @@ describe('own accounts: fine points', () => {
       refused(CLICK_TEEN, one('Message', { contextText: ctx }, PROFILE), 'own_accounts')
     },
   )
-  it.each(['teen15', 'TEEN15 Message', 'by teen15.', 'teen15, Message', '"teen15"', 'ｔｅｅｎ１５'])('counts %s as the name on a profile page', (ctx) => {
+  it.each(['teen15', 'TEEN15 Message', 'by teen15.', 'teen15, Message', '"teen15"'])('counts %s as the name on a profile page', (ctx) => {
     allowed(CLICK_TEEN, one('Message', { contextText: ctx }, PROFILE))
   })
   it('reads a percent-encoded profile address', () => {

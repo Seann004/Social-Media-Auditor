@@ -82,3 +82,8 @@ export const STRONG_BLOCK = /captcha|verify you(?:'re| are) (?:a )?human|press (
 export const BLOCK_TITLE_EXTRA = /security verification|human verification|verify you(?:'re| are)|verify it'?s you/i
 export const CODE_FIELD = /\b(?:code|otp|verification|digit)\b/i
 export const NOT_A_SECURITY_CODE = /promo|postal|zip|country|coupon|discount|voucher|area/i
+
+/** Replying and commenting are visible to everyone who can see the thread, so they publish (verbs only: "Comments" is a tab). */
+export const PUBLIC_REPLY = /\b(?:repl(?:y|ies|ying)|comment(?:ing)?)\b/i
+/** A path segment that says the page is a private conversation. */
+export const DIRECT_THREAD = /^(?:messages?|dms?|chats?|direct|inbox|conversations?)$/i
