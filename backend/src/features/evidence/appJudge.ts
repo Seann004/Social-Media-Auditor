@@ -20,6 +20,11 @@ export const APP_NO_STEPS_REASON = 'The check ended before any page of the app c
 const TYPED_IN_LINE = 'typed text into'
 const STEP_LINE_POSITION = 0
 const EDGE_PUNCTUATION = /^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu
+const WORD = /[\p{L}\p{N}]+(?:['\u2019][\p{L}\p{N}]+)*/gu
+/** A quote sharing this many consecutive words with a typed text is the AI's own (ruling A20c). */
+const SHARED_RUN_WORDS = 4
+/** A typed text of at least this many words, found whole inside a quote, makes the quote the AI's own (ruling A20c). */
+const WHOLE_TYPED_MIN_WORDS = 2
 
 export interface JudgeInput {
   item: AssessItem
@@ -64,13 +69,24 @@ export function selectStepPassages(stepLines: Passage[], pagePassages: Passage[]
   return selected
 }
 
-/** Every text the AI wrote in this check: what it typed, and every option it named in a select, whatever the outcome. */
-function aiWrittenTexts(steps: AppStep[]): string[] {
-  return steps.flatMap((s) => {
-    if (s.action.type === 'type') return [s.action.text]
-    if (s.action.type === 'select') return [s.action.option]
-    return []
-  })
+/** Every text the AI typed in this check, whatever the outcome. */
+function typedTexts(steps: AppStep[]): string[] {
+  return steps.flatMap((s) => (s.action.type === 'type' ? [s.action.text] : []))
+}
+
+/** The options the AI named in selects that were refused or failed. A done select's option was offered by the app. */
+function namedOptions(steps: AppStep[]): string[] {
+  return steps.flatMap((s) => (s.action.type === 'select' && (s.outcome === 'refused' || s.outcome === 'failed') ? [s.action.option] : []))
+}
+
+/** The whole words of a text: NFKC, lower case, whitespace collapsed. */
+function wordsOf(text: string): string[] {
+  return normaliseForMatch(text).toLowerCase().match(WORD) ?? []
+}
+
+/** Every run of `size` consecutive words, joined by single spaces. */
+function runsOf(words: string[], size: number): string[] {
+  return words.length < size ? [] : words.slice(0, words.length - size + 1).map((_, i) => words.slice(i, i + size).join(' '))
 }
 
 /** How A20b compares a quote with what the AI wrote: NFKC, whitespace collapsed, lower case, no punctuation at either end. */
@@ -88,17 +104,31 @@ function withoutTypedText(passage: Passage, steps: AppStep[]): Passage {
 }
 
 /**
- * Ruling A20b. A quote is unproven when it is contained in anything the AI wrote (a typed text or a
- * select option, however the app showed it: cut short, in capitals), or when it names the line of a
- * refused, failed or stopped step: that line is SafetyAudit's own rule or error, not the app's doing.
+ * Rulings A20b and A20c. A quote is unproven when:
+ * - it is contained in anything the AI wrote (a typed text, or the option of a refused or failed
+ *   select), however the app showed it: cut short, in capitals;
+ * - it shares 4 or more consecutive whole words with a typed text, as when the app wraps the text
+ *   (`[value: …]`, "Your post: …");
+ * - it contains, as whole words, a whole typed text of 2 or more words;
+ * - or it names the line of a refused, failed or stopped step: that line is SafetyAudit's own rule
+ *   or error, not the app's doing.
+ * A one-word typed text (a search for "private") is covered by containment only.
  */
 function unprovenRule(steps: AppStep[]): (quote: string, passage: Passage) => boolean {
-  const written = aiWrittenTexts(steps).map(comparable)
+  const typed = typedTexts(steps)
+  const written = [...typed, ...namedOptions(steps)].map(comparable)
+  const typedWords = typed.map(wordsOf)
+  const sharedRuns = new Set(typedWords.flatMap((words) => runsOf(words, SHARED_RUN_WORDS)))
+  const wholeTyped = typedWords.filter((words) => words.length >= WHOLE_TYPED_MIN_WORDS).map((words) => words.join(' '))
   const notDoneLines = new Set(steps.flatMap((s) => (s.pageId !== null && s.outcome !== 'done' ? [s.pageId] : [])))
   return (quote, passage) => {
     if (passage.position === STEP_LINE_POSITION && notDoneLines.has(passage.pageId)) return true
     const wanted = comparable(quote)
-    return written.some((text) => text.includes(wanted))
+    if (written.some((text) => text.includes(wanted))) return true
+    const words = wordsOf(quote)
+    if (runsOf(words, SHARED_RUN_WORDS).some((run) => sharedRuns.has(run))) return true
+    const padded = ` ${words.join(' ')} `
+    return wholeTyped.some((text) => padded.includes(` ${text} `))
   }
 }
 

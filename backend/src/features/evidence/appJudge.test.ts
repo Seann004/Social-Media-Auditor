@@ -275,7 +275,7 @@ describe('judgeItem', () => {
       expect(s?.flags.map((f) => f.type)).toContain('unverified_quote')
     })
 
-    it('a made-up option in a done select is unverified too', async () => {
+    it('the option of a done select was offered by the app, so a quote of it verifies', async () => {
       const kit = await createKit()
       const audience = el('e5', 'combobox', 'Audience', { tag: 'select', state: { value: 'Only teens can see this' } })
       await kit.record({
@@ -292,7 +292,67 @@ describe('judgeItem', () => {
       const s = await judge(kit, { evidenceSteps: [1] })
 
       expect(s?.quotes[0].passageId).not.toBeNull()
+      expect(s?.quotes[0].verified).toBe(true)
+    })
+
+    it('the option of a failed select is the AI\'s, wherever it is quoted from', async () => {
+      const kit = await createKit()
+      const audience = el('e5', 'combobox', 'Audience', { tag: 'select', state: { value: 'Public' } })
+      await kit.record({
+        action: { type: 'select', ref: 'e5', option: 'Only teens can see this' },
+        outcome: 'failed',
+        detail: 'That option could not be chosen.',
+        view: view('/settings', 'Audience: Only teens can see this', [audience]),
+      })
+      kit.answer.current = (input) => ({
+        results: [result({ quotes: [quoting((p) => p.position === 1, 'Only teens can see this')(input)] })],
+        missingItemIds: [],
+        tokensUsed: 5,
+      })
+
+      const s = await judge(kit, { evidenceSteps: [1] })
+
+      expect(s?.quotes[0].passageId).not.toBeNull()
       expect(s?.quotes[0].verified).toBe(false)
+    })
+
+    describe('a quote that wraps what the AI typed (ruling A20c)', () => {
+      const SHORT = 'Teen accounts are private by default'
+
+      async function typedAndQuoted(typed: string, value: string | undefined, pageText: string, pick: (p: Passage) => boolean, quote: string) {
+        const kit = await createKit()
+        const composer = view('/messages', pageText, [el('e2', 'textbox', 'Message', { tag: 'textarea', state: value === undefined ? {} : { value } })])
+        await kit.record({ action: { type: 'type', ref: 'e2', text: typed }, detail: 'page unchanged', view: composer })
+        kit.answer.current = (input) => ({ results: [result({ quotes: [quoting(pick, quote)(input)] })], missingItemIds: [], tokensUsed: 5 })
+        const s = await judge(kit, { evidenceSteps: [1] })
+        expect(s?.quotes[0].passageId).not.toBeNull()
+        return s?.quotes[0].verified
+      }
+      const controls = (p: Passage) => p.kind === 'controls'
+      const pageText = (p: Passage) => p.position === 1
+
+      it('the [value: …] wrapper of a typed text', async () => {
+        expect(await typedAndQuoted(SHORT, SHORT, 'Messages', controls, `[value: ${SHORT}]`)).toBe(false)
+        expect(await typedAndQuoted(SHORT, SHORT, 'Messages', controls, `textbox "Message" [value: ${SHORT}]`)).toBe(false)
+      })
+
+      it('the [value: …] wrapper of a typed text over 100 characters, cut short', async () => {
+        const long = `${SHORT}, and only approved followers can see the posts that teen accounts share with them.`
+        expect(long.length).toBeGreaterThan(100)
+        expect(await typedAndQuoted(long, long.slice(0, 100), 'Messages', controls, `[value: ${SHORT}, and only approved followers`)).toBe(false)
+      })
+
+      it('a "Your post:" prefix the app puts on a typed text', async () => {
+        expect(await typedAndQuoted(SHORT, undefined, `Your post: ${SHORT}`, pageText, `Your post: ${SHORT}`)).toBe(false)
+      })
+
+      it('a whole typed text of two words inside a longer quote', async () => {
+        expect(await typedAndQuoted('Hello there', undefined, 'Message sent to Teen 16: Hello there', pageText, 'Message sent to Teen 16: Hello there')).toBe(false)
+      })
+
+      it('a page sentence sharing only 3 words with the typed text verifies', async () => {
+        expect(await typedAndQuoted(SHORT, undefined, 'Teen accounts are shown a safety notice first.', pageText, 'Teen accounts are shown a safety notice first.')).toBe(true)
+      })
     })
 
     it('the app showing the typed text in capitals', async () => {
