@@ -1,6 +1,9 @@
 import { BASE_URL } from '../../lib/db'
 import { useStore } from '../../store/useStore'
 import type {
+  AppSetupResponse,
+  AppSourceView,
+  AppChangeView,
   DecisionRequest,
   DecisionResponse,
   EvidencePermission,
@@ -10,7 +13,10 @@ import type {
   ScreenshotKind,
   SourcesResponse,
   EvidenceSource,
+  StepsResponse,
   SuggestionsResponse,
+  TestAccountInput,
+  TestAccountView,
 } from './types'
 
 /** Every failure of the evidence API. `status` is 0 when the server could not be reached. */
@@ -59,7 +65,7 @@ async function failureMessage(res: Response): Promise<string> {
   return plainMessage(res.status)
 }
 
-async function call<T>(path: string, method: 'GET' | 'POST' | 'PUT' = 'GET', body?: unknown): Promise<T> {
+async function call<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'GET', body?: unknown): Promise<T> {
   const token = useStore.getState().sessionToken
   if (!token) throw new EvidenceApiError(401, NO_SESSION_MESSAGE)
 
@@ -77,6 +83,7 @@ async function call<T>(path: string, method: 'GET' | 'POST' | 'PUT' = 'GET', bod
     throw new EvidenceApiError(0, NETWORK_MESSAGE)
   }
   if (!res.ok) throw new EvidenceApiError(res.status, await failureMessage(res))
+  if (res.status === 204) return undefined as T
   try {
     return (await res.json()) as T
   } catch {
@@ -122,4 +129,39 @@ export function postDecision(suggestionId: string, decision: DecisionRequest): P
 export async function getScreenshotUrl(kind: ScreenshotKind, id: string): Promise<string> {
   const { url } = await call<{ url: string }>(`/evidence/screenshots/${kind}/${encodeURIComponent(id)}`)
   return url
+}
+
+export function getAppSetup(projectId: string): Promise<AppSetupResponse> {
+  return call(`${project(projectId)}/app-setup`)
+}
+
+export function saveAppSource(projectId: string, appUrl: string, loginDomains: string[]): Promise<{ app: AppSourceView }> {
+  return call(`${project(projectId)}/app-source`, 'PUT', { appUrl, loginDomains })
+}
+
+export function addTestAccount(projectId: string, input: TestAccountInput): Promise<{ account: TestAccountView }> {
+  return call(`${project(projectId)}/test-accounts`, 'POST', input)
+}
+
+/** A blank or missing password is left out of the request, so it never wipes the saved one. */
+export function updateTestAccount(projectId: string, accountId: string, input: TestAccountInput): Promise<{ account: TestAccountView }> {
+  const { password, ...rest } = input
+  const body = password ? { ...rest, password } : rest
+  return call(`${project(projectId)}/test-accounts/${encodeURIComponent(accountId)}`, 'PATCH', body)
+}
+
+export function deleteTestAccount(projectId: string, accountId: string): Promise<void> {
+  return call(`${project(projectId)}/test-accounts/${encodeURIComponent(accountId)}`, 'DELETE')
+}
+
+export function startAppRun(projectId: string, itemIds: string[]): Promise<RunStartResponse> {
+  return call(`${project(projectId)}/app-runs`, 'POST', { itemIds })
+}
+
+export function getRunChanges(projectId: string, runId: string): Promise<{ changes: AppChangeView[] }> {
+  return call(`${project(projectId)}/evidence-runs/${encodeURIComponent(runId)}/app-changes`)
+}
+
+export function getSuggestionSteps(suggestionId: string): Promise<StepsResponse> {
+  return call(`/suggestions/${encodeURIComponent(suggestionId)}/steps`)
 }

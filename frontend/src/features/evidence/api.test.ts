@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from '../../store/useStore'
 import {
   EvidenceApiError,
+  addTestAccount,
+  deleteTestAccount,
+  getAppSetup,
+  getRunChanges,
+  getSuggestionSteps,
+  saveAppSource,
+  startAppRun,
+  updateTestAccount,
   getLatestRun,
   getScreenshotUrl,
   getSources,
@@ -140,5 +148,69 @@ describe('evidence api client', () => {
     const body = { run: null, pages: [] }
     fetchMock.mockResolvedValueOnce(reply(200, JSON.stringify(body)))
     await expect(getLatestRun('p1')).resolves.toEqual(body)
+  })
+})
+
+describe('app evidence api client', () => {
+  const input = { label: 'Teen 15', ageGroup: 'under_18' as const, age: 15, loginName: 'teen', handles: ['@teen'] }
+
+  it('getAppSetup reads app-setup', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, JSON.stringify({ app: null, accounts: [], secretKeyConfigured: true })))
+    expect((await getAppSetup('p1')).secretKeyConfigured).toBe(true)
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/projects\/p1\/app-setup$/)
+  })
+
+  it('saveAppSource PUTs the address and login domains', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, JSON.stringify({ app: { appUrl: 'https://a.test', loginDomains: ['x.test'], updatedAt: 't' } })))
+    await saveAppSource('p1', 'https://a.test', ['x.test'])
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toMatch(/\/projects\/p1\/app-source$/)
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({ appUrl: 'https://a.test', loginDomains: ['x.test'] })
+  })
+
+  it('addTestAccount sends the password; updateTestAccount omits it when blank', async () => {
+    fetchMock.mockImplementation(async () => reply(201, JSON.stringify({ account: { id: 'a1' } })))
+    await addTestAccount('p1', { ...input, password: 'pw-1' })
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ ...input, password: 'pw-1' })
+
+    await updateTestAccount('p1', 'a1', { ...input, password: '' })
+    const [url, init] = fetchMock.mock.calls[1]
+    expect(String(url)).toMatch(/\/projects\/p1\/test-accounts\/a1$/)
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body)).toEqual(input)
+    expect('password' in JSON.parse(init.body)).toBe(false)
+
+    await updateTestAccount('p1', 'a1', input)
+    expect('password' in JSON.parse(fetchMock.mock.calls[2][1].body)).toBe(false)
+
+    await updateTestAccount('p1', 'a1', { ...input, password: 'new' })
+    expect(JSON.parse(fetchMock.mock.calls[3][1].body).password).toBe('new')
+  })
+
+  it('deleteTestAccount accepts an empty 204', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    await expect(deleteTestAccount('p1', 'a1')).resolves.toBeUndefined()
+    expect(fetchMock.mock.calls[0][1].method).toBe('DELETE')
+  })
+
+  it('startAppRun posts itemIds and turns a 400 sentence into EvidenceApiError', async () => {
+    fetchMock.mockResolvedValueOnce(reply(400, JSON.stringify({ error: 'Pick at most 10 items.' })))
+    const err = await failure(() => startAppRun('p1', ['a', 'b']))
+    expect(err.status).toBe(400)
+    expect(err.message).toBe('Pick at most 10 items.')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toMatch(/\/projects\/p1\/app-runs$/)
+    expect(JSON.parse(init.body)).toEqual({ itemIds: ['a', 'b'] })
+  })
+
+  it('getRunChanges and getSuggestionSteps read their paths', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, JSON.stringify({ changes: [] })))
+    await getRunChanges('p1', 'r1')
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/projects\/p1\/evidence-runs\/r1\/app-changes$/)
+    fetchMock.mockResolvedValueOnce(reply(200, JSON.stringify({ steps: [], changes: [] })))
+    await getSuggestionSteps('s 1')
+    expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/suggestions\/s%201\/steps$/)
   })
 })

@@ -8,6 +8,10 @@ export type Confidence = 'high' | 'medium' | 'low'
 export type AccessStatus = 'ok' | 'error' | 'timeout' | 'login_required' | 'blocked'
 export type RunStatus = 'queued' | 'capturing' | 'assessing' | 'completed' | 'failed' | 'partial'
 export type RunScope = 'all' | 'unfinished'
+// Mirrors backend/src/features/evidence/appTypes.ts
+export type RunSource = 'pages' | 'app'
+export type AgeGroup = 'under_18' | 'adult'
+export type AppStepOutcome = 'done' | 'refused' | 'failed' | 'blocked'
 export type FlagType =
   | 'missing_evidence'
   | 'inaccessible'
@@ -37,6 +41,11 @@ export interface RunView {
   tokensUsed: number
   model: string | null
   promptVersion: string
+  source: RunSource
+  checkedItemIds: string[]
+  uncheckedItemIds: string[]
+  currentItemId: string | null
+  currentStep: number
   error: string | null
   createdAt: string
   startedAt: string | null
@@ -73,6 +82,7 @@ export interface SuggestionView {
   runId: string
   projectId: string
   itemId: string
+  source: RunSource
   suggestedResult: SuggestedResult | null
   reason: string
   confidence: Confidence
@@ -157,3 +167,61 @@ export interface DecisionResponse {
   answer: AppliedAnswer
 }
 export type ScreenshotKind = 'page' | 'quote'
+
+// Mirrors backend/src/features/evidence/appViews.ts. A password is write-only: no view carries it.
+export interface TestAccountView {
+  id: string
+  label: string
+  ageGroup: AgeGroup
+  age: number | null
+  loginName: string
+  handles: string[]
+  hasPassword: true
+  updatedAt: string
+}
+export interface AppSourceView {
+  appUrl: string
+  loginDomains: string[]
+  updatedAt: string
+}
+export interface AppStepView {
+  id: string
+  position: number
+  accountLabel: string | null
+  line: string
+  outcome: AppStepOutcome
+  refusalReason: string | null
+  pageId: string | null
+  hasScreenshot: boolean
+}
+export interface AppChangeView {
+  id: string
+  itemId: string
+  accountLabel: string
+  pageUrl: string
+  control: string
+  before: string
+  after: string
+  restored: boolean
+  restoreDetail: string | null
+}
+
+// Response and request bodies of backend/src/features/evidence/appRoutes.ts
+export interface AppSetupResponse {
+  app: AppSourceView | null
+  accounts: TestAccountView[]
+  secretKeyConfigured: boolean
+}
+/** `password` is required to add an account; on an update, leave it out or empty to keep the saved one. */
+export interface TestAccountInput {
+  label: string
+  ageGroup: AgeGroup
+  age: number | null
+  loginName: string
+  password?: string
+  handles: string[]
+}
+export interface StepsResponse {
+  steps: AppStepView[]
+  changes: AppChangeView[]
+}
