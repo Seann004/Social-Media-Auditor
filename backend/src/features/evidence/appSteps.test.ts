@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { appPassagesOf, describeAction, detectChange, recordStep, stepLine, type StepContext } from './appSteps.js'
-import type { AgentAccount, AppAction, AppElement, AppView } from './appTypes.js'
+import { appPassagesOf, describeAction, detectChange, isAiFinish, locateControl, recordStep, restoreAddress, stepLine, type StepContext } from './appSteps.js'
+import type { AgentAccount, AppAction, AppElement, AppStep, AppView } from './appTypes.js'
 import { createMemoryAppRepository } from './memoryAppRepository.js'
 import { createMemoryRepository } from './memoryRepository.js'
 
@@ -233,5 +233,84 @@ describe('recordStep', () => {
     })
     expect(step).toMatchObject({ outcome: 'refused', refusalReason: 'Not a test account.' })
     expect(step.line).toBe('Step 1 · Teen 15 · Refused: clicked button "Message". Not a test account.')
+  })
+})
+
+describe('detectChange: radios and same-named controls (fix round 1)', () => {
+  const radios = (publicOn: boolean) =>
+    view([
+      el('e1', 'radio', 'Public', { tag: 'input', inputType: 'radio', groupId: 'g1', state: { checked: publicOn } }),
+      el('e2', 'radio', 'Only me', { tag: 'input', inputType: 'radio', groupId: 'g1', state: { checked: !publicOn } }),
+      el('e3', 'radio', 'Friends', { tag: 'input', inputType: 'radio', groupId: 'g2', state: { checked: true } }),
+    ])
+
+  it('records the radio that was on before, with the newly chosen one', () => {
+    expect(detectChange({ type: 'click', ref: 'e2' }, radios(true), radios(false))).toEqual({
+      role: 'radio',
+      control: 'Public',
+      before: 'on',
+      after: 'off',
+      chosen: 'Only me',
+    })
+    expect(detectChange({ type: 'click', ref: 'e2' }, radios(false), radios(false))).toBeNull()
+  })
+
+  const twoSwitches = (first: boolean, second: boolean) =>
+    view([
+      el('e1', 'switch', 'Notifications', { state: { checked: first } }),
+      el('e2', 'switch', 'Notifications', { state: { checked: second } }),
+    ])
+
+  it('keys a control by its place among controls with the same role and name', () => {
+    expect(detectChange({ type: 'toggle', ref: 'e2' }, twoSwitches(true, true), twoSwitches(true, false))).toEqual({
+      role: 'switch',
+      control: 'Notifications (2)',
+      before: 'on',
+      after: 'off',
+    })
+    expect(detectChange({ type: 'toggle', ref: 'e1' }, twoSwitches(true, true), twoSwitches(false, true))).toMatchObject({ control: 'Notifications (1)' })
+    // The count changed between the reads: which one is which cannot be told.
+    const one = view([el('e1', 'switch', 'Notifications', { state: { checked: false } })])
+    expect(detectChange({ type: 'toggle', ref: 'e2' }, twoSwitches(true, true), one)).toBeNull()
+  })
+
+  it('locateControl finds the nth same-named control, and a plain name as it is', () => {
+    expect(locateControl(twoSwitches(true, false), 'switch', 'Notifications (2)')?.ref).toBe('e2')
+    expect(locateControl(twoSwitches(true, false), 'switch', 'Notifications (3)')).toBeNull()
+    expect(locateControl(PAGE, 'switch', 'Private account')?.ref).toBe('e6')
+    const literal = view([el('e9', 'switch', 'Mode (2)', { state: { checked: true } })])
+    expect(locateControl(literal, 'switch', 'Mode (2)')?.ref).toBe('e9')
+  })
+})
+
+describe('restoreAddress', () => {
+  it('keeps origin, path and the parameters that were not hidden, and drops the hash', () => {
+    expect(restoreAddress('http://app.test/settings?token=redacted&tab=privacy#top')).toBe('http://app.test/settings?tab=privacy')
+    expect(restoreAddress('http://app.test/settings?u=%5Bsecret%5D')).toBe('http://app.test/settings')
+    expect(restoreAddress('http://app.test/settings')).toBe('http://app.test/settings')
+  })
+})
+
+describe('isAiFinish', () => {
+  const step = (action: AppAction, outcome: AppStep['outcome']): AppStep => ({
+    id: 's',
+    runId: 'r',
+    itemId: 'i',
+    position: 1,
+    accountId: null,
+    accountLabel: null,
+    action,
+    line: '',
+    outcome,
+    refusalReason: null,
+    pageId: null,
+    createdAt: '',
+  })
+  it('is true only for a finish the AI chose', () => {
+    const finish: AppAction = { type: 'finish', observations: '', evidenceSteps: [] }
+    expect(isAiFinish(step(finish, 'done'))).toBe(true)
+    expect(isAiFinish(step(finish, 'blocked'))).toBe(false)
+    expect(isAiFinish(step(finish, 'failed'))).toBe(false)
+    expect(isAiFinish(step({ type: 'back' }, 'done'))).toBe(false)
   })
 })

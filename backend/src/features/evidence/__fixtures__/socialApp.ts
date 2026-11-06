@@ -22,6 +22,10 @@ export interface SocialState {
   follows: { from: string; to: string }[]
   deleted: string[]
   loginAttempts: { handle: string; ok: boolean }[]
+  /** Set on /settings/privacy with a radio group and a Save button. */
+  postVisibility: Record<string, string>
+  /** Two switches both named "Notifications" on /settings/notifications. */
+  notifications: Record<string, { email: boolean; push: boolean }>
 }
 
 export interface SocialMode {
@@ -94,7 +98,7 @@ function cookieOf(req: IncomingMessage, name: string): string | null {
 
 const NAV_STYLE = '<style>nav a{margin-right:12px} article{border:1px solid #ccc;padding:8px;margin:8px 0}</style>'
 
-function loginPage(error: string | null): string {
+function loginPage(error: string | null, action = '/login'): string {
   const showPassword = `document.getElementById('show').addEventListener('click', () => {
     const field = document.getElementById('password')
     field.type = field.type === 'password' ? 'text' : 'password'
@@ -102,7 +106,7 @@ function loginPage(error: string | null): string {
   return page(
     'Sign in',
     `<section style="min-height:420px"><h1>Social</h1><p>Share moments with friends.</p></section>
-    <form method="post" action="/login">
+    <form method="post" action="${action}">
       <label for="username">Username</label><br><input id="username" name="username" autocomplete="off"><br>
       <label for="password">Password</label><br><input id="password" name="password" type="password"><br>
       <button type="button" id="show">Show password</button>
@@ -245,6 +249,53 @@ function coveredPage(): string {
   )
 }
 
+const VISIBILITY: Record<string, string> = { public: 'Public', only_me: 'Only me' }
+
+function privacyPage(visibility: string): string {
+  const radio = (value: string) =>
+    `<label><input type="radio" name="visibility" value="${value}"${VISIBILITY[value] === visibility ? ' checked' : ''}> ${VISIBILITY[value]}</label>`
+  return page(
+    'Privacy',
+    `<h1>Privacy</h1>
+    <form method="post" action="/settings/privacy" aria-label="Post visibility">
+      <fieldset><legend>Who can see your posts</legend>${radio('public')} ${radio('only_me')}</fieldset>
+      <button type="submit">Save</button>
+    </form>`,
+  )
+}
+
+function notificationsPage(on: { email: boolean; push: boolean }): string {
+  const toggle = (kind: 'email' | 'push', title: string) =>
+    `<section><h2>${title}</h2><button role="switch" aria-label="Notifications" data-kind="${kind}" aria-checked="${on[kind]}">${on[kind] ? 'On' : 'Off'}</button></section>`
+  return page(
+    'Notifications',
+    `<h1>Notifications</h1>${toggle('email', 'Email')}${toggle('push', 'Push')}
+    <script>
+    for (const toggle of document.querySelectorAll('[data-kind]')) {
+      toggle.addEventListener('click', async () => {
+        const next = toggle.getAttribute('aria-checked') !== 'true'
+        await fetch('/api/settings/notifications', { method: 'POST', body: new URLSearchParams({ kind: toggle.dataset.kind, value: String(next) }) })
+        toggle.setAttribute('aria-checked', String(next))
+        toggle.textContent = next ? 'On' : 'Off'
+      })
+    }
+    </script>`,
+  )
+}
+
+/** A sign-in form, and apart from it a search box whose label says username. */
+function findPage(): string {
+  return page(
+    'Find people',
+    `<form role="search" action="/find"><label for="q">Search by username</label> <input id="q" name="q" type="text"></form>
+    <form method="post" action="/login">
+      <label for="username">Username</label> <input id="username" name="username">
+      <label for="password">Password</label> <input id="password" name="password" type="password">
+      <button type="submit">Sign in</button>
+    </form>`,
+  )
+}
+
 const LEAVE_PAGE = page('Leaving', `<p>Taking you elsewhere.</p><script>location.href = 'http://example.org/'</script>`)
 
 /** Starts the app. Users: teen15 (private by default), adult30 and stranger, who is not a test account. */
@@ -257,6 +308,8 @@ export async function startSocialApp(): Promise<SocialApp> {
     follows: [],
     deleted: [],
     loginAttempts: [],
+    postVisibility: { teen15: 'Public', adult30: 'Public', stranger: 'Public' },
+    notifications: { teen15: { email: true, push: true }, adult30: { email: true, push: true }, stranger: { email: true, push: true } },
   }
   let mode: SocialMode = {
     captchaOnLogin: false,
@@ -270,18 +323,19 @@ export async function startSocialApp(): Promise<SocialApp> {
     state = change(state)
   }
 
-  const signIn = (ctx: Ctx) => {
+  /** `at` is the path of the sign-in form; success goes to `home`. */
+  const signIn = (ctx: Ctx, at = '/login', home = '/home') => {
     const typed = ctx.form.get('username') ?? ''
     const account = LOGIN_NAMES[typed]
     const handle = account ?? typed
     const ok = account !== undefined && PASSWORDS[account] === ctx.form.get('password') && !state.deleted.includes(account)
     update((s) => ({ ...s, loginAttempts: [...s.loginAttempts, { handle, ok }] }))
-    if (!ok) return send(ctx.res, loginPage('Wrong password'))
+    if (!ok) return send(ctx.res, loginPage('Wrong password', at))
     if (mode.captchaOnLogin) return redirect(ctx.res, '/captcha')
     if (mode.twoFactorOnLogin) return redirect(ctx.res, '/two-factor')
     const sid = randomBytes(12).toString('hex')
     sessions = new Map(sessions).set(sid, handle)
-    redirect(ctx.res, '/home', { 'set-cookie': `sid=${sid}; Path=/; HttpOnly; SameSite=Lax` })
+    redirect(ctx.res, home, { 'set-cookie': `sid=${sid}; Path=/; HttpOnly; SameSite=Lax` })
   }
 
   const signedIn: Record<string, (ctx: Ctx, viewer: string) => void> = {
@@ -320,6 +374,19 @@ export async function startSocialApp(): Promise<SocialApp> {
       sessions = new Map([...sessions].filter(([, handle]) => handle !== viewer))
       send(ctx.res, page('Deleted', '<p>Your account was deleted</p>'))
     },
+    'GET /settings/privacy': (ctx, viewer) => send(ctx.res, privacyPage(state.postVisibility[viewer] ?? 'Public')),
+    'POST /settings/privacy': (ctx, viewer) => {
+      const value = VISIBILITY[ctx.form.get('visibility') ?? ''] ?? 'Public'
+      update((s) => ({ ...s, postVisibility: { ...s.postVisibility, [viewer]: value } }))
+      redirect(ctx.res, '/settings/privacy')
+    },
+    'GET /settings/notifications': (ctx, viewer) => send(ctx.res, notificationsPage(state.notifications[viewer] ?? { email: true, push: true })),
+    'POST /api/settings/notifications': (ctx, viewer) => {
+      const kind = ctx.form.get('kind') === 'push' ? 'push' : 'email'
+      const current = state.notifications[viewer] ?? { email: true, push: true }
+      update((s) => ({ ...s, notifications: { ...s.notifications, [viewer]: { ...current, [kind]: ctx.form.get('value') === 'true' } } }))
+      send(ctx.res, 'ok')
+    },
     'GET /settings/password': (ctx) => send(ctx.res, changePasswordPage()),
     'POST /settings/password': (ctx) => send(ctx.res, page('Not changed', '<p>Passwords cannot be changed here.</p>')),
     'POST /logout': (ctx) => {
@@ -331,7 +398,11 @@ export async function startSocialApp(): Promise<SocialApp> {
 
   const open: Record<string, (ctx: Ctx) => void> = {
     'GET /login': (ctx) => send(ctx.res, loginPage(null)),
-    'POST /login': signIn,
+    'POST /login': (ctx) => signIn(ctx),
+    // Sign-in form and signed-in home on one path, as some platforms have it.
+    'GET /start': (ctx) => send(ctx.res, ctx.viewer ? homePage(ctx.viewer) : loginPage(null, '/start')),
+    'POST /start': (ctx) => signIn(ctx, '/start', '/start'),
+    'GET /find': (ctx) => send(ctx.res, findPage()),
     'GET /captcha': (ctx) =>
       send(ctx.res, page('Security check', '<h1>Verify you are human</h1><iframe src="/recaptcha/api2/anchor" title="Check"></iframe>')),
     'GET /recaptcha/api2/anchor': (ctx) => send(ctx.res, page('Check', `<label><input type="checkbox"> I'm not a robot</label>`)),

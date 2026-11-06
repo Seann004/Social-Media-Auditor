@@ -7,7 +7,17 @@ import { StepDecisionError, type AccountStatus, type DecideStep, type StepPrompt
 import type { AppRepository } from './appRepository.js'
 import { checkAction, detectBlock, type SafetyContext } from './appSafety.js'
 import type { AppSession, AppSessionPool } from './appSession.js'
-import { detectChange, pathOf, recordStep, type StepContext, type StepInput } from './appSteps.js'
+import {
+  detectChange,
+  isAiFinish,
+  pathOf,
+  recordStep,
+  touchesSetting,
+  unknownChange,
+  type DetectedChange,
+  type StepContext,
+  type StepInput,
+} from './appSteps.js'
 import type { AgentAccount, AppAction, AppChange, AppElement, AppSource, AppStep, AppView, StoppedBy } from './appTypes.js'
 import type { AssessItem } from './assess.js'
 import { APP_MAX_STEPS_PER_CHECK, APP_MAX_TOKENS_PER_RUN, APP_UNREADABLE_REPLIES_BEFORE_STOP } from './config.js'
@@ -63,6 +73,7 @@ const ON_OFF_ROLES = ['switch', 'checkbox', 'radio']
 const UNREADABLE = "The AI's reply could not be read."
 const ASKED = 'asked the AI for the next step'
 const NOT_A_CREDENTIAL_FIELD = 'A login name or password only goes into a sign-in name or password field.'
+const NOT_THE_SIGN_IN_FORM = 'A login name only goes into the sign-in form, next to its password field.'
 /** Stored as the action of a step the AI did not choose: an unreadable reply, or a page that stopped the check. */
 const NO_ACTION: AppAction = { type: 'finish', observations: '', evidenceSteps: [] }
 
@@ -71,6 +82,28 @@ function isCredentialField(el: AppElement): boolean {
   if (el.tag !== 'input') return false
   if (el.inputType === 'password') return true
   return LOGIN_FIELD_TYPES.includes(el.inputType) && LOGIN_FIELD_NAME.test(el.name)
+}
+
+/** A login-name box shares a form or dialog with a password field, or the page has a password field and no forms (ruling A14b). */
+function besidePasswordField(el: AppElement, view: AppView): boolean {
+  const passwords = view.elements.filter((other) => other.inputType === 'password')
+  if (passwords.some((other) => other.groupId !== null && other.groupId === el.groupId)) return true
+  return el.groupId === null && passwords.length > 0 && passwords.every((other) => other.groupId === null)
+}
+
+const unusableReason = (label: string, why: string): string => `${label} can't be used in this run: ${why}`
+
+/**
+ * The checks this loop makes before the safety rules: an unusable account signs in no more (ruling A19),
+ * and credentials go only into credential fields (rulings A14, A14b). Null when none applies.
+ */
+function credentialRefusal(action: AppAction, el: AppElement | null, view: AppView | null, who: AgentAccount | null, unusable: string | null): string | null {
+  const signingIn = action.type === 'fill_credential' || (action.type === 'click' && el !== null && SIGN_IN_CONTROL.test(el.name))
+  if (signingIn && who !== null && unusable !== null) return unusableReason(who.label, unusable)
+  if (action.type !== 'fill_credential' || el === null) return null
+  if (!isCredentialField(el)) return NOT_A_CREDENTIAL_FIELD
+  if (action.field === 'login' && view !== null && !besidePasswordField(el, view)) return NOT_THE_SIGN_IN_FORM
+  return null
 }
 
 function tokensOf(err: unknown): number {
@@ -86,8 +119,9 @@ export function leftChangedLine(change: AppChange): string {
   return `${change.accountLabel}: "${change.control}" on ${pathOf(change.pageUrl)} is ${change.after} (was ${change.before})`
 }
 
-function doneDetail(change: { role: string; control: string; after: string } | null, beforeUrl: string | null, afterUrl: string): string {
+function doneDetail(change: DetectedChange | null, beforeUrl: string | null, afterUrl: string): string {
   if (change !== null) {
+    if (change.chosen !== undefined) return `"${change.chosen}" is now on`
     return ON_OFF_ROLES.includes(change.role) ? `"${change.control}" is now ${change.after}` : `"${change.control}" set to "${change.after}"`
   }
   return beforeUrl === afterUrl ? 'page unchanged' : `page ${pathOf(afterUrl)} opened`
@@ -172,7 +206,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   async function switchAccount(action: Extract<AppAction, { type: 'switch_account' }>): Promise<void> {
     const target = input.accounts.find((a) => sameLabel(a.label, action.account)) ?? null
     const unusable = target === null ? null : pool.stateOf(target.id).unusable
-    if (target !== null && unusable !== null) return refuse(action, `${target.label} can't be used in this run: ${unusable}`)
+    if (target !== null && unusable !== null) return refuse(action, unusableReason(target.label, unusable))
     const verdict = checkAction(action, view, safety())
     if (!verdict.allowed) return refuse(action, verdict.reason)
     if (target === null) return refuse(action, 'That test account is not part of this run.')
@@ -189,14 +223,17 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     await record({ action, outcome: 'done', detail, refusalReason: null, view, screenshot: view === null ? null : await shoot() })
   }
 
-  async function noteChange(change: NonNullable<ReturnType<typeof detectChange>>, at: AppView, el: AppElement, who: AgentAccount): Promise<void> {
+  async function noteChange(change: DetectedChange, at: AppView, el: AppElement, who: AgentAccount): Promise<void> {
     const row = await deps.appRepo.addChange({
       runId: input.run.id,
       itemId: input.item.id,
       accountId: who.id,
       accountLabel: who.label,
       pageUrl: at.url,
-      ...change,
+      role: change.role,
+      control: change.control,
+      before: change.before,
+      after: change.after,
       saveControl: null,
     })
     changes = [...changes, row]
@@ -218,31 +255,36 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   async function act(action: Exclude<AppAction, { type: 'finish' } | { type: 'switch_account' }>): Promise<void> {
     const before = view
     const el = 'ref' in action && action.ref !== undefined ? (before?.elements.find((e) => e.ref === action.ref) ?? null) : null
-    if (action.type === 'fill_credential' && el !== null && !isCredentialField(el)) return refuse(action, NOT_A_CREDENTIAL_FIELD)
+    const refusal = credentialRefusal(action, el, before, account, account === null ? null : pool.stateOf(account.id).unusable)
+    if (refusal !== null) return refuse(action, refusal)
     const verdict = checkAction(action, before, safety())
     if (!verdict.allowed) return refuse(action, verdict.reason)
     const current = session()
     const who = account
     if (current === null || who === null) {
       const detail = who === null ? 'No test account is in use.' : `The session of ${who.label} was not available.`
-      await record({ action, outcome: 'failed', detail, refusalReason: null, view: before, screenshot: null })
+      await record({ action, outcome: 'failed', detail, refusalReason: null, view: null, screenshot: null })
       return
     }
     const result = await current.execute(action)
-    const after = await readView()
+    const setting = before !== null && touchesSetting(action, before)
+    // A setting action may have acted even when it reports failure, so its page is read again if need be (ruling A16).
+    const after = (await readView()) ?? (setting ? await readView() : null)
     const afterUrl = after?.url ?? current.currentUrl()
     view = after
+    const change = before === null ? null : after === null ? unknownChange(action, before) : detectChange(action, before, after)
+    if (change !== null && before !== null && el !== null) await noteChange(change, before, el, who)
     if (!result.ok) {
       await record({ action, outcome: 'failed', detail: result.detail, refusalReason: null, view: after, describedOn: before, screenshot: after === null ? null : await shoot() })
       return
     }
-    const change = before !== null && after !== null ? detectChange(action, before, after) : null
-    if (change !== null && before !== null && el !== null) await noteChange(change, before, el, who)
     if (action.type === 'fill_credential' && action.field === 'password' && before !== null) {
       loginPaths = new Map(loginPaths).set(who.id, pathOf(before.url))
     }
     if (action.type === 'click' && el !== null && before !== null) {
-      if (SIGN_IN_CONTROL.test(el.name) && loginPaths.get(who.id) === pathOf(afterUrl)) pool.noteLoginFailure(who.id)
+      // Still on the login path with a password field showing: the sign-in failed (ruling A18).
+      const stillSigningIn = loginPaths.get(who.id) === pathOf(afterUrl) && after?.hasPasswordField === true
+      if (SIGN_IN_CONTROL.test(el.name) && stillSigningIn) pool.noteLoginFailure(who.id)
       await noteSave(el, before, who)
     }
     const detail = doneDetail(change, before?.url ?? null, afterUrl)
@@ -280,9 +322,9 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
 
     if (action.type === 'finish') {
       const known = steps.length
-      await record({ action, outcome: 'done', detail: '', refusalReason: null, view: null, screenshot: null })
+      const saved = await record({ action, outcome: 'done', detail: '', refusalReason: null, view: null, screenshot: null })
       const evidenceSteps = [...new Set(action.evidenceSteps)].filter((n) => n >= 1 && n <= known)
-      return outcome({ finished: true, evidenceSteps })
+      return outcome({ finished: isAiFinish(saved), evidenceSteps })
     }
     if (action.type === 'switch_account') await switchAccount(action)
     else await act(action)

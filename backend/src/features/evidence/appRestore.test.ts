@@ -3,7 +3,8 @@ import { restoreChanges } from './appRestore.js'
 import { closeBrowser } from './browser.js'
 import { TEST_TIMEOUT_MS } from './__fixtures__/pages.js'
 import { startAppWorld, type AppWorld } from './__fixtures__/appWorld.js'
-import { createCheckKit, on, openPath, RUN, signIn, type CheckKit } from './__fixtures__/checkWorld.js'
+import { createCheckKit, nthRef, on, openPath, RUN, signIn, type CheckKit } from './__fixtures__/checkWorld.js'
+import type { ActionResult, AppSession } from './appSession.js'
 
 vi.setConfig({ testTimeout: TEST_TIMEOUT_MS * 3 })
 
@@ -91,6 +92,90 @@ describe('restoreChanges', () => {
     ])
     const restored = await restore()
     expect(restored.map((c) => c.restoreDetail)).toEqual(['Put back.', 'Put back.'])
+    expect(world.social.state().privateAccount.teen15).toBe(true)
+  })
+})
+
+const teenSession = (): AppSession => kit.pool.get('acc-teen')!
+
+describe('restoreChanges: fix round 1', () => {
+  it('A16: a toggle whose execute reports failure after landing is recorded and put back', async () => {
+    const { outcome } = await kit.check([
+      ...signIn('Teen 15'),
+      openPath('/settings'),
+      (p) => {
+        const session = teenSession()
+        const original = session.execute.bind(session)
+        vi.spyOn(session, 'execute').mockImplementationOnce(async (action): Promise<ActionResult> => {
+          await original(action)
+          return { ok: false, detail: 'The action could not be carried out.' }
+        })
+        return { type: 'toggle', ref: nthRef(p, 'switch', 'Private account', 1) }
+      },
+      FINISH,
+    ])
+    expect(outcome.steps[5].outcome).toBe('failed')
+    expect(outcome.changes.map((c) => [c.control, c.before, c.after])).toEqual([['Private account', 'on', 'off']])
+    expect(world.social.state().privateAccount.teen15).toBe(false)
+    const restored = await restore()
+    expect(restored.map((c) => c.restoreDetail)).toEqual(['Put back.'])
+    expect(world.social.state().privateAccount.teen15).toBe(true)
+  })
+
+  it('A16: a failed read after a setting action records the change as "unknown", and restore puts it back', async () => {
+    const { outcome } = await kit.check([
+      ...signIn('Teen 15'),
+      openPath('/settings'),
+      (p) => {
+        const session = teenSession()
+        vi.spyOn(session, 'read').mockRejectedValueOnce(new Error('read failed')).mockRejectedValueOnce(new Error('read failed'))
+        return { type: 'toggle', ref: nthRef(p, 'switch', 'Private account', 1) }
+      },
+      FINISH,
+    ])
+    expect(outcome.changes.map((c) => [c.control, c.before, c.after])).toEqual([['Private account', 'on', 'unknown']])
+    const restored = await restore()
+    expect(restored.map((c) => c.restoreDetail)).toEqual(['Put back.'])
+    expect(world.social.state().privateAccount.teen15).toBe(true)
+  })
+
+  it('radios: choosing "Only me" over "Public" is recorded as Public on → off, and restore brings Public back', async () => {
+    const { outcome } = await kit.check([
+      ...signIn('Teen 15'),
+      openPath('/settings/privacy'),
+      on('radio', 'Only me'),
+      on('button', 'Save'),
+      FINISH,
+    ])
+    expect(outcome.steps[5].line).toBe('Step 6 · Teen 15 · clicked radio "Only me" → "Only me" is now on')
+    expect(outcome.changes.map((c) => [c.role, c.control, c.before, c.after, c.saveControl])).toEqual([['radio', 'Public', 'on', 'off', 'Save']])
+    expect(world.social.state().postVisibility.teen15).toBe('Only me')
+    const restored = await restore()
+    expect(restored.map((c) => [c.restored, c.restoreDetail])).toEqual([[true, 'Put back.']])
+    expect(world.social.state().postVisibility.teen15).toBe('Public')
+  })
+
+  it('A17: two "Notifications" switches; changing the second is recorded and restored, the first untouched', async () => {
+    const { outcome } = await kit.check([
+      ...signIn('Teen 15'),
+      openPath('/settings/notifications'),
+      (p) => ({ type: 'toggle', ref: nthRef(p, 'switch', 'Notifications', 2) }),
+      FINISH,
+    ])
+    expect(outcome.changes.map((c) => [c.control, c.before, c.after])).toEqual([['Notifications (2)', 'on', 'off']])
+    expect(world.social.state().notifications.teen15).toEqual({ email: true, push: false })
+    const restored = await restore()
+    expect(restored.map((c) => c.restoreDetail)).toEqual(['Put back.'])
+    expect(world.social.state().notifications.teen15).toEqual({ email: true, push: true })
+  })
+
+  it('A15: restore opens the page without the hidden parameters', async () => {
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings?token=abc'), on('switch', 'Private account', 'toggle'), FINISH])
+    expect(outcome.changes[0].pageUrl).toBe(`${world.social.url}/settings?token=redacted`)
+    const goto = vi.spyOn(teenSession(), 'gotoInApp')
+    const restored = await restore()
+    expect(restored.map((c) => c.restoreDetail)).toEqual(['Put back.'])
+    expect(goto.mock.calls.map(([url]) => url)).toEqual([`${world.social.url}/settings`, `${world.social.url}/settings`])
     expect(world.social.state().privateAccount.teen15).toBe(true)
   })
 })

@@ -8,6 +8,7 @@ import { TEST_TIMEOUT_MS } from './__fixtures__/pages.js'
 import { makeAccount, startAppWorld, TEEN_PASSWORD, type AppWorld } from './__fixtures__/appWorld.js'
 import { createCheckKit, createMeter, ITEM, on, openPath, pixelsAt, RUN, signIn, type CheckKit } from './__fixtures__/checkWorld.js'
 import { refOf } from './__fixtures__/fakeAgent.js'
+import { restoreChanges } from './appRestore.js'
 
 vi.setConfig({ testTimeout: TEST_TIMEOUT_MS * 3 })
 
@@ -410,6 +411,8 @@ describe('runCheck: changes and sign-in', () => {
       FINISH,
     ])
     expect(outcome.steps.map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done'])
+    await restoreChanges(kit.pool, outcome.changes, kit.appRepo, world.abort.signal, kit.safety)
+    expect((await kit.appRepo.listChanges(RUN.id)).map((c) => c.restoreDetail)).toEqual(['Put back.'])
     const pages = await kit.repo.listPages(RUN.id)
     const pageIds = pages.map((p) => p.id)
     const errorSpy = vi.mocked(console.error)
@@ -441,5 +444,64 @@ describe('runCheck: changes and sign-in', () => {
         expect(Math.max(r, g, b)).toBeLessThan(40)
       }
     }
+  })
+})
+
+const wrongTeenOf = (world: AppWorld) =>
+  makeAccount(
+    { id: 'acc-teen', label: 'Teen 15', ageGroup: 'under_18', age: 15, loginName: 'teen.login@example.test', handles: ['teen15'] },
+    'Not-The-Password',
+    world.secretKey,
+  )
+
+describe('runCheck: sign-in rules (fix round 1)', () => {
+  it('A19: once the account is unusable, its fills and sign-in clicks are refused with its own reason', async () => {
+    await kit.pool.closeAll()
+    kit = createCheckKit(world, [wrongTeenOf(world), world.adult])
+    const password = (p: StepPrompt) => ({ type: 'fill_credential', ref: refOf(p, 'textbox', 'Password'), account: 'Teen 15', field: 'password' }) as const
+    const { outcome } = await kit.check([...signIn('Teen 15'), password, on('button', 'Sign in'), password, on('button', 'Sign in'), FINISH])
+    const reason = "Teen 15 can't be used in this run: signing in failed twice"
+    expect(outcome.steps.slice(6, 8).map((s) => [s.outcome, s.refusalReason])).toEqual([
+      ['refused', reason],
+      ['refused', reason],
+    ])
+    expect(world.social.state().loginAttempts.filter((a) => !a.ok)).toHaveLength(2)
+    expect(world.social.state().loginAttempts).toHaveLength(2)
+  })
+
+  it('A18: where sign-in and home share a path, a sign-in that leaves no password field is not a failure', async () => {
+    await kit.pool.closeAll()
+    kit = createCheckKit(world, [world.teen, world.adult], { ...world.app, appUrl: `${world.social.url}/start` })
+    const { outcome } = await kit.check([
+      ...signIn('Teen 15'),
+      () => {
+        world.social.setMode({ expireSessions: true })
+        return openPath('/start')
+      },
+      ...signIn('Teen 15').slice(1),
+      FINISH,
+    ])
+    expect(lines(outcome.steps)[3]).toBe('Step 4 · Teen 15 · clicked button "Sign in" → page unchanged')
+    expect(world.social.state().loginAttempts.map((a) => a.ok)).toEqual([true, true])
+    expect(kit.pool.stateOf('acc-teen')).toEqual({ loginFailures: 0, unusable: null })
+  })
+
+  it('A18: a wrong password on a shared path still counts', async () => {
+    await kit.pool.closeAll()
+    kit = createCheckKit(world, [wrongTeenOf(world), world.adult], { ...world.app, appUrl: `${world.social.url}/start` })
+    await kit.check([...signIn('Teen 15'), FINISH])
+    expect(kit.pool.stateOf('acc-teen').loginFailures).toBe(1)
+  })
+
+  it('A14b: a login name goes only into a box in the same form as a password field', async () => {
+    const { outcome } = await kit.check([
+      { type: 'switch_account', account: 'Teen 15' },
+      openPath('/find'),
+      (p) => ({ type: 'fill_credential', ref: refOf(p, 'textbox', 'Search by username'), account: 'Teen 15', field: 'login' }),
+      (p) => ({ type: 'fill_credential', ref: refOf(p, 'textbox', 'Username'), account: 'Teen 15', field: 'login' }),
+      FINISH,
+    ])
+    expect(outcome.steps[2]).toMatchObject({ outcome: 'refused', refusalReason: 'A login name only goes into the sign-in form, next to its password field.' })
+    expect(outcome.steps[3]).toMatchObject({ outcome: 'done' })
   })
 })

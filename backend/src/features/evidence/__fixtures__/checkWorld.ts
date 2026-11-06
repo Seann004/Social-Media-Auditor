@@ -3,7 +3,7 @@ import type { StepPrompt } from '../appAgent.js'
 import { runCheck, type CheckDeps, type CheckInput, type CheckOutcome } from '../appCheck.js'
 import type { SafetyContext } from '../appSafety.js'
 import { createSessionPool, type AppSessionPool } from '../appSession.js'
-import type { AgentAccount, AppAction, TestAccount } from '../appTypes.js'
+import type { AgentAccount, AppAction, AppSource, TestAccount } from '../appTypes.js'
 import type { AssessItem } from '../assess.js'
 import { createMemoryAppRepository } from '../memoryAppRepository.js'
 import { createMemoryRepository } from '../memoryRepository.js'
@@ -58,7 +58,7 @@ export interface CheckRun {
   outcome: CheckOutcome
 }
 
-export function createCheckKit(world: AppWorld, accounts: TestAccount[] = [world.teen, world.adult]): CheckKit {
+export function createCheckKit(world: AppWorld, accounts: TestAccount[] = [world.teen, world.adult], app: AppSource = world.app): CheckKit {
   const repo = createMemoryRepository()
   const appRepo = createMemoryAppRepository()
   const uploads: Upload[] = []
@@ -73,14 +73,14 @@ export function createCheckKit(world: AppWorld, accounts: TestAccount[] = [world
   const pool = createSessionPool({
     browser: world.browser,
     baseGuard: world.baseGuard,
-    app: world.app,
+    app,
     accounts,
     secretKey: world.secretKey,
     signal: world.abort.signal,
     aborted: world.aborted,
   })
   const agents = accounts.map(agentOf)
-  const safety: SafetyContext = { accounts: agents, currentAccount: null, appUrl: world.app.appUrl, loginDomains: world.app.loginDomains }
+  const safety: SafetyContext = { accounts: agents, currentAccount: null, appUrl: app.appUrl, loginDomains: app.loginDomains }
   return {
     repo,
     appRepo,
@@ -97,7 +97,7 @@ export function createCheckKit(world: AppWorld, accounts: TestAccount[] = [world
           item: ITEM,
           platform: 'FixtureSocial',
           accounts: agents,
-          app: world.app,
+          app,
           pool,
           leftChanged: [],
           meter: createMeter(),
@@ -119,6 +119,13 @@ export function signIn(label: string): ScriptEntry[] {
     (p) => ({ type: 'fill_credential', ref: refOf(p, 'textbox', 'Password'), account: label, field: 'password' }),
     (p) => ({ type: 'click', ref: refOf(p, 'button', 'Sign in') }),
   ]
+}
+
+/** The ref of the nth (from 1) element with this role and name. */
+export const nthRef = (p: StepPrompt, role: string, name: string, n: number): string => {
+  const found = (p.view?.elements ?? []).filter((el) => el.role === role && el.name === name)[n - 1]
+  if (found === undefined) throw new Error(`No ${role} "${name}" number ${n} on the page`)
+  return found.ref
 }
 
 export const openPath = (path: string): AppAction => ({ type: 'open_link', url: path })

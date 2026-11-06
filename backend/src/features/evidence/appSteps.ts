@@ -6,6 +6,7 @@ import type { AgentAccount, AppAction, AppElement, AppStep, AppStepOutcome, AppV
 import { splitControlLines, splitIntoPassages } from './passages.js'
 import type { EvidenceRepository, NewPassage, ScreenshotStore } from './repository.js'
 import { redactUrl } from './secrets.js'
+import { SECRET_PLACEHOLDER } from './appSecrets.js'
 
 export interface StepContext {
   run: { id: string; projectId: string }
@@ -136,26 +137,98 @@ export function isSettingControl(el: AppElement): boolean {
   return SETTING_ROLES.includes(el.role) || el.tag === 'select'
 }
 
-/** The control with this role and name on the page, if there is one. */
-export function findControl(view: AppView, role: string, name: string): AppElement | null {
-  return view.elements.find((el) => el.role === role && el.name === name) ?? null
+export interface DetectedChange {
+  role: string
+  /** The control's name, or `<name> (<n>)` when the page has more than one with that role and name (ruling A17). */
+  control: string
+  before: string
+  after: string
+  /** For a radio: the option that was chosen, while the change records the one that was on before. */
+  chosen?: string
 }
 
-/** A setting the action changed: the same control (role and name) on the same path, with a new state. */
-export function detectChange(
-  action: AppAction,
-  before: AppView,
-  after: AppView,
-): { role: string; control: string; before: string; after: string } | null {
+/** The state of a setting whose page could not be read after the action. */
+export const UNKNOWN_STATE = 'unknown'
+const NTH = /^(.*) \((\d+)\)$/
+
+const sameKind = (view: AppView, role: string, name: string): AppElement[] =>
+  view.elements.filter((el) => el.role === role && el.name === name)
+
+/** How a change names a control: by name, and by its place among controls with the same role and name. */
+export function controlKey(view: AppView, el: AppElement): string {
+  const same = sameKind(view, el.role, el.name)
+  return same.length <= 1 ? el.name : `${el.name} (${same.findIndex((other) => other.ref === el.ref) + 1})`
+}
+
+/** The control a key names on the page, or null when it is not there or cannot be told apart from another. */
+export function locateControl(view: AppView, role: string, control: string): AppElement | null {
+  const nth = NTH.exec(control)
+  if (nth !== null) {
+    const same = sameKind(view, role, nth[1])
+    if (same.length >= 2) return same[Number(nth[2]) - 1] ?? null
+  }
+  const exact = sameKind(view, role, control)
+  return exact.length === 1 ? exact[0] : null
+}
+
+/** The setting an action works on: for a radio, the radio of its group that was on before. */
+function changedControl(action: AppAction, before: AppView): { el: AppElement; chosen?: AppElement } | null {
   if (action.type !== 'toggle' && action.type !== 'click' && action.type !== 'select') return null
   const el = elementOf(before, action.ref)
   if (el === null || !isSettingControl(el)) return null
-  if (pathOf(before.url) !== pathOf(after.url)) return null
-  const now = findControl(after, el.role, el.name)
+  if (el.role !== 'radio') return { el }
+  const previous = before.elements.find((other) => other.role === 'radio' && other.ref !== el.ref && other.groupId === el.groupId && other.state.checked === true)
+  return previous === undefined ? null : { el: previous, chosen: el }
+}
+
+/** Whether the action works on a setting, so that its effect must be looked for whatever the action reported. */
+export function touchesSetting(action: AppAction, before: AppView): boolean {
+  return changedControl(action, before) !== null
+}
+
+/** The change to record when the page could not be read after a setting action (ruling A16). */
+export function unknownChange(action: AppAction, before: AppView): DetectedChange | null {
+  const target = changedControl(action, before)
+  if (target === null) return null
+  const change: DetectedChange = { role: target.el.role, control: controlKey(before, target.el), before: controlState(target.el), after: UNKNOWN_STATE }
+  return target.chosen === undefined ? change : { ...change, chosen: target.chosen.name }
+}
+
+/** A setting the action changed: the same control (role, name and place) on the same path, with a new state. */
+export function detectChange(action: AppAction, before: AppView, after: AppView): DetectedChange | null {
+  const target = changedControl(action, before)
+  if (target === null || pathOf(before.url) !== pathOf(after.url)) return null
+  const key = controlKey(before, target.el)
+  const now = locateControl(after, target.el.role, key)
   if (now === null) return null
-  const was = controlState(el)
+  const was = controlState(target.el)
   const is = controlState(now)
-  return was === is ? null : { role: el.role, control: el.name, before: was, after: is }
+  if (was === is) return null
+  const change: DetectedChange = { role: target.el.role, control: key, before: was, after: is }
+  return target.chosen === undefined ? change : { ...change, chosen: target.chosen.name }
+}
+
+/** A finish the AI chose. Blocked and unreadable-reply steps also store a finish action, as a placeholder. */
+export function isAiFinish(step: AppStep): boolean {
+  return step.action.type === 'finish' && step.outcome === 'done'
+}
+
+/** What redactUrl and the session put in place of a hidden value. */
+const HIDDEN_VALUES = ['redacted', SECRET_PLACEHOLDER]
+
+/** The address a change's page is reopened at: its origin and path, and only the parameters that were not hidden (ruling A15). */
+export function restoreAddress(pageUrl: string): string {
+  let parsed: URL
+  try {
+    parsed = new URL(pageUrl)
+  } catch {
+    return pageUrl
+  }
+  const address = new URL(`${parsed.origin}${parsed.pathname}`)
+  for (const [key, value] of parsed.searchParams) {
+    if (!HIDDEN_VALUES.some((hidden) => value === hidden || value.includes(SECRET_PLACEHOLDER))) address.searchParams.append(key, value)
+  }
+  return address.href
 }
 
 async function saveScreenshot(ctx: StepContext, jpeg: Buffer | null): Promise<string | null> {

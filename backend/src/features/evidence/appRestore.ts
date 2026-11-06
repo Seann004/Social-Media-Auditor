@@ -5,7 +5,7 @@
 import type { AppRepository } from './appRepository.js'
 import { checkAction, type SafetyContext } from './appSafety.js'
 import type { AppSession, AppSessionPool } from './appSession.js'
-import { controlState, findControl, pathOf } from './appSteps.js'
+import { controlState, locateControl, pathOf, restoreAddress } from './appSteps.js'
 import type { AppAction, AppChange, AppElement, AppView } from './appTypes.js'
 
 export const RESTORE_DETAILS = {
@@ -24,14 +24,18 @@ interface Result {
   detail: string
 }
 
+async function readShown(session: AppSession): Promise<AppView> {
+  const read = await session.read()
+  return { ...read, url: session.currentUrl() }
+}
+
 /** Opens the change's page afresh and finds its control there. */
 async function openControl(session: AppSession, change: AppChange): Promise<{ view: AppView; el: AppElement | null }> {
   // The navigation's own address is raw: only the session's shown address leaves here.
-  const navigation = await session.gotoInApp(change.pageUrl)
-  const read = await session.read()
-  const view = { ...read, url: session.currentUrl() }
+  const navigation = await session.gotoInApp(restoreAddress(change.pageUrl))
+  const view = await readShown(session)
   if (navigation.blockedReason !== null || pathOf(view.url) !== pathOf(change.pageUrl)) return { view, el: null }
-  return { view, el: findControl(view, change.role, change.control) }
+  return { view, el: locateControl(view, change.role, change.control) }
 }
 
 function undoAction(change: AppChange, el: AppElement): Extract<AppAction, { type: 'select' | 'toggle' }> {
@@ -43,9 +47,11 @@ function undoAction(change: AppChange, el: AppElement): Extract<AppAction, { typ
 /** Clicks the change's Save control, when it has one and it may be clicked. */
 async function save(session: AppSession, change: AppChange, safety: SafetyContext): Promise<boolean> {
   if (change.saveControl === null) return true
-  const read = await session.read()
-  const view = { ...read, url: session.currentUrl() }
-  const button = view.elements.find((el) => el.name === change.saveControl && (el.role === 'button' || el.tag === 'button')) ?? null
+  const view = await readShown(session)
+  const group = locateControl(view, change.role, change.control)?.groupId ?? null
+  const buttons = view.elements.filter((el) => el.name === change.saveControl && (el.role === 'button' || el.tag === 'button'))
+  // A Save in the control's own form or dialog first.
+  const button = buttons.find((el) => group !== null && el.groupId === group) ?? buttons[0] ?? null
   if (button === null) return true
   const click: Extract<AppAction, { type: 'click' }> = { type: 'click', ref: button.ref }
   if (!checkAction(click, view, safety).allowed) return false
@@ -54,6 +60,9 @@ async function save(session: AppSession, change: AppChange, safety: SafetyContex
 }
 
 async function restoreOne(session: AppSession, change: AppChange, safety: SafetyContext): Promise<Result> {
+  if (!checkAction({ type: 'open_link', url: restoreAddress(change.pageUrl) }, null, safety).allowed) {
+    return { restored: false, detail: RESTORE_DETAILS.unsafe }
+  }
   const first = await openControl(session, change)
   if (first.el === null) return { restored: false, detail: notFound(change) }
   if (controlState(first.el) === change.before) return { restored: true, detail: RESTORE_DETAILS.alreadyAsBefore }
