@@ -435,6 +435,29 @@ describe('detectChange: toggle buttons and custom dropdowns (ruling A27)', () =>
     })
   })
 
+  it('a menuitemcheckbox is not exclusive: a closed menu or an unread page records the clicked item itself', () => {
+    const menu = (a: boolean, b: boolean) =>
+      view([
+        el('e1', 'menuitemcheckbox', 'Show activity', { listId: 'l1', state: { checked: a } }),
+        el('e2', 'menuitemcheckbox', 'Read receipts', { listId: 'l1', state: { checked: b } }),
+      ])
+    const closed = view([el('e9', 'button', 'Privacy menu')])
+    const clickReceipts = { type: 'click', ref: 'e2' } as const
+    expect(detectChange(clickReceipts, menu(true, false), closed)).toEqual({
+      role: 'menuitemcheckbox',
+      control: 'Read receipts',
+      before: 'off',
+      after: 'unknown',
+    })
+    expect(unknownChange(clickReceipts, menu(true, false))).toEqual({
+      role: 'menuitemcheckbox',
+      control: 'Read receipts',
+      before: 'off',
+      after: 'unknown',
+    })
+    expect(detectChange(clickReceipts, menu(true, false), menu(false, false))).toBeNull()
+  })
+
   it('an option with no selected or checked state is not a setting', () => {
     const bare = view([el('e1', 'option', 'No one', { tag: 'li' })])
     expect(touchesSetting({ type: 'click', ref: 'e1' }, bare)).toBe(false)

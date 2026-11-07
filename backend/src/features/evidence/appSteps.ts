@@ -137,6 +137,8 @@ function optionOn(el: AppElement): boolean | undefined {
 /** A button with a pressed state (aria-pressed): an on/off setting, like a switch (ruling A27). */
 const isPressedButton = (el: AppElement): boolean => el.role === 'button' && el.state.checked !== undefined
 const isOption = (el: AppElement): boolean => OPTION_ROLES.includes(el.role)
+/** An option of which only one is chosen at a time. A menuitemcheckbox is not: each one is on or off by itself. */
+const isExclusiveOption = (el: AppElement): boolean => isOption(el) && el.role !== 'menuitemcheckbox'
 /** Whether a control is on: undefined when it has no on/off state. */
 const onOf = (el: AppElement): boolean | undefined => (isOption(el) ? optionOn(el) : el.state.checked)
 
@@ -212,7 +214,7 @@ function onBefore(clicked: AppElement, before: AppView): AppElement[] {
 
 function unknownOf(el: AppElement, before: AppView): DetectedChange {
   // For an option, the one chosen before is the one to put back.
-  const was = isOption(el) ? onBefore(el, before)[0] : undefined
+  const was = isExclusiveOption(el) ? onBefore(el, before)[0] : undefined
   return was === undefined
     ? { role: el.role, control: controlKey(before, el), before: controlState(el), after: UNKNOWN_STATE }
     : { role: was.role, control: controlKey(before, was), before: 'on', after: UNKNOWN_STATE }
@@ -260,7 +262,11 @@ function choiceChange(clicked: AppElement, before: AppView, after: AppView): Det
 export function detectChange(action: AppAction, before: AppView, after: AppView): DetectedChange | null {
   const el = settingTarget(action, before)
   if (el === null || pathOf(before.url) !== pathOf(after.url)) return null
-  return el.role === 'radio' || isOption(el) ? choiceChange(el, before, after) : changeOf(el, before, after)
+  if (el.role === 'radio' || isExclusiveOption(el)) return choiceChange(el, before, after)
+  const direct = changeOf(el, before, after)
+  // A menu checkbox whose menu closed after the click: its new state can't be seen, so it is unknown.
+  const gone = isOption(el) && locateControl(after, el.role, controlKey(before, el)) === null
+  return direct === null && gone ? unknownOf(el, before) : direct
 }
 
 /** A finish the AI chose. Blocked and unreadable-reply steps also store a finish action, as a placeholder. */
