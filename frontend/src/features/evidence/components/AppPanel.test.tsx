@@ -293,11 +293,25 @@ describe('App source in the evidence panel', () => {
     m.getSuggestions.mockResolvedValue({ run, suggestions: [], decisions: [] })
     m.reassess.mockResolvedValue({ run })
     render(<Harness />)
-    await user.click(await screen.findByRole('button', { name: /re-assess unfinished/i }))
+    await user.click(await screen.findByRole('button', { name: 'Re-assess unfinished items' }))
     expect(m.reassess).toHaveBeenCalledWith('p1', 'run-1', 'unfinished')
-    await user.click(screen.getByRole('button', { name: /re-assess all/i }))
+    await user.click(screen.getByRole('button', { name: 'Re-assess all checked items' }))
     expect(m.reassess).toHaveBeenCalledWith('p1', 'run-1', 'all')
     expect(screen.queryByRole('button', { name: /^run assessment/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /categories/i })).not.toBeInTheDocument()
+  })
+
+  it('names the Re-assess buttons after the result run, whatever source is chosen', async () => {
+    const user = userEvent.setup()
+    const run = makeRun({ source: 'app' })
+    m.getLatestRun.mockResolvedValue({ run, pages: [] })
+    m.getSuggestions.mockResolvedValue({ run, suggestions: [], decisions: [] })
+    render(<Harness />)
+    await screen.findByRole('button', { name: 'Re-assess unfinished items' })
+    await user.click(screen.getByRole('radio', { name: /public pages/i }))
+    expect(screen.getByRole('button', { name: 'Re-assess unfinished items' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Re-assess all checked items' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /re-assess all categories/i })).not.toBeInTheDocument()
   })
 
   it('shows "starting" instead of step 0 between items', async () => {

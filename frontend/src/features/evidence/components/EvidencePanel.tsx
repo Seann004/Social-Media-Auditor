@@ -27,6 +27,11 @@ interface Props {
 const SIGN_IN_AGAIN = 'AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.'
 const ACTIVE = ['queued', 'capturing', 'assessing']
 const spring = { type: 'spring', stiffness: 100, damping: 20 } as const
+/** Page runs work by category, app runs by checklist item. */
+const REASSESS_LABELS: Record<RunSource, { unfinished: string; all: string }> = {
+  pages: { unfinished: 'Re-assess unfinished', all: 'Re-assess all categories' },
+  app: { unfinished: 'Re-assess unfinished items', all: 'Re-assess all checked items' },
+}
 
 export const parseLinks = (text: string): string[] =>
   text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '')
@@ -163,6 +168,8 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
     })
 
   const onReassess = (scope: RunScope) => perform(() => reassess(projectId, resultRun!.id, scope), true)
+  // Re-assess acts on the result run, so its labels follow that run's source: app runs work by item.
+  const reassessLabels = REASSESS_LABELS[resultRun?.source ?? 'pages']
 
   /** Resolves to an error sentence to show beside the control, or null when saved. */
   const onSavePermission = async (granted: boolean, note: string | undefined): Promise<string | null> => {
@@ -277,7 +284,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
                 className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <ArrowsClockwise size={14} aria-hidden="true" />
-                Re-assess unfinished
+                {reassessLabels.unfinished}
               </button>
               <button
                 type="button"
@@ -285,7 +292,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
                 disabled={!canReassess}
                 className="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Re-assess all categories
+                {reassessLabels.all}
               </button>
             </>
           ) : null}
