@@ -38,7 +38,11 @@ async function openControl(session: AppSession, change: AppChange): Promise<{ vi
   return { view, el: locateControl(view, change.role, change.control) }
 }
 
-function undoAction(change: AppChange, el: AppElement): Extract<AppAction, { type: 'select' | 'toggle' }> {
+/** An option of a custom dropdown or menu is clicked again (ruling A27); its dropdown is not opened first. */
+const CLICKED_BACK_ROLES = ['option', 'menuitemradio', 'menuitemcheckbox']
+
+function undoAction(change: AppChange, el: AppElement): Extract<AppAction, { type: 'select' | 'toggle' | 'click' }> {
+  if (CLICKED_BACK_ROLES.includes(change.role)) return { type: 'click', ref: el.ref }
   return change.role === 'combobox' || el.tag === 'select'
     ? { type: 'select', ref: el.ref, option: change.before }
     : { type: 'toggle', ref: el.ref }

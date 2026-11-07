@@ -60,6 +60,8 @@ export interface AppElement {
   href: string | null
   /** g1, g2, ...: the nearest enclosing form, dialog or composer; null when none. */
   groupId: string | null
+  /** l1, l2, ...: the nearest enclosing listbox or menu, for its options; absent or null when none. */
+  listId?: string | null
   state: AppElementState
   contextText: string
 }

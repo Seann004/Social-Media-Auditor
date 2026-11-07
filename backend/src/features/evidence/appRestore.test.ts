@@ -200,3 +200,41 @@ describe('restoreChanges: radio groups (fix round 2)', () => {
     expect(world.social.state().contact.teen15.birthday).toBe('No one')
   })
 })
+
+describe('restoreChanges: toggle buttons and custom dropdowns (ruling A27)', () => {
+  it('a pressed toggle button is recorded off → on and put back', async () => {
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings/sharing'), on('button', 'Quiet mode', 'toggle'), FINISH])
+    expect(outcome.steps[5].line).toBe('Step 6 · Teen 15 · toggled button "Quiet mode" → "Quiet mode" is now on')
+    expect(outcome.changes.map((c) => [c.role, c.control, c.before, c.after])).toEqual([['button', 'Quiet mode', 'off', 'on']])
+    expect(world.social.state().quietMode.teen15).toBe(true)
+    const restored = await restore()
+    expect(restored.map((c) => [c.restored, c.restoreDetail])).toEqual([[true, 'Put back.']])
+    expect(world.social.state().quietMode.teen15).toBe(false)
+  })
+
+  it('an option of a listbox is recorded as the one that was chosen before, and restore clicks it again', async () => {
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings/messaging'), on('option', 'No one'), FINISH])
+    expect(outcome.steps[5].line).toBe('Step 6 · Teen 15 · clicked option "No one" → "No one" is now on')
+    expect(outcome.changes.map((c) => [c.role, c.control, c.before, c.after])).toEqual([['option', 'Friends', 'on', 'off']])
+    expect(world.social.state().whoCanMessage.teen15).toBe('No one')
+    const restored = await restore()
+    expect(restored.map((c) => [c.restored, c.restoreDetail])).toEqual([[true, 'Put back.']])
+    expect(world.social.state().whoCanMessage.teen15).toBe('Friends')
+  })
+
+  it('a dropdown that closes after the choice is recorded as unknown, and restore says the option was not found', async () => {
+    world.social.setMode({ collapseMessaging: true })
+    const { outcome } = await kit.check([
+      ...signIn('Teen 15'),
+      openPath('/settings/messaging'),
+      on('button', 'Privacy: Friends'),
+      on('option', 'No one'),
+      FINISH,
+    ])
+    expect(outcome.changes.map((c) => [c.role, c.control, c.before, c.after])).toEqual([['option', 'Friends', 'on', 'unknown']])
+    expect(world.social.state().whoCanMessage.teen15).toBe('No one')
+    const restored = await restore()
+    // Restore does not open the dropdown first (ruling A27), so the change stays listed as not put back.
+    expect(restored.map((c) => [c.restored, c.restoreDetail])).toEqual([[false, 'The control "Friends" was not found on /settings/messaging.']])
+  })
+})

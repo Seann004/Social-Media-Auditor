@@ -210,7 +210,7 @@ function recordViolations(violations: string[], urls: string[]): void {
  * followed instead, by followNavigation.
  */
 async function carryOutRequest(route: Route, setup: RouteSetup): Promise<void> {
-  const { context, guard, violations } = setup
+  const { context, violations } = setup
   const request = route.request()
   const mainFrame = isMainFrameNavigation(request)
   if (mainFrame && setup.followPageRedirects) {
@@ -218,7 +218,7 @@ async function carryOutRequest(route: Route, setup: RouteSetup): Promise<void> {
     return
   }
   const maxHops = mainFrame ? 0 : MAX_REDIRECT_HOPS
-  const walk = await walkRedirects(request.url(), guard, maxHops, (url, hop) =>
+  const walk = await walkRedirects(request.url(), guardFor(setup, request), maxHops, (url, hop) =>
     hop === 0
       ? route.fetch({ maxRedirects: 0, timeout: PAGE_TIMEOUT_MS })
       : context.request.get(url, { maxRedirects: 0, timeout: PAGE_TIMEOUT_MS }),
@@ -241,7 +241,10 @@ async function carryOutRequest(route: Route, setup: RouteSetup): Promise<void> {
 /** What the context's route handler works with. */
 interface RouteSetup {
   context: BrowserContext
+  /** Every request is checked against it. */
   guard: UrlGuard
+  /** Document navigations, of the main frame and of frames, are checked against it as well (ruling A28). */
+  documentGuard: UrlGuard
   violations: string[]
   followPageRedirects: boolean
   arrivalTtlMs: number
@@ -276,6 +279,11 @@ function takeArrival(setup: RouteSetup, request: Request, page: Page | null): AP
   if (!arrival || arrival.page !== page) return null
   setup.arrivals.delete(url)
   return arrival.response
+}
+
+/** The guard a request answers to: a document navigation to both guards, anything else to the context's guard. */
+function guardFor(setup: Pick<RouteSetup, 'guard' | 'documentGuard'>, request: Request): UrlGuard {
+  return request.isNavigationRequest() ? bothGuards(setup.documentGuard, setup.guard) : setup.guard
 }
 
 function pageOf(request: Request): Page | null {
@@ -326,7 +334,7 @@ async function followNavigation(route: Route, setup: RouteSetup): Promise<void> 
     return
   }
   const navigationGuard = (page && gates.get(page)?.guard) || setup.guard
-  const walk = await walkRedirects(request.url(), bothGuards(navigationGuard, setup.guard), MAX_REDIRECT_HOPS, (hopUrl, hop) =>
+  const walk = await walkRedirects(request.url(), bothGuards(navigationGuard, guardFor(setup, request)), MAX_REDIRECT_HOPS, (hopUrl, hop) =>
     hop === 0
       ? route.fetch({ maxRedirects: 0, timeout: PAGE_TIMEOUT_MS })
       : setup.context.request.get(hopUrl, { maxRedirects: 0, timeout: PAGE_TIMEOUT_MS, headers: NAVIGATION_HEADERS }),
@@ -390,6 +398,13 @@ export interface GuardedContextOptions {
   followPageRedirects?: boolean
   /** For tests. How long a followed redirect's final response waits for its navigation. */
   arrivalTtlMs?: number
+  /**
+   * App mode (ruling A28): a stricter guard for document navigations only, of the main frame and of
+   * frames. Every other request (scripts, styles, images, fetches) answers to the context's guard alone,
+   * so an app may load files from other public hosts while it still cannot be left. Defaults to the
+   * context's guard, as for a capture (Phase 1).
+   */
+  documentGuard?: UrlGuard
 }
 
 /**
@@ -400,11 +415,21 @@ export async function createGuardedContext(browser: Browser, guard: UrlGuard, op
   const context = await browser.newContext({ serviceWorkers: 'block', userAgent: USER_AGENT, acceptDownloads: false })
   const violations: string[] = []
 
+  const setup: RouteSetup = {
+    context,
+    guard,
+    documentGuard: opts.documentGuard ?? guard,
+    violations,
+    followPageRedirects: opts.followPageRedirects ?? false,
+    arrivalTtlMs: opts.arrivalTtlMs ?? APP_REDIRECT_ARRIVAL_MS,
+    arrivals: new Map(),
+  }
+
   // Detection backstop: sees every request the browser makes, redirect hops included.
   context.on('request', (request) => {
     const url = request.url()
     if (isLocalScheme(url)) return
-    void guard.check(url).then(
+    void guardFor(setup, request).check(url).then(
       (verdict) => {
         if (!verdict.allowed) recordViolations(violations, [url])
       },
@@ -412,14 +437,6 @@ export async function createGuardedContext(browser: Browser, guard: UrlGuard, op
     )
   })
 
-  const setup: RouteSetup = {
-    context,
-    guard,
-    violations,
-    followPageRedirects: opts.followPageRedirects ?? false,
-    arrivalTtlMs: opts.arrivalTtlMs ?? APP_REDIRECT_ARRIVAL_MS,
-    arrivals: new Map(),
-  }
   await context.route('**/*', guardRoute(setup))
   return { context, violations }
 }
@@ -604,6 +621,8 @@ export interface RunContextOptions {
   logUrl: string
   /** App mode, as in GuardedContextOptions. */
   followPageRedirects?: boolean
+  /** App mode, as in GuardedContextOptions. */
+  documentGuard?: UrlGuard
 }
 
 /**
@@ -613,7 +632,10 @@ export interface RunContextOptions {
  */
 export async function openRunContext(opts: RunContextOptions): Promise<RunContext | null> {
   const { signal, logUrl } = opts
-  const opening = createGuardedContext(opts.browser, opts.guard, { followPageRedirects: opts.followPageRedirects })
+  const opening = createGuardedContext(opts.browser, opts.guard, {
+    followPageRedirects: opts.followPageRedirects,
+    documentGuard: opts.documentGuard,
+  })
   try {
     const opened = await withinTimeoutOrAbort(opening, opts.timeoutMs, 'Opening a browser context', opts.aborted)
     if (opened !== null) return withEnd(opened, signal, logUrl)

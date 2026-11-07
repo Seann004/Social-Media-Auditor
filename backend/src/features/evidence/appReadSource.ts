@@ -16,7 +16,7 @@ const INTERACTIVE_SELECTOR = [
   'input',
   'select',
   'textarea',
-  ...['button', 'link', 'switch', 'checkbox', 'radio', 'tab', 'menuitem', 'menuitemradio', 'option', 'combobox'].map((role) => `[role="${role}"]`),
+  ...['button', 'link', 'switch', 'checkbox', 'radio', 'tab', 'menuitem', 'menuitemradio', 'menuitemcheckbox', 'option', 'combobox'].map((role) => `[role="${role}"]`),
   '[contenteditable=""]',
   '[contenteditable="true"]',
 ].join(', ')
@@ -57,6 +57,7 @@ export const APP_READ_SOURCE = String.raw`(() => {
   const MAX_ELEMENTS = ${APP_MAX_ELEMENTS}
   const SELECTOR = ${JSON.stringify(INTERACTIVE_SELECTOR)}
   const GROUP_SELECTOR = 'form, dialog, [role="dialog"], [role="form"]'
+  const LIST_SELECTOR = '[role="listbox"], [role="menu"], [role="menubar"]'
   const NOT_PAGE_TEXT = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'TEXTAREA', 'TITLE', 'SELECT', 'OPTION'])
   const FORM_CONTROLS = new Set(['INPUT', 'SELECT', 'TEXTAREA'])
   const BUTTON_INPUTS = new Set(['button', 'submit', 'reset', 'image'])
@@ -322,7 +323,8 @@ export const APP_READ_SOURCE = String.raw`(() => {
     const checked = aria('aria-checked') ?? aria('aria-pressed')
     if (isToggleInput(el)) state.checked = dom.inputChecked(el)
     else if (checked === 'true' || checked === 'false') state.checked = checked === 'true'
-    if (aria('aria-selected') === 'true') state.selected = true
+    const selected = aria('aria-selected')
+    if (selected === 'true' || selected === 'false') state.selected = selected === 'true'
     if (dom.matches(el, ':disabled') || aria('aria-disabled') === 'true') state.disabled = true
     const expanded = aria('aria-expanded')
     if (expanded === 'true' || expanded === 'false') state.expanded = expanded === 'true'
@@ -352,6 +354,13 @@ export const APP_READ_SOURCE = String.raw`(() => {
       if (!groups.has(group)) groups.set(group, 'g' + (groups.size + 1))
       return groups.get(group)
     }
+    const lists = new Map()
+    const listOf = (el) => {
+      const list = dom.closest(el, LIST_SELECTOR)
+      if (!list) return null
+      if (!lists.has(list)) lists.set(list, 'l' + (lists.size + 1))
+      return lists.get(list)
+    }
     const textCache = new Map()
     const next = new Map()
     const elements = []
@@ -370,6 +379,7 @@ export const APP_READ_SOURCE = String.raw`(() => {
         inputType: inputTypeOf(el),
         href,
         groupId: groupOf(el),
+        listId: listOf(el),
         state: stateOf(el, tag),
         contextText: contextOf(el, hidden, textCache),
       })

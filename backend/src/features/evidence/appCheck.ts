@@ -10,6 +10,7 @@ import type { AppSession, AppSessionPool } from './appSession.js'
 import {
   detectChange,
   isAiFinish,
+  ON_OFF_CHANGE_ROLES,
   pathOf,
   recordStep,
   touchesSetting,
@@ -68,10 +69,13 @@ const SAVE_CONTROL = /\b(save|apply|update|done|confirm)\b/i
 /** A login-name box, by its label. */
 const LOGIN_FIELD_NAME = /\b(?:user ?name|e-?mail|log ?in|phone,? (?:or|\/) e-?mail|e-?mail,? (?:or|\/) phone)\b/i
 const LOGIN_FIELD_TYPES: (string | null)[] = [null, 'text', 'email']
-const ON_OFF_ROLES = ['switch', 'checkbox', 'radio']
 
 const UNREADABLE = "The AI's reply could not be read."
 const ASKED = 'asked the AI for the next step'
+const PAGE_UNREADABLE = 'The app page could not be read, so the check stopped.'
+const READ_PAGE = 'read the page'
+/** Failed reads of the session's page in a row that end the check: the AI is not asked about pages it cannot see. */
+const UNREADABLE_PAGES_BEFORE_STOP = 2
 const NOT_A_CREDENTIAL_FIELD = 'A login name or password only goes into a sign-in name or password field.'
 const NOT_THE_SIGN_IN_FORM = 'A login name only goes into the sign-in form, next to its password field.'
 /** Stored as the action of a step the AI did not choose: an unreadable reply, or a page that stopped the check. */
@@ -122,7 +126,7 @@ export function leftChangedLine(change: AppChange): string {
 function doneDetail(change: DetectedChange | null, beforeUrl: string | null, afterUrl: string): string {
   if (change !== null) {
     if (change.chosen !== undefined) return `"${change.chosen}" is now on`
-    return ON_OFF_ROLES.includes(change.role) ? `"${change.control}" is now ${change.after}` : `"${change.control}" set to "${change.after}"`
+    return ON_OFF_CHANGE_ROLES.includes(change.role) ? `"${change.control}" is now ${change.after}` : `"${change.control}" set to "${change.after}"`
   }
   return beforeUrl === afterUrl ? 'page unchanged' : `page ${pathOf(afterUrl)} opened`
 }
@@ -139,6 +143,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   let account: AgentAccount | null = null
   let view: AppView | null = null
   let unreadableInARow = 0
+  let unreadPagesInARow = 0
   /** Per account, the path where the last password was filled: a sign-in that stays there failed. */
   let loginPaths: ReadonlyMap<string, string> = new Map()
   /** Per change, the form or dialog of its control, to tell which Save button saves it. */
@@ -168,11 +173,17 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   /** The page of the current session, with its address as the session shows it. Null when there is none. */
   async function readView(): Promise<AppView | null> {
     const current = session()
-    if (current === null) return null
+    if (current === null) {
+      // An account in use whose session is gone is a page that cannot be read; no account yet is not.
+      if (account !== null) unreadPagesInARow += 1
+      return null
+    }
     try {
       const read = await current.read()
+      unreadPagesInARow = 0
       return { ...read, url: current.currentUrl() }
     } catch (err) {
+      unreadPagesInARow += 1
       console.error(`[appCheck] run ${input.run.id}: could not read the page of ${current.account.label}`, err instanceof Error ? err.name : 'error')
       return null
     }
@@ -295,6 +306,10 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     if (signal.aborted) return outcome({ stop: 'timeout' })
     if (meter.used() >= tokenCap) return outcome({ stop: 'tokens' })
     if (view === null) view = await readView()
+    if (view === null && unreadPagesInARow >= UNREADABLE_PAGES_BEFORE_STOP) {
+      await record({ action: NO_ACTION, outcome: 'failed', detail: PAGE_UNREADABLE, refusalReason: null, view: null, screenshot: null, description: READ_PAGE })
+      return outcome({ stop: 'error' })
+    }
     const block = view === null ? null : detectBlock(view)
     if (view !== null && block !== null) {
       await record({ action: NO_ACTION, outcome: 'blocked', detail: block, refusalReason: null, view, screenshot: await shoot(), blocked: true })
@@ -303,12 +318,14 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
 
     let action: AppAction
     try {
-      const decision = await deps.decideStep({ prompt: prompt(), apiKey: deps.apiKey, model: deps.model })
+      const decision = await deps.decideStep({ prompt: prompt(), apiKey: deps.apiKey, model: deps.model, signal })
       meter.add(decision.tokensUsed)
       action = decision.action
       unreadableInARow = 0
     } catch (err) {
       meter.add(tokensOf(err))
+      // The run's time ran out while the AI was being asked.
+      if (signal.aborted) return outcome({ stop: 'timeout' })
       if (isGroqLimit(err)) return outcome({ stop: 'limit' })
       if (!(err instanceof StepDecisionError)) {
         console.error(`[appCheck] run ${input.run.id}, item ${input.item.id}: the AI failed, so the check ends`, safeMessage(err, deps.apiKey))

@@ -182,6 +182,8 @@ export type DecideStep = (input: {
   prompt: StepPrompt
   apiKey: string
   model: string
+  /** The run's signal: an abort ends the call, so a timed-out run does not wait on the AI. */
+  signal?: AbortSignal
 }) => Promise<{ action: AppAction; note: string; tokensUsed: number }>
 
 /** The AI's reply could not be used twice in a row. */
@@ -199,13 +201,13 @@ export class StepDecisionError extends Error {
  * Retries once on an unusable reply. Groq failures (limit, 429, others) are thrown as they are, with
  * `tokensUsed` (the tokens of earlier attempts) attached so the caller can still count them.
  */
-export const decideStep: DecideStep = async ({ prompt, apiKey, model }) => {
+export const decideStep: DecideStep = async ({ prompt, apiKey, model, signal }) => {
   const { system, user } = buildStepPrompt(prompt)
   let tokensUsed = 0
   for (let attempt = 0; attempt < 2; attempt++) {
     let result: Awaited<ReturnType<typeof callGroqJson>>
     try {
-      result = await callGroqJson({ apiKey, model, system, user, maxTokens: APP_STEP_OUTPUT_TOKENS })
+      result = await callGroqJson({ apiKey, model, system, user, maxTokens: APP_STEP_OUTPUT_TOKENS, signal })
     } catch (err) {
       if (err instanceof Error) Object.assign(err, { tokensUsed })
       throw err

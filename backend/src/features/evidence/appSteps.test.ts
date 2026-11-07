@@ -370,3 +370,78 @@ describe('detectChange: radio groups (fix round 2)', () => {
     expect(unknownChange({ type: 'click', ref: 'e4' }, form(start))).toEqual({ role: 'radio', control: 'Friends', before: 'off', after: 'unknown' })
   })
 })
+
+describe('detectChange: toggle buttons and custom dropdowns (ruling A27)', () => {
+  const pressed = (on: boolean | undefined) => view([el('e1', 'button', 'Quiet mode', on === undefined ? {} : { state: { checked: on } }), el('e2', 'button', 'Follow')])
+  const option = (ref: string, name: string, on: boolean, extra: Partial<AppElement> = {}) =>
+    el(ref, 'option', name, { tag: 'li', listId: 'l1', state: { selected: on }, ...extra })
+  const list = (chosen: string) => view([option('e1', 'Friends', chosen === 'Friends'), option('e2', 'No one', chosen === 'No one')])
+
+  it('a button with a pressed state is a setting, recorded on/off like a switch', () => {
+    expect(touchesSetting({ type: 'toggle', ref: 'e1' }, pressed(false))).toBe(true)
+    expect(touchesSetting({ type: 'click', ref: 'e1' }, pressed(false))).toBe(true)
+    expect(detectChange({ type: 'click', ref: 'e1' }, pressed(false), pressed(true))).toEqual({ role: 'button', control: 'Quiet mode', before: 'off', after: 'on' })
+    expect(unknownChange({ type: 'toggle', ref: 'e1' }, pressed(true))).toEqual({ role: 'button', control: 'Quiet mode', before: 'on', after: 'unknown' })
+  })
+
+  it('a button with no pressed state is not a setting', () => {
+    expect(touchesSetting({ type: 'click', ref: 'e2' }, pressed(false))).toBe(false)
+    expect(touchesSetting({ type: 'click', ref: 'e1' }, pressed(undefined))).toBe(false)
+    expect(detectChange({ type: 'click', ref: 'e2' }, pressed(false), pressed(false))).toBeNull()
+  })
+
+  it('an option click records the option of the same list that was on before and is off after', () => {
+    expect(touchesSetting({ type: 'click', ref: 'e2' }, list('Friends'))).toBe(true)
+    expect(detectChange({ type: 'click', ref: 'e2' }, list('Friends'), list('No one'))).toEqual({
+      role: 'option',
+      control: 'Friends',
+      before: 'on',
+      after: 'off',
+      chosen: 'No one',
+    })
+  })
+
+  it('an option in another list that turned off is not the one recorded', () => {
+    const two = (chosen: string, other: boolean) =>
+      view([option('e1', 'Friends', chosen === 'Friends'), option('e2', 'No one', chosen === 'No one'), option('e3', 'Everyone', other, { listId: 'l2' })])
+    expect(detectChange({ type: 'click', ref: 'e2' }, two('', true), two('No one', false))).toEqual({ role: 'option', control: 'No one', before: 'off', after: 'on' })
+  })
+
+  it('with none on before, records the clicked option off → on', () => {
+    expect(detectChange({ type: 'click', ref: 'e2' }, list(''), list('No one'))).toEqual({ role: 'option', control: 'No one', before: 'off', after: 'on' })
+  })
+
+  it('a dropdown that closes after the click records the option that was on as unknown', () => {
+    const closed = view([el('e1', 'button', 'Who can message you')])
+    expect(detectChange({ type: 'click', ref: 'e2' }, list('Friends'), closed)).toEqual({ role: 'option', control: 'Friends', before: 'on', after: 'unknown' })
+    expect(detectChange({ type: 'click', ref: 'e2' }, list(''), closed)).toEqual({ role: 'option', control: 'No one', before: 'off', after: 'unknown' })
+  })
+
+  it('menuitemradio and menuitemcheckbox use their checked state', () => {
+    const menu = (role: string, a: boolean, b: boolean) =>
+      view([el('e1', role, 'Everyone', { listId: 'l1', state: { checked: a } }), el('e2', role, 'Friends', { listId: 'l1', state: { checked: b } })])
+    expect(detectChange({ type: 'click', ref: 'e2' }, menu('menuitemradio', true, false), menu('menuitemradio', false, true))).toEqual({
+      role: 'menuitemradio',
+      control: 'Everyone',
+      before: 'on',
+      after: 'off',
+      chosen: 'Friends',
+    })
+    expect(detectChange({ type: 'click', ref: 'e2' }, menu('menuitemcheckbox', true, false), menu('menuitemcheckbox', true, true))).toEqual({
+      role: 'menuitemcheckbox',
+      control: 'Friends',
+      before: 'off',
+      after: 'on',
+    })
+  })
+
+  it('an option with no selected or checked state is not a setting', () => {
+    const bare = view([el('e1', 'option', 'No one', { tag: 'li' })])
+    expect(touchesSetting({ type: 'click', ref: 'e1' }, bare)).toBe(false)
+    expect(unknownChange({ type: 'click', ref: 'e1' }, bare)).toBeNull()
+  })
+
+  it('unknownChange of an option names the one that was on before', () => {
+    expect(unknownChange({ type: 'click', ref: 'e2' }, list('Friends'))).toEqual({ role: 'option', control: 'Friends', before: 'on', after: 'unknown' })
+  })
+})

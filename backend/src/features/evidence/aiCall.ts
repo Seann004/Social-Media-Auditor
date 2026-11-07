@@ -10,6 +10,8 @@ export interface GroqJsonOptions {
   system: string
   user: string
   maxTokens: number
+  /** Ends the call, and any wait for a retry, when it aborts. */
+  signal?: AbortSignal
 }
 
 export interface GroqJsonResult {
@@ -36,6 +38,7 @@ export async function callGroqJson(opts: GroqJsonOptions): Promise<GroqJsonResul
         response_format: { type: 'json_object' },
         ...(opts.model.startsWith(REASONING_MODEL_PREFIX) ? { reasoning_effort: AI_REASONING_EFFORT } : {}),
       }),
+      ...(opts.signal === undefined ? {} : { signal: opts.signal }),
     },
     3,
     GROQ_MAX_WAIT_MS / 1000,

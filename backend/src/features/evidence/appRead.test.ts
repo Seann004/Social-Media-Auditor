@@ -187,6 +187,32 @@ describe('readAppView', () => {
     expect(find(view, 'link', 'Change password').href).toBe(`${social.url}/settings/password`)
   })
 
+  it('A27: reads a pressed button as on/off, and options with their chosen state and their list', async () => {
+    await signIn()
+    await go('/settings/sharing')
+    const sharing = (await readAppView(page, null)).view
+    expect(find(sharing, 'button', 'Quiet mode')).toMatchObject({ state: { checked: false } })
+
+    await go('/settings/messaging')
+    await page.evaluate(() => {
+      const menu = document.createElement('div')
+      menu.setAttribute('role', 'menu')
+      menu.innerHTML = '<div role="menuitemcheckbox" aria-checked="true">Read receipts</div>'
+      document.body.append(menu)
+    })
+    const messaging = (await readAppView(page, null)).view
+    const friends = find(messaging, 'option', 'Friends')
+    const noOne = find(messaging, 'option', 'No one')
+    const receipts = find(messaging, 'menuitemcheckbox', 'Read receipts')
+    expect(friends.state).toMatchObject({ selected: true })
+    expect(noOne.state).toMatchObject({ selected: false })
+    expect(receipts.state).toMatchObject({ checked: true })
+    expect(friends.listId).toMatch(/^l\d+$/)
+    expect(noOne.listId).toBe(friends.listId)
+    expect(receipts.listId).toMatch(/^l\d+$/)
+    expect(receipts.listId).not.toBe(friends.listId)
+  })
+
   it('gives each Follow button the context text of its own article', async () => {
     await signIn()
     const { view } = await readAppView(page, null)

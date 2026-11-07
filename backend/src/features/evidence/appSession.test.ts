@@ -2,10 +2,10 @@ import { randomBytes } from 'node:crypto'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { closeBrowser } from './browser.js'
 import { startPageServer, TEST_TIMEOUT_MS, type PageServer } from './__fixtures__/pages.js'
-import { startAppWorld, TEEN_PASSWORD, type AppWorld } from './__fixtures__/appWorld.js'
+import { makeAccount, startAppWorld, TEEN_PASSWORD, type AppWorld } from './__fixtures__/appWorld.js'
 import { SOCIAL_RESHUFFLE_MS } from './__fixtures__/socialApp.js'
 import { isWorldAlive, outlineLines } from './appRead.js'
-import { createSessionPool, type ActionResult, type AppSession, type AppSessionPool } from './appSession.js'
+import { createSessionPool, type ActionResult, type AppSession, type AppSessionPool, type SessionPoolOptions } from './appSession.js'
 import type { AppElement, AppView } from './appTypes.js'
 import { APP_LOGIN_FAILURES_BEFORE_UNUSABLE } from './config.js'
 
@@ -20,8 +20,8 @@ let world: AppWorld
 let pool: AppSessionPool
 let other: PageServer | null = null
 
-function poolWith(overrides: { secretKey?: Buffer } = {}): AppSessionPool {
-  return createSessionPool({
+function poolOptions(overrides: { secretKey?: Buffer } = {}): SessionPoolOptions {
+  return {
     browser: world.browser,
     baseGuard: world.baseGuard,
     app: world.app,
@@ -29,7 +29,11 @@ function poolWith(overrides: { secretKey?: Buffer } = {}): AppSessionPool {
     secretKey: overrides.secretKey ?? world.secretKey,
     signal: world.abort.signal,
     aborted: world.aborted,
-  })
+  }
+}
+
+function poolWith(overrides: { secretKey?: Buffer } = {}): AppSessionPool {
+  return createSessionPool(poolOptions(overrides))
 }
 
 beforeEach(async () => {
@@ -310,6 +314,50 @@ describe('leaving the app', () => {
     expect(session.currentUrl()).toBe(`${world.social.url}/home`)
   })
 
+  it('A28: a page loads an image and a script from another public host, while a link or frame there is refused', async () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+    other = await startPageServer({
+      '/logo.png': (res) => {
+        res.writeHead(200, { 'content-type': 'image/png' })
+        res.end(png)
+      },
+      '/app.js': (res) => {
+        res.writeHead(200, { 'content-type': 'text/javascript' })
+        res.end("document.getElementById('script').textContent = 'Script ran'")
+      },
+      '/page': '<p>Asset site page</p>',
+      '/frame': '<p>Framed</p>',
+    })
+    await world.close()
+    world = await startAppWorld({ extraPrivateHosts: [`127.0.0.1:${other.port}`] })
+    world.social.setMode({ assetOrigin: other.url })
+    pool = poolWith()
+    const session = await teenSignedIn()
+
+    expectOk(await session.execute({ type: 'open_link', url: `${world.social.url}/gallery` }))
+    const view = await session.read()
+    expect(view.text).toContain('Script ran')
+    expect(await session.page.evaluate(() => (document.getElementById('logo') as HTMLImageElement).naturalWidth)).toBe(1)
+
+    const result = await onControl(session, 'link', 'Asset site', 'click')
+
+    expect(result).toEqual({ ok: false, detail: LINK_OUTSIDE })
+    expect(session.currentUrl()).toBe(`${world.social.url}/gallery`)
+    // Only the files: the link and the frame never reached the other host. (Going back after the stopped link loads the page again.)
+    expect([...new Set(other.requests().map((r) => r.path))].sort()).toEqual(['/app.js', '/logo.png'])
+  })
+
+  it('A28: a sub-resource on a private address the base guard does not allow is still refused', async () => {
+    other = await startPageServer({ '/logo.png': '<p>never</p>', '/app.js': 'never' })
+    world.social.setMode({ assetOrigin: other.url })
+    const session = await teenSignedIn()
+
+    expectOk(await session.execute({ type: 'open_link', url: `${world.social.url}/gallery` }))
+
+    expect((await session.read()).text).toContain('Script not run')
+    expect(other.requests()).toEqual([])
+  })
+
   it('an action that ends outside the app is undone and fails', async () => {
     const session = await teenSignedIn()
     const view = await session.read()
@@ -513,6 +561,28 @@ describe('round 1 fixes', () => {
       expect(shown).not.toContain(leak)
     }
     expect(shown).toContain('[secret]')
+  })
+
+  it.each([
+    ['equal to a handle', 'Teen15', 'teen15', false],
+    ['equal to a handle written with @', '@teen15', 'teen15', false],
+    ['an email', 'teen.login@example.test', '[secret]', true],
+    ['not a handle', 'teenager', '[secret]', true],
+  ])('a login name %s is masked only when it is not one of the account’s handles', async (_name, loginName, shown, masked) => {
+    const teen = makeAccount({ id: 'acc-handle', label: 'Teen 15', ageGroup: 'under_18', age: 15, loginName, handles: ['teen15'] }, TEEN_PASSWORD, world.secretKey)
+    pool = createSessionPool({ ...poolOptions(), accounts: [teen] })
+    const session = await pool.open(teen.id)
+    const view = await session.read()
+    expectOk(await session.execute({ type: 'fill_credential', ref: find(view, 'textbox', 'Username').ref, account: 'Teen 15', field: 'login' }))
+    await session.page.evaluate((name) => {
+      const note = document.createElement('p')
+      note.textContent = `Signed in as ${name}.`
+      document.body.append(note)
+    }, loginName)
+
+    const text = (await session.read()).text
+    expect(text).toContain(`Signed in as ${masked ? shown : loginName}.`)
+    if (masked) expect(text).not.toContain(loginName)
   })
 
   it('the fixture signs an account in only with its login name, so a handle typed as the login is refused', async () => {

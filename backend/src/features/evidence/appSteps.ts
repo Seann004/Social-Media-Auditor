@@ -38,6 +38,10 @@ export interface StepInput {
 /** Controls whose state is a setting. */
 const SETTING_ROLES = ['switch', 'checkbox', 'radio', 'combobox']
 const ON_OFF_ROLES = ['switch', 'checkbox', 'radio']
+/** The options of a custom dropdown or menu (ruling A27): a setting when they say whether they are chosen, recorded like radios. */
+const OPTION_ROLES = ['option', 'menuitemradio', 'menuitemcheckbox']
+/** Roles whose changes are on/off: the above, and a toggle button with a pressed state (ruling A27). */
+export const ON_OFF_CHANGE_ROLES = [...ON_OFF_ROLES, 'button', ...OPTION_ROLES]
 
 /** The path of an address, which is all a step line shows of it. */
 export function pathOf(url: string): string {
@@ -125,16 +129,28 @@ export function appPassagesOf(line: string, view: AppView): NewPassage[] {
   ]
 }
 
+/** Whether an option says it is chosen: by aria-checked, else aria-selected. Undefined when it says neither. */
+function optionOn(el: AppElement): boolean | undefined {
+  return el.state.checked ?? el.state.selected
+}
+
+/** A button with a pressed state (aria-pressed): an on/off setting, like a switch (ruling A27). */
+const isPressedButton = (el: AppElement): boolean => el.role === 'button' && el.state.checked !== undefined
+const isOption = (el: AppElement): boolean => OPTION_ROLES.includes(el.role)
+/** Whether a control is on: undefined when it has no on/off state. */
+const onOf = (el: AppElement): boolean | undefined => (isOption(el) ? optionOn(el) : el.state.checked)
+
 /** A setting's state as a change records it: on or off, or the selected value. */
 export function controlState(el: AppElement): string {
-  if (ON_OFF_ROLES.includes(el.role) && el.state.checked !== undefined) return el.state.checked ? 'on' : 'off'
+  const on = onOf(el)
+  if ((ON_OFF_ROLES.includes(el.role) || isPressedButton(el) || isOption(el)) && on !== undefined) return on ? 'on' : 'off'
   if (el.state.checked !== undefined && el.tag === 'input') return el.state.checked ? 'on' : 'off'
   return el.state.value ?? ''
 }
 
 /** Whether a control's state is a setting that a change records. */
 export function isSettingControl(el: AppElement): boolean {
-  return SETTING_ROLES.includes(el.role) || el.tag === 'select'
+  return SETTING_ROLES.includes(el.role) || el.tag === 'select' || isPressedButton(el) || (isOption(el) && optionOn(el) !== undefined)
 }
 
 export interface DetectedChange {
@@ -183,10 +199,29 @@ export function touchesSetting(action: AppAction, before: AppView): boolean {
   return settingTarget(action, before) !== null
 }
 
+/** Options of one list or menu; outside any, of one form or dialog, as radios are. */
+function together(a: AppElement, b: AppElement): boolean {
+  const list = a.listId ?? null
+  return list !== null ? list === (b.listId ?? null) : (b.listId ?? null) === null && a.groupId === b.groupId
+}
+
+/** The others of the clicked choice's kind, in its group, that were on before it was clicked. */
+function onBefore(clicked: AppElement, before: AppView): AppElement[] {
+  return before.elements.filter((r) => r.role === clicked.role && r.ref !== clicked.ref && together(r, clicked) && onOf(r) === true)
+}
+
+function unknownOf(el: AppElement, before: AppView): DetectedChange {
+  // For an option, the one chosen before is the one to put back.
+  const was = isOption(el) ? onBefore(el, before)[0] : undefined
+  return was === undefined
+    ? { role: el.role, control: controlKey(before, el), before: controlState(el), after: UNKNOWN_STATE }
+    : { role: was.role, control: controlKey(before, was), before: 'on', after: UNKNOWN_STATE }
+}
+
 /** The change to record when the page could not be read after a setting action (ruling A16): the clicked control, state unknown. */
 export function unknownChange(action: AppAction, before: AppView): DetectedChange | null {
   const el = settingTarget(action, before)
-  return el === null ? null : { role: el.role, control: controlKey(before, el), before: controlState(el), after: UNKNOWN_STATE }
+  return el === null ? null : unknownOf(el, before)
 }
 
 function changeOf(el: AppElement, before: AppView, after: AppView): DetectedChange | null {
@@ -199,26 +234,33 @@ function changeOf(el: AppElement, before: AppView, after: AppView): DetectedChan
 }
 
 /**
- * A radio click, read from what changed. The outline knows a radio's form or dialog but not its own
- * group, and one form may hold several groups, so the radio that matters is the one in that form that
- * was on before and is off after: it is recorded on → off, with the clicked radio as the one chosen.
- * When none turned off (nothing was chosen before), the clicked radio itself is recorded off → on.
+ * A radio or option click, read from what changed. The outline knows a radio's form or dialog but not
+ * its own group, and one form may hold several groups, so the radio that matters is the one in that
+ * form that was on before and is off after: it is recorded on → off, with the clicked radio as the one
+ * chosen. An option is matched the same way within its list or menu (ruling A27). When none turned off
+ * (nothing was chosen before), the clicked control itself is recorded off → on. A dropdown that closed
+ * after the click shows neither, so its option is recorded as unknown.
  */
-function radioChange(clicked: AppElement, before: AppView, after: AppView): DetectedChange | null {
-  const turnedOff = before.elements
-    .filter((r) => r.role === 'radio' && r.ref !== clicked.ref && r.groupId === clicked.groupId && r.state.checked === true)
-    .find((r) => locateControl(after, 'radio', controlKey(before, r))?.state.checked === false)
+function choiceChange(clicked: AppElement, before: AppView, after: AppView): DetectedChange | null {
+  const wereOn = onBefore(clicked, before)
+  const turnedOff = wereOn.find((r) => {
+    const now = locateControl(after, r.role, controlKey(before, r))
+    return now !== null && onOf(now) === false
+  })
   if (turnedOff !== undefined) {
-    return { role: 'radio', control: controlKey(before, turnedOff), before: 'on', after: 'off', chosen: clicked.name }
+    return { role: clicked.role, control: controlKey(before, turnedOff), before: 'on', after: 'off', chosen: clicked.name }
   }
-  return changeOf(clicked, before, after)
+  const direct = changeOf(clicked, before, after)
+  if (direct !== null || !isOption(clicked)) return direct
+  const gone = [clicked, ...wereOn].every((r) => locateControl(after, r.role, controlKey(before, r)) === null)
+  return gone ? unknownOf(clicked, before) : null
 }
 
 /** A setting the action changed: the same control (role, name and place) on the same path, with a new state. */
 export function detectChange(action: AppAction, before: AppView, after: AppView): DetectedChange | null {
   const el = settingTarget(action, before)
   if (el === null || pathOf(before.url) !== pathOf(after.url)) return null
-  return el.role === 'radio' ? radioChange(el, before, after) : changeOf(el, before, after)
+  return el.role === 'radio' || isOption(el) ? choiceChange(el, before, after) : changeOf(el, before, after)
 }
 
 /** A finish the AI chose. Blocked and unreadable-reply steps also store a finish action, as a placeholder. */

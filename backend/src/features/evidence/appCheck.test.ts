@@ -505,3 +505,51 @@ describe('runCheck: sign-in rules (fix round 1)', () => {
     expect(outcome.steps[3]).toMatchObject({ outcome: 'done' })
   })
 })
+
+describe('runCheck: a page that cannot be read', () => {
+  it('two failed reads in a row end the check with stop error and a failed step, without asking the AI again', async () => {
+    const { agent, outcome } = await kit.check([
+      ...signIn('Teen 15'),
+      () => {
+        vi.spyOn(kit.pool.get('acc-teen')!, 'read').mockRejectedValue(new Error('browser gone'))
+        return openPath('/settings')
+      },
+      openPath('/home'),
+      openPath('/settings'),
+    ])
+    expect(outcome.stop).toBe('error')
+    expect(outcome.finished).toBe(false)
+    expect(lines(outcome.steps).at(-1)).toBe('Step 6 · Teen 15 · Failed: read the page. The app page could not be read, so the check stopped.')
+    expect(outcome.steps.at(-1)?.outcome).toBe('failed')
+    expect(agent.prompts).toHaveLength(5)
+  })
+
+  it('one failed read is tried again and the check goes on', async () => {
+    const { outcome } = await kit.check([
+      ...signIn('Teen 15'),
+      () => {
+        vi.spyOn(kit.pool.get('acc-teen')!, 'read').mockRejectedValueOnce(new Error('read failed'))
+        return openPath('/settings')
+      },
+      FINISH,
+    ])
+    expect(outcome.stop).toBeNull()
+    expect(outcome.finished).toBe(true)
+  })
+})
+
+describe('runCheck: a run that times out while the AI is asked', () => {
+  it('gives the run signal to the AI call, and an abort there ends the check with stop timeout', async () => {
+    const run = new AbortController()
+    const signals: (AbortSignal | undefined)[] = []
+    const decideStep = vi.fn(async ({ signal }: { signal?: AbortSignal }) => {
+      signals.push(signal)
+      run.abort()
+      throw new DOMException('aborted', 'AbortError')
+    })
+    const { outcome } = await kit.check([], { signal: run.signal }, { decideStep })
+    expect(signals).toEqual([run.signal])
+    expect(outcome.stop).toBe('timeout')
+    expect(outcome.steps).toEqual([])
+  })
+})

@@ -2,7 +2,7 @@ import type { Page } from 'playwright'
 import { chooseOption, DEAD_WORLD_ERROR, elementPoint, focusElement, followLink, markSecretField } from './appRead.js'
 import type { AppAction, AppSource, TestAccount } from './appTypes.js'
 import { gotoGuarded } from './browser.js'
-import { APP_ACTION_TIMEOUT_MS } from './config.js'
+import { APP_ACTION_TIMEOUT_MS, APP_MIN_SECRET_CHARS } from './config.js'
 import type { IsolatedWorld } from './pageRead.js'
 import { decryptSecret, secretAad, SecretUnreadableError } from './secrets.js'
 import type { UrlGuard } from './urlGuard.js'
@@ -82,6 +82,19 @@ async function goBack(env: ActionEnv): Promise<ActionResult> {
   return response === null && env.page.url() === before ? fail('There is no earlier page.') : ok('Went back.')
 }
 
+const handleForm = (text: string): string => text.trim().replace(/^@/, '').toLowerCase()
+
+/**
+ * Whether a typed value is masked and scrubbed from then on. The password always is. A login name is
+ * too unless it is shorter than APP_MIN_SECRET_CHARS or is one of the account's own handles: the handle
+ * shows all over the account's own pages, and hiding it there would only lose evidence.
+ */
+function isKeptSecret(account: TestAccount, field: 'login' | 'password', value: string): boolean {
+  if (field === 'password') return true
+  if (Array.from(value).length < APP_MIN_SECRET_CHARS) return false
+  return !account.handles.some((handle) => handleForm(handle) === handleForm(value))
+}
+
 /**
  * Types the account's login name or password into the field. The password is decrypted here and
  * nowhere else. Whatever goes wrong, the result names the account and the field and nothing
@@ -98,7 +111,7 @@ async function fillCredential(env: ActionEnv, action: Extract<SessionAction, { t
       action.field === 'login'
         ? account.loginName
         : decryptSecret(account.passwordCiphertext, env.secretKey, secretAad(account.projectId, account.id))
-    env.remember(value)
+    if (isKeptSecret(account, action.field, value)) env.remember(value)
     const world = requireWorld(env)
     if (!(await focusElement(world, action.ref))) return fail(`Filling the ${what} of ${account.label} failed.`)
     await markSecretField(world, action.ref)

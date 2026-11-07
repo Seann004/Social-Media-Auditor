@@ -28,6 +28,10 @@ export interface SocialState {
   notifications: Record<string, { email: boolean; push: boolean }>
   /** Three radio groups in one form on /settings/contact; `birthday` starts with no option chosen. */
   contact: Record<string, ContactChoices>
+  /** A toggle button with aria-pressed on /settings/sharing. */
+  quietMode: Record<string, boolean>
+  /** A custom listbox of options on /settings/messaging. */
+  whoCanMessage: Record<string, string>
 }
 
 export interface ContactChoices {
@@ -43,6 +47,10 @@ export interface SocialMode {
   reshuffleButtons: boolean
   /** Setting it ends every signed-in session: the next request is sent back to /login. */
   expireSessions: boolean
+  /** /settings/messaging shows its options only after its button is clicked, and closes them after a choice. */
+  collapseMessaging: boolean
+  /** An origin /gallery loads an image and a script from, and links to. */
+  assetOrigin: string | null
 }
 
 export interface SocialApp {
@@ -309,6 +317,58 @@ function contactPage(choices: ContactChoices): string {
   return page('Contact', `<h1>Contact</h1><form method="post" action="/settings/contact" aria-label="Contact settings">${groups}<button type="submit">Save</button></form>`)
 }
 
+/** A toggle button whose pressed state is the setting. */
+function sharingPage(quiet: boolean): string {
+  return page(
+    'Sharing',
+    `<h1>Sharing</h1><p><button id="quiet" aria-pressed="${quiet}">Quiet mode</button></p>
+    <script>
+    const quiet = document.getElementById('quiet')
+    quiet.addEventListener('click', async () => {
+      const next = quiet.getAttribute('aria-pressed') !== 'true'
+      await fetch('/api/settings/quiet', { method: 'POST', body: new URLSearchParams({ value: String(next) }) })
+      quiet.setAttribute('aria-pressed', String(next))
+    })
+    </script>`,
+  )
+}
+
+const MESSAGE_CHOICES = ['Everyone', 'Friends', 'No one']
+
+/** A custom dropdown: a listbox of options, saved as soon as one is clicked. Collapsed, it opens from its button. */
+function messagingPage(chosen: string, collapse: boolean): string {
+  const options = MESSAGE_CHOICES.map((choice) => `<li role="option" aria-selected="${choice === chosen}">${choice}</li>`).join('')
+  const opener = collapse ? `<button id="open" aria-expanded="false" aria-controls="who">Privacy: ${escapeHtml(chosen)}</button>` : ''
+  return page(
+    'Messaging',
+    `<h1>Messaging</h1>${opener}<ul role="listbox" id="who" aria-label="Who can message you"${collapse ? ' hidden' : ''}>${options}</ul>
+    <script>
+    const list = document.getElementById('who')
+    const opener = document.getElementById('open')
+    if (opener) opener.addEventListener('click', () => { list.hidden = false; opener.setAttribute('aria-expanded', 'true') })
+    for (const option of list.querySelectorAll('[role=option]')) {
+      option.addEventListener('click', async () => {
+        await fetch('/api/settings/messaging', { method: 'POST', body: new URLSearchParams({ value: option.textContent }) })
+        for (const other of list.querySelectorAll('[role=option]')) other.setAttribute('aria-selected', String(other === option))
+        if (opener) { list.hidden = true; opener.setAttribute('aria-expanded', 'false'); opener.textContent = 'Privacy: ' + option.textContent }
+      })
+    }
+    </script>`,
+  )
+}
+
+/** A page whose image and script come from another origin, with a link to that origin and a frame of it. */
+function galleryPage(origin: string | null): string {
+  if (origin === null) return page('Gallery', '<p>No assets.</p>')
+  const at = escapeHtml(origin)
+  return page(
+    'Gallery',
+    `<h1>Gallery</h1><img id="logo" src="${at}/logo.png" alt="Logo"><p id="script">Script not run</p><a href="${at}/page">Asset site</a>
+    <iframe src="${at}/frame" title="Embedded"></iframe>
+    <script src="${at}/app.js"></script>`,
+  )
+}
+
 /** A sign-in form, and apart from it a search box whose label says username. */
 function findPage(): string {
   return page(
@@ -337,6 +397,8 @@ export async function startSocialApp(): Promise<SocialApp> {
     postVisibility: { teen15: 'Public', adult30: 'Public', stranger: 'Public' },
     notifications: { teen15: { email: true, push: true }, adult30: { email: true, push: true }, stranger: { email: true, push: true } },
     contact: { teen15: DEFAULT_CONTACT, adult30: DEFAULT_CONTACT, stranger: DEFAULT_CONTACT },
+    quietMode: { teen15: false, adult30: false, stranger: false },
+    whoCanMessage: { teen15: 'Friends', adult30: 'Everyone', stranger: 'Everyone' },
   }
   let mode: SocialMode = {
     captchaOnLogin: false,
@@ -344,6 +406,8 @@ export async function startSocialApp(): Promise<SocialApp> {
     hidePrivacySwitch: false,
     reshuffleButtons: false,
     expireSessions: false,
+    collapseMessaging: false,
+    assetOrigin: null,
   }
   let sessions = new Map<string, string>()
   const update = (change: (s: SocialState) => SocialState) => {
@@ -425,6 +489,20 @@ export async function startSocialApp(): Promise<SocialApp> {
       update((s) => ({ ...s, contact: { ...s.contact, [viewer]: next } }))
       redirect(ctx.res, '/settings/contact')
     },
+    'GET /settings/sharing': (ctx, viewer) => send(ctx.res, sharingPage(state.quietMode[viewer] ?? false)),
+    'POST /api/settings/quiet': (ctx, viewer) => {
+      const value = ctx.form.get('value') === 'true'
+      update((s) => ({ ...s, quietMode: { ...s.quietMode, [viewer]: value } }))
+      send(ctx.res, 'ok')
+    },
+    'GET /settings/messaging': (ctx, viewer) => send(ctx.res, messagingPage(state.whoCanMessage[viewer] ?? 'Everyone', mode.collapseMessaging)),
+    'POST /api/settings/messaging': (ctx, viewer) => {
+      const value = ctx.form.get('value') ?? ''
+      if (!MESSAGE_CHOICES.includes(value)) return send(ctx.res, 'unknown choice', 400)
+      update((s) => ({ ...s, whoCanMessage: { ...s.whoCanMessage, [viewer]: value } }))
+      send(ctx.res, 'ok')
+    },
+    'GET /gallery': (ctx) => send(ctx.res, galleryPage(mode.assetOrigin)),
     'GET /settings/password': (ctx) => send(ctx.res, changePasswordPage()),
     'POST /settings/password': (ctx) => send(ctx.res, page('Not changed', '<p>Passwords cannot be changed here.</p>')),
     'POST /logout': (ctx) => {

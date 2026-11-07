@@ -56,4 +56,11 @@ describe('callGroqJson', () => {
     expect(err.message).toContain('500')
     expect(err.message).not.toContain('KEY')
   })
+  it('passes the given signal to fetch', async () => {
+    const f = vi.fn().mockResolvedValue(reply({ a: 1 }))
+    vi.stubGlobal('fetch', f)
+    const run = new AbortController()
+    await callGroqJson({ apiKey: 'KEY', model: 'm', system: 's', user: 'u', maxTokens: 5, signal: run.signal })
+    expect((f.mock.calls[0][1] as RequestInit).signal).toBe(run.signal)
+  })
 })

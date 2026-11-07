@@ -277,10 +277,10 @@ The server checks these rules in code before every action. They are not only wri
 | Only our own accounts | Messages, follows, comments, tags, mentions, invites or friend requests aimed at anyone who is not one of the project's test accounts, or with no clear target. |
 | Nothing public | Post, Publish, Share, Go live and similar buttons, unless the audience was first set to private (or test accounts only) and the page confirms it. |
 | Nothing destructive | Deleting or deactivating an account, changing a password, email or phone number, payments and purchases, signing out other sessions. |
-| Stay on the platform | Any address outside the app's host, its subdomains and the listed login domains. Private or local addresses are allowed only through `EVIDENCE_ALLOWED_PRIVATE_HOSTS` (for a demo or test app). |
+| Stay on the platform | Any address outside the app's host, its subdomains and the listed login domains. Private or local addresses are allowed only through `EVIDENCE_ALLOWED_PRIVATE_HOSTS` (for a demo or test app). Pages may still load files (scripts, styles, images) from other public hosts, but the AI can only move between pages of the app and its login domains. |
 | Stop on blocks | A captcha, 2-factor prompt, bot check or "suspicious activity" page ends that check and is reported as a page that could not be read. The system never tries to get past it. |
 
-Settings the AI changes are put back at the end of each check where possible. Anything that could not be put back is shown on the run summary and in the replay, and later checks are told about it. If a test account fails to sign in twice, it is marked unusable for the rest of the run, and the run goes on.
+Settings the AI changes are put back at the end of each check where possible. This covers switches, checkboxes, radio buttons, drop-down lists, toggle buttons that show as pressed or not, and options in a custom drop-down or menu. Anything that could not be put back is shown on the run summary and in the replay, and later checks are told about it. If a test account fails to sign in twice, it is marked unusable for the rest of the run, and the run goes on.
 
 **These rules are a safety net, not a guarantee.** The server decides by reading the words and links on the page, so it can be fooled. Please use dedicated test accounts only, never real people's accounts, and look at the replay before trusting a result.
 
@@ -291,6 +291,8 @@ What the rules cannot catch:
 - **A public chat box that shows only our test handle.** If the page around a "Send" button shows only our own test handle, a public message can look like a private one.
 - **Short words in addresses.** Pages with `t` or `chat` in the address can be mistaken for conversations. The part of the address after `?` or `#` is ignored.
 - **English only.** The word lists for "public" and "destructive" are English only.
+- **Custom drop-downs that close.** If a custom drop-down closes after a choice, its new value cannot be read. The change is listed as unknown, and it is put back only if the old option can be seen when the page is opened again (the drop-down is not opened first). Otherwise it is shown as not put back.
+- **Controls that do not say their state.** A button or option that does not say whether it is on (pressed, selected or checked) is not seen as a setting, so a change made with it is not recorded.
 
 What the rules refuse because they cannot be sure (safe, but these checks are lost):
 
@@ -302,7 +304,7 @@ What the rules refuse because they cannot be sure (safe, but these checks are lo
 
 ### What is sent to Groq
 
-Only text goes to Groq: the visible text of each page, a short list of its controls, the checklist item wording, and the plain sentences of earlier steps. **Passwords are never sent, and screenshots are never sent.** The browser types the password itself, and the password box is blanked before every screenshot. Screenshots are kept only as proof for people. If the AI is not available, the item is left "not checked" and nothing is guessed.
+Only text goes to Groq: the visible text of each page, a short list of its controls, the checklist item wording, and the plain sentences of earlier steps. **Passwords are never sent, and screenshots are never sent.** The browser types the password itself, and the password box is blanked before every screenshot. A login name is hidden the same way, unless it is one of the account's own handles or shorter than 4 characters. Screenshots are kept only as proof for people. If the AI is not available, the item is left "not checked" and nothing is guessed.
 
 ### Limits
 

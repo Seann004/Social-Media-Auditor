@@ -260,4 +260,17 @@ describe('decideStep', () => {
     expect(err).not.toBeInstanceOf(StepDecisionError)
     expect(g).toHaveBeenCalledTimes(1)
   })
+  it('passes the run signal to the Groq fetch, so an aborted run stops waiting on the AI', async () => {
+    const f = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError')
+      return reply(good)
+    })
+    vi.stubGlobal('fetch', f)
+    const run = new AbortController()
+    await decideStep({ prompt: promptWith(), apiKey: 'KEY', model: 'm', signal: run.signal })
+    expect((f.mock.calls[0][1] as RequestInit).signal).toBe(run.signal)
+    run.abort()
+    const err = await decideStep({ prompt: promptWith(), apiKey: 'KEY', model: 'm', signal: run.signal }).catch((e) => e)
+    expect(err).toMatchObject({ name: 'AbortError' })
+  })
 })

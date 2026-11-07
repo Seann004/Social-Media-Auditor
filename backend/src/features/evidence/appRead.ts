@@ -49,6 +49,7 @@ const rawViewSchema = z.object({
       inputType: z.string().nullable(),
       href: z.string().nullable(),
       groupId: z.string().nullable(),
+      listId: z.string().nullable(),
       state: stateSchema,
       contextText: z.string(),
     }),

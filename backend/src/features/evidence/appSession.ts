@@ -95,9 +95,11 @@ function describeFailure(err: unknown, address: string): ActionResult {
 
 async function createSession(opts: SessionPoolOptions, guard: UrlGuard, account: TestAccount): Promise<OpenSession> {
   const { app, signal } = opts
+  // Files may come from any host the base guard allows; documents only from the app's scope (ruling A28).
   const context = await openRunContext({
     browser: opts.browser,
-    guard,
+    guard: opts.baseGuard,
+    documentGuard: guard,
     signal,
     aborted: opts.aborted,
     timeoutMs: APP_ACTION_TIMEOUT_MS,
