@@ -77,6 +77,7 @@ test.describe('AI evidence from inside the app', () => {
 
     await replay.getByRole('button', { name: 'Next' }).click()
     await expect(replay.getByText('Deleting an account is never allowed.')).toBeVisible()
+    await expect(steps.nth(1)).toContainText('Refused')
     await expect(replay.getByText('No screenshot for this step')).toBeVisible()
     await page.keyboard.press('ArrowRight')
     await expect(replay.getByRole('img', { name: 'Screenshot of step 3' })).toBeVisible()

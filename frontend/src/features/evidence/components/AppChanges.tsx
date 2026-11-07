@@ -1,7 +1,16 @@
 import type { AppChangeView } from '../types'
 
+/** The page's path only: the host and any query add noise. A value that is not a URL is kept as it is. */
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname
+  } catch {
+    return url
+  }
+}
+
 const rowText = (c: AppChangeView): string =>
-  `${c.accountLabel}: "${c.control}" on ${c.pageUrl} is ${c.after} (was ${c.before}). ${c.restoreDetail ?? ''}`.trim()
+  `${c.accountLabel}: "${c.control}" on ${pathOf(c.pageUrl)} is ${c.after} (was ${c.before}). ${c.restoreDetail ?? ''}`.trim()
 
 function ChangeList({ title, rows }: { title: string; rows: AppChangeView[] }) {
   if (rows.length === 0) return null

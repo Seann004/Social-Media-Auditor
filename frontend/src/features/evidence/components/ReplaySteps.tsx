@@ -87,17 +87,23 @@ export default function ReplaySteps({ suggestionId, onClose }: Props) {
   const move = (by: number) => setIndex((i) => Math.min(steps.length - 1, Math.max(0, i + by)))
 
   // On the document, not the dialog: when a click disables Next, focus drops to the page and the keys must still work.
+  // The handler reads the latest move and close through a ref, so the listener is bound once.
+  const latest = useRef({ move, onClose })
+  latest.current = { move, onClose }
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') move(1)
-      else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') move(-1)
-      else if (event.key === 'Escape' && !root.current?.contains(event.target as Node)) onClose()
+      if (event.altKey || event.ctrlKey || event.metaKey) return
+      const target = event.target
+      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return
+      if (event.key === 'ArrowRight') latest.current.move(1)
+      else if (event.key === 'ArrowLeft') latest.current.move(-1)
+      else if (event.key === 'Escape' && !root.current?.contains(target as Node)) latest.current.onClose()
       else return
       event.preventDefault()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  })
+  }, [])
 
   const current = steps[index]
   const navBtn =

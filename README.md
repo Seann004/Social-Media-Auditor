@@ -246,37 +246,63 @@ All set in `backend/src/features/evidence/config.ts`:
 
 ## Checking inside the app (test accounts)
 
-The **App (test accounts)** source on the same panel lets the AI check items by actually using a platform's web app, signed in as test accounts that the auditor creates for this purpose (for example a 15-year-old and a 30-year-old). It clicks and types like a person would, one item at a time, takes a screenshot after every step, and then suggests an answer with the steps as proof. **The auditor still decides.** An app run produces suggestions only. Nothing changes an answer or the compliance score until an auditor accepts or overrides it, exactly as for page runs. Each card for an app suggestion has a **Replay steps** button that shows every step in order with its screenshot and a plain line saying what was done, including actions that were refused and any setting that was left changed (or put back).
+On the same panel there is a second source, **App (test accounts)**. Here the AI does not read public web pages. It uses a platform's web app, signed in as test accounts that the auditor makes for this purpose (for example a 15-year-old and a 30-year-old). It clicks and types like a person, one checklist item at a time, and takes a screenshot after every step. Then it suggests an answer, with the steps as proof.
+
+**The auditor still decides.** An app run only gives suggestions. Nothing changes an answer or the compliance score until an auditor presses Accept or Override, the same as for page runs. Each app suggestion has a **Replay steps** button. It shows every step in order, with its screenshot and a plain sentence about what was done. It also shows actions that were refused and any setting that was left changed (or put back).
 
 ### Set up
 
-1. Add `EVIDENCE_SECRET_KEY` to `backend/.env`. It must be 32 random bytes, base64 encoded. Make one with:
+1. **Make a secret key.** Add `EVIDENCE_SECRET_KEY` to `backend/.env`. It must be 32 random bytes written in base64. You can make one with:
 
    ```bash
    node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
    ```
 
-   Test account passwords are encrypted with this key (AES-256-GCM) and are write-only: no screen or API ever shows one again. **If you change or remove the key, every saved password becomes unreadable.** The accounts still list, and a check that needs one fails as a clear step ("The saved password of Teen 15 can't be read. Enter it again."); enter the passwords again to fix it. Without the key, the panel says app checks are not set up, and the rest of the app keeps working.
-2. Apply `backend/supabase/migrations/002_app_evidence.sql` in the Supabase SQL editor, after migration 001. Run the pre-check from the comment at the top of the file first (`select to_regclass('public."Evidence_Run"'), to_regclass('public."AI_Suggestion"'), to_regclass('public."Evidence_Page"');`): all three must come back non-null. The migration only adds tables and columns, so running it twice is harmless. Its new tables have row level security and no policies.
-3. In the panel, choose **App (test accounts)**, save the app address (and any extra login domains, such as a single sign-on page), add the test accounts, tick the items to check, and press **Run app check**. A Head Auditor or an Auditor can set up and start a run; only an Auditor decides.
+   The server uses this key to lock (encrypt) the test account passwords with AES-256-GCM. Passwords can only be written, never read back: no screen or API shows a saved password again. **If you change or remove the key, the saved passwords can no longer be unlocked.** The accounts still show in the list, but a check that needs one fails with a clear message ("The saved password of Teen 15 can't be read. Enter it again."). Type the passwords in again to fix it. Without the key the panel says app checks are not set up, and the rest of the app keeps working.
+2. **Update the database.** In the Supabase SQL editor, first run the pre-check from the comment at the top of `backend/supabase/migrations/002_app_evidence.sql`:
+
+   ```sql
+   select to_regclass('public."Evidence_Run"'), to_regclass('public."AI_Suggestion"'), to_regclass('public."Evidence_Page"');
+   ```
+
+   All three results must be filled in (not null). That means migration 001 is already applied. Then run `002_app_evidence.sql`. It only adds tables and columns, so running it twice does no harm. The new tables have row level security and no policies, so only the server can use them.
+3. **Use the panel.** Choose **App (test accounts)**, save the app address (and any extra login domains, for example a single sign-on page), add the test accounts, tick the items to check, and press **Run app check**. Auditors and the Head Auditor can set up and start a run. Only an Auditor can accept or override.
 
 ### Safety rules
 
-These are enforced in code before every action, not only asked of the AI. Every refused action is recorded as a step, so the auditor sees what the AI tried.
+The server checks these rules in code before every action. They are not only written in the AI's instructions. When the server is not sure, it refuses. Every refused action is saved as a step, so the auditor can see what the AI tried.
 
 | Rule | What is refused |
 |---|---|
-| Only our own accounts | Messaging, following, commenting, tagging, mentioning, inviting or friend requests aimed at anyone who is not one of the project's test accounts, or with no clear target. |
-| Nothing public | Post, Publish, Share, Go live and similar, unless the audience was first set to private or to test accounts only and the page confirms it. When unsure, it refuses. |
+| Only our own accounts | Messages, follows, comments, tags, mentions, invites or friend requests aimed at anyone who is not one of the project's test accounts, or with no clear target. |
+| Nothing public | Post, Publish, Share, Go live and similar buttons, unless the audience was first set to private (or test accounts only) and the page confirms it. |
 | Nothing destructive | Deleting or deactivating an account, changing a password, email or phone number, payments and purchases, signing out other sessions. |
-| Stay on the platform | Any address outside the app's host and its subdomains and the login domains listed. Private or local addresses are allowed only through `EVIDENCE_ALLOWED_PRIVATE_HOSTS`, for a demo or test app. |
+| Stay on the platform | Any address outside the app's host, its subdomains and the listed login domains. Private or local addresses are allowed only through `EVIDENCE_ALLOWED_PRIVATE_HOSTS` (for a demo or test app). |
 | Stop on blocks | A captcha, 2-factor prompt, bot check or "suspicious activity" page ends that check and is reported as a page that could not be read. The system never tries to get past it. |
 
-Settings the AI changes are put back at the end of each check where possible. Anything that could not be put back is listed on the run summary and on the replay, and later checks are told about it. A test account whose sign-in fails twice is marked unusable for the rest of the run, and the run goes on.
+Settings the AI changes are put back at the end of each check where possible. Anything that could not be put back is shown on the run summary and in the replay, and later checks are told about it. If a test account fails to sign in twice, it is marked unusable for the rest of the run, and the run goes on.
+
+**These rules are a safety net, not a guarantee.** The server decides by reading the words and links on the page, so it can be fooled. Please use dedicated test accounts only, never real people's accounts, and look at the replay before trusting a result.
+
+What the rules cannot catch:
+
+- **A stranger shown only by display name.** The server recognises a person by their `@handle`. If the page shows a stranger only as a name (or a bare name without `@`), a message to them may not be refused.
+- **Names stuck to handles.** A display name and a handle written with no space ("Jamie Smith@stranger") are not read as a mention.
+- **A public chat box that shows only our test handle.** If the page around a "Send" button shows only our own test handle, a public message can look like a private one.
+- **Short words in addresses.** Pages with `t` or `chat` in the address can be mistaken for conversations. The part of the address after `?` or `#` is ignored.
+- **English only.** The word lists for "public" and "destructive" are English only.
+
+What the rules refuse because they cannot be sure (safe, but these checks are lost):
+
+- A message typed into a single-line text box cannot be sent. Apps that use a multi-line box work.
+- A setting on a form that also has a text box (a profile form with a bio, for example) cannot be changed or put back without a private audience.
+- "Add a comment" boxes are refused. A "Tag people" button next to a post box blocks typing. Clearing a people field is refused.
+- A button made from an image input is not seen as a button.
+- Password fields inside iframes or shadow roots are not blanked in screenshots, and such login forms cannot be used.
 
 ### What is sent to Groq
 
-Only text: each step's visible page text and a short outline of its controls, the checklist item wording, and the plain lines of earlier steps. **Passwords are never sent**, and neither are screenshots; the browser types passwords itself, and the password field is blanked before every screenshot. Screenshots are kept as proof for people. If the AI is unavailable, an item is left "not checked" and nothing is guessed.
+Only text goes to Groq: the visible text of each page, a short list of its controls, the checklist item wording, and the plain sentences of earlier steps. **Passwords are never sent, and screenshots are never sent.** The browser types the password itself, and the password box is blanked before every screenshot. Screenshots are kept only as proof for people. If the AI is not available, the item is left "not checked" and nothing is guessed.
 
 ### Limits
 
@@ -287,23 +313,17 @@ All set in `backend/src/features/evidence/config.ts`:
 | Steps per check (one item) | 15 |
 | AI tokens per app run (step and judging calls together) | 200 000 |
 | Items per app run | 10 |
-| Time for a whole app run | 30 min |
+| Time for a whole app run | 30 minutes |
 | Test accounts per project | 6 |
 | Login domains per project | 5 |
 
-When the token cap is reached, or Groq's daily limit hits mid-run, the run ends **partial**: items already checked keep their suggestions, the rest are listed as not checked, and any setting that was changed is still put back.
-
-Known gaps in what the AI can do inside an app:
-
-- Password fields inside iframes or shadow roots cannot be filled, so such login forms are unusable.
-- A setting on a form that also has a text box (a profile form with a bio, for example) cannot be changed or restored without a private audience, and a failed restore is reported as unsafe.
-- A direct message typed into a single-line text input cannot be sent (platforms that use a multi-line box or a rich text area work). That check is lost on small custom apps built that way.
-- "Add a comment" boxes are refused, clearing a people field is refused, and a button made from an image input is not recognised as a button.
-- Word lists (such as "public" or "destructive") are English only, and a remote user's handle must start with `@` to be recognised.
+If the token limit is reached, or Groq's daily limit is hit during a run, the run ends as **partial**. Items already checked keep their suggestions, the others are listed as not checked, and any setting that was changed is still put back.
 
 ### Before real use
 
-Using a platform's real web app with test accounts usually needs that platform's agreement (its terms often forbid automated use). Get permission first; the system does not check for it, and `robots.txt` does not apply to app runs. Features that depend on a WebSocket connection (live chat, live updates) do not work, because the locked-down browser the server uses blocks WebSockets (along with prefetch and WebRTC), so a page cannot reach an internal address through it.
+Using a real platform's web app with test accounts usually needs that platform's agreement, because its terms often forbid automated use. Get permission first. The system does not check this for you, and `robots.txt` does not apply to app runs. A person should also watch the replay before accepting any suggestion.
+
+The server's browser is locked down so that a page cannot reach internal addresses through it. One effect is that features which use WebSockets, such as live chat and live notifications, do not work in it. A check that needs those features cannot be done.
 
 ---
 
