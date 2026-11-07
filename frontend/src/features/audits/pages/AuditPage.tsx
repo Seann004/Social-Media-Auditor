@@ -990,6 +990,7 @@ helpText: newItemHelp.trim() || undefined,
         role={currentUser?.role ?? 'admin'}
         evidence={aiEvidence}
         locked={project.submissionStatus === 'pending_review' || project.submissionStatus === 'approved'}
+        checklistItems={checklistItems}
       />
 
       {/* Tab bar (head auditor: Checklist / Guidelines / Scope) */}

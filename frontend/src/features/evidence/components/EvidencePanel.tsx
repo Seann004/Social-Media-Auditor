@@ -3,12 +3,16 @@ import { motion } from 'framer-motion'
 import { ArrowsClockwiseIcon as ArrowsClockwise, PlayIcon as Play, RobotIcon as Robot } from '@phosphor-icons/react'
 import { useStore } from '../../../store/useStore'
 import { EvidenceApiError, getSources, reassess, saveSources, setPermission, startRun } from '../api'
-import type { EvidencePermission, RunScope } from '../types'
+import { toPickItems } from '../appState'
+import type { EvidencePermission, RunScope, RunSource } from '../types'
 import type { UseEvidenceResult } from '../useEvidence'
-import type { UserRole } from '../../../types'
+import { useAppSetup } from '../useAppSetup'
+import type { ChecklistItem, UserRole } from '../../../types'
+import AppRunSection from './AppRunSection'
 import PanelBoundary from './PanelBoundary'
 import PermissionControl from './PermissionControl'
 import { RunProgress, RunSummary } from './RunSummary'
+import SourceChoice from './SourceChoice'
 
 interface Props {
   projectId: string
@@ -16,6 +20,8 @@ interface Props {
   evidence: UseEvidenceResult
   /** The audit is pending review or approved: nothing may start. */
   locked: boolean
+  /** The project's checklist, for the App item picker and item names. */
+  checklistItems?: ChecklistItem[]
 }
 
 const SIGN_IN_AGAIN = 'AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.'
@@ -41,7 +47,7 @@ export default function EvidencePanel(props: Props) {
   )
 }
 
-function PanelBody({ projectId, role, evidence, locked }: Props) {
+function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props) {
   const [text, setText] = useState('')
   const [savedLinks, setSavedLinks] = useState<string[]>([])
   const [permission, setPermissionState] = useState<EvidencePermission | null>(null)
@@ -54,6 +60,10 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
   const busyRef = useRef(false)
   const { run, pages, resultRun, suggestionsByItem, refresh } = evidence
   const sessionToken = useStore((s) => s.sessionToken)
+  const [chosenSource, setChosenSource] = useState<RunSource | null>(null)
+  const source: RunSource = chosenSource ?? resultRun?.source ?? 'pages'
+  const appSetup = useAppSetup(projectId, { enabled: source === 'app' })
+  const pickItems = useMemo(() => toPickItems(checklistItems ?? []), [checklistItems])
 
   useEffect(() => {
     let alive = true
@@ -181,7 +191,34 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
         Suggestions only. Nothing changes your answers or the score until you accept or override it.
       </p>
 
-      {sourcesState === 'loading' ? (
+      <SourceChoice value={source} onChange={setChosenSource} />
+
+      {source === 'app' ? (
+        appSetup.setup ? (
+          <AppRunSection
+            projectId={projectId}
+            setup={appSetup.setup}
+            items={pickItems}
+            evidence={evidence}
+            locked={locked}
+            onStarted={refresh}
+            onSetupSaved={appSetup.reload}
+          />
+        ) : appSetup.error ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p role="alert" className="text-xs text-rose-600">{appSetup.error.message}</p>
+            <button
+              type="button"
+              onClick={() => void appSetup.reload()}
+              className="rounded text-xs text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              Try again
+            </button>
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">Loading…</p>
+        )
+      ) : sourcesState === 'loading' ? (
         <p className="text-xs text-slate-500">Loading…</p>
       ) : sourcesState === 'error' ? (
         <div className="flex flex-wrap items-center gap-2">
@@ -214,7 +251,7 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
       {evidence.error ? <p role="alert" className="text-xs text-rose-600">{evidence.error.message}</p> : null}
       {message ? <p role="alert" className="text-xs text-rose-600">{message}</p> : null}
 
-      {!locked ? (
+      {!locked && source === 'pages' ? (
         <div className="flex flex-wrap items-center gap-2">
           <motion.button
             type="button"
@@ -251,7 +288,7 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
         </div>
       ) : null}
 
-      {run && running ? <RunProgress run={run} pages={pages} /> : null}
+      {run && running ? <RunProgress run={run} pages={pages} items={pickItems} /> : null}
       {run && run.status === 'failed' && run.error ? (
         <p role="alert" className="text-xs text-rose-600">{run.error}</p>
       ) : null}
@@ -262,10 +299,11 @@ function PanelBody({ projectId, role, evidence, locked }: Props) {
           flaggedCount={flaggedCount}
           pages={pages}
           pagesBelongToResult={run?.id === resultRun.id}
+          items={pickItems}
         />
       ) : null}
 
-      {role === 'head_auditor' && sourcesState === 'ok' ? (
+      {role === 'head_auditor' && sourcesState === 'ok' && source === 'pages' ? (
         <PermissionControl permission={permission} onSave={onSavePermission} />
       ) : null}
     </motion.section>
