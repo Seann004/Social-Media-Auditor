@@ -211,7 +211,8 @@ All set in `backend/src/features/evidence/config.ts`:
    SUPABASE_SERVICE_ROLE_KEY=your_service_role_key   # server only, never in the frontend
    SESSION_SECRET=a_random_string_of_at_least_32_characters
    GROQ_API_KEY=your_groq_api_key                    # already used by the generator
-   GROQ_MODEL=llama-3.3-70b-versatile                # optional
+   GROQ_MODEL=openai/gpt-oss-120b                    # optional: this is also the default for evidence runs
+   EVIDENCE_SECRET_KEY=base64_of_32_random_bytes     # only for checking inside the app (see below)
    BROWSER_WS_ENDPOINT=http://host:9222              # optional: use a browser you run yourself
    EVIDENCE_ALLOWED_PRIVATE_HOSTS=localhost:8080     # optional: comma-separated, for local test sites only
    ```
@@ -232,7 +233,7 @@ All set in `backend/src/features/evidence/config.ts`:
 
 ### Known limits
 
-- Public webpage text only. Nothing behind a login, no test accounts, no app screens.
+- A **Public pages** run reads public webpage text only: nothing behind a login. Checking behind a login is the separate **App** source, described next.
 - Links to PDFs and other files are not followed.
 - Page text is the page's `innerText`, which leaves out everything inside shadow roots, open or closed. Only the control lines, from the page snapshot, see into open shadow roots.
 - Hidden text is filtered out by a heuristic (display, visibility, size, opacity and similar). It catches the common tricks, not every possible one.
@@ -240,6 +241,69 @@ All set in `backend/src/features/evidence/config.ts`:
 - DNS rebinding and very large compressed responses are accepted residual risks in this version.
 - The older API routes (projects, results and so on) still trust the user id the browser sends. Only the evidence routes check the session token.
 - **Page text is sent to Groq**, with the checklist item wording. Do not point the feature at pages you may not share with it.
+
+---
+
+## Checking inside the app (test accounts)
+
+The **App (test accounts)** source on the same panel lets the AI check items by actually using a platform's web app, signed in as test accounts that the auditor creates for this purpose (for example a 15-year-old and a 30-year-old). It clicks and types like a person would, one item at a time, takes a screenshot after every step, and then suggests an answer with the steps as proof. **The auditor still decides.** An app run produces suggestions only. Nothing changes an answer or the compliance score until an auditor accepts or overrides it, exactly as for page runs. Each card for an app suggestion has a **Replay steps** button that shows every step in order with its screenshot and a plain line saying what was done, including actions that were refused and any setting that was left changed (or put back).
+
+### Set up
+
+1. Add `EVIDENCE_SECRET_KEY` to `backend/.env`. It must be 32 random bytes, base64 encoded. Make one with:
+
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   ```
+
+   Test account passwords are encrypted with this key (AES-256-GCM) and are write-only: no screen or API ever shows one again. **If you change or remove the key, every saved password becomes unreadable.** The accounts still list, and a check that needs one fails as a clear step ("The saved password of Teen 15 can't be read. Enter it again."); enter the passwords again to fix it. Without the key, the panel says app checks are not set up, and the rest of the app keeps working.
+2. Apply `backend/supabase/migrations/002_app_evidence.sql` in the Supabase SQL editor, after migration 001. Run the pre-check from the comment at the top of the file first (`select to_regclass('public."Evidence_Run"'), to_regclass('public."AI_Suggestion"'), to_regclass('public."Evidence_Page"');`): all three must come back non-null. The migration only adds tables and columns, so running it twice is harmless. Its new tables have row level security and no policies.
+3. In the panel, choose **App (test accounts)**, save the app address (and any extra login domains, such as a single sign-on page), add the test accounts, tick the items to check, and press **Run app check**. A Head Auditor or an Auditor can set up and start a run; only an Auditor decides.
+
+### Safety rules
+
+These are enforced in code before every action, not only asked of the AI. Every refused action is recorded as a step, so the auditor sees what the AI tried.
+
+| Rule | What is refused |
+|---|---|
+| Only our own accounts | Messaging, following, commenting, tagging, mentioning, inviting or friend requests aimed at anyone who is not one of the project's test accounts, or with no clear target. |
+| Nothing public | Post, Publish, Share, Go live and similar, unless the audience was first set to private or to test accounts only and the page confirms it. When unsure, it refuses. |
+| Nothing destructive | Deleting or deactivating an account, changing a password, email or phone number, payments and purchases, signing out other sessions. |
+| Stay on the platform | Any address outside the app's host and its subdomains and the login domains listed. Private or local addresses are allowed only through `EVIDENCE_ALLOWED_PRIVATE_HOSTS`, for a demo or test app. |
+| Stop on blocks | A captcha, 2-factor prompt, bot check or "suspicious activity" page ends that check and is reported as a page that could not be read. The system never tries to get past it. |
+
+Settings the AI changes are put back at the end of each check where possible. Anything that could not be put back is listed on the run summary and on the replay, and later checks are told about it. A test account whose sign-in fails twice is marked unusable for the rest of the run, and the run goes on.
+
+### What is sent to Groq
+
+Only text: each step's visible page text and a short outline of its controls, the checklist item wording, and the plain lines of earlier steps. **Passwords are never sent**, and neither are screenshots; the browser types passwords itself, and the password field is blanked before every screenshot. Screenshots are kept as proof for people. If the AI is unavailable, an item is left "not checked" and nothing is guessed.
+
+### Limits
+
+All set in `backend/src/features/evidence/config.ts`:
+
+| Limit | Value |
+|---|---|
+| Steps per check (one item) | 15 |
+| AI tokens per app run (step and judging calls together) | 200 000 |
+| Items per app run | 10 |
+| Time for a whole app run | 30 min |
+| Test accounts per project | 6 |
+| Login domains per project | 5 |
+
+When the token cap is reached, or Groq's daily limit hits mid-run, the run ends **partial**: items already checked keep their suggestions, the rest are listed as not checked, and any setting that was changed is still put back.
+
+Known gaps in what the AI can do inside an app:
+
+- Password fields inside iframes or shadow roots cannot be filled, so such login forms are unusable.
+- A setting on a form that also has a text box (a profile form with a bio, for example) cannot be changed or restored without a private audience, and a failed restore is reported as unsafe.
+- A direct message typed into a single-line text input cannot be sent (platforms that use a multi-line box or a rich text area work). That check is lost on small custom apps built that way.
+- "Add a comment" boxes are refused, clearing a people field is refused, and a button made from an image input is not recognised as a button.
+- Word lists (such as "public" or "destructive") are English only, and a remote user's handle must start with `@` to be recognised.
+
+### Before real use
+
+Using a platform's real web app with test accounts usually needs that platform's agreement (its terms often forbid automated use). Get permission first; the system does not check for it, and `robots.txt` does not apply to app runs. Features that depend on a WebSocket connection (live chat, live updates) do not work, because the locked-down browser the server uses blocks WebSockets (along with prefetch and WebRTC), so a page cannot reach an internal address through it.
 
 ---
 
@@ -251,7 +315,7 @@ npm test --prefix frontend           # component and hook tests (Vitest, jsdom)
 npm run test:e2e --prefix frontend   # browser end-to-end tests (Playwright)
 ```
 
-The end-to-end tests start Vite on port 5199 and stub every `/api` call and every Supabase call in the browser, so they need no database, keys or network. Install the browser once with `npx playwright install chromium` in `frontend/` (or reuse the one already installed for the backend). They cover running an assessment, accepting and overriding, the Head Auditor's provenance labels, the flagged filter, and a 503 from the evidence API.
+The end-to-end tests start Vite on port 5199 and stub every `/api` call and every Supabase call in the browser, so they need no database, keys or network. Install the browser once with `npx playwright install chromium` in `frontend/` (or reuse the one already installed for the backend). They cover running an assessment, accepting and overriding, the Head Auditor's provenance labels, the flagged filter, a 503 from the evidence API, and the app flow (adding the app and two test accounts, picking items, running, replaying the steps, accepting one suggestion, the password never showing on the page, and the app endpoints answering 503).
 
 ---
 

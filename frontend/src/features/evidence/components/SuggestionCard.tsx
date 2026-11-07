@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { RobotIcon as Robot } from '@phosphor-icons/react'
 import type { ChecklistItemStatus } from '../../../types'
 import { isHttpUrl } from '../safeUrl'
@@ -5,6 +6,7 @@ import { suggestionState, toAnswerStatus, type CardState } from '../state'
 import type { DecisionView, QuoteView, SuggestionView } from '../types'
 import { RESULT_LABEL } from './OverrideDialog'
 import QuoteThumbnail from './QuoteThumbnail'
+import ReplaySteps from './ReplaySteps'
 
 export interface SuggestionCardProps {
   suggestion: SuggestionView
@@ -64,6 +66,7 @@ function DecisionNote({ decision }: { decision: DecisionView }) {
 }
 
 export default function SuggestionCard({ suggestion, decision, currentStatus, canDecide, busy = false, error, onAccept, onOverride, onKeepMine }: SuggestionCardProps) {
+  const [replaying, setReplaying] = useState(false)
   const state = suggestionState({ suggestion, decision, currentStatus })
   const suggested = suggestion.suggestedResult
   const decided = state === 'accepted' || state === 'overridden'
@@ -116,6 +119,15 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
           {error}
         </p>
       )}
+
+      {suggestion.source === 'app' && (
+        <div>
+          <button type="button" onClick={() => setReplaying(true)} className="rounded text-xs font-medium text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            Replay steps
+          </button>
+        </div>
+      )}
+      {replaying && <ReplaySteps suggestionId={suggestion.id} onClose={() => setReplaying(false)} />}
 
       {showActions && (
         <div className="flex flex-wrap gap-2">

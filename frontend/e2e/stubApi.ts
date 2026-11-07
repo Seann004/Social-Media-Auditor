@@ -40,6 +40,15 @@ export interface StubOptions {
   withRun: boolean
   /** Every evidence route answers 503, as an unconfigured server does. */
   evidenceDown?: boolean
+  /** Only the app endpoints answer 503; the page-based ones work. */
+  appDown?: boolean
+}
+
+export interface SavedAccount {
+  label: string
+  ageGroup: string
+  loginName: string
+  password?: string
 }
 
 export interface Stub {
@@ -49,9 +58,15 @@ export interface Stub {
   decisions: Json[]
   /** Answers saved the older way (answer buttons without a suggestion). */
   savedAnswers: Json[]
+  /** Bodies of test accounts posted, with the password the page sent. The stub never echoes it back. */
+  accountBodies: SavedAccount[]
+  /** Item ids sent to start an app run. */
+  appRunItems: string[][]
 }
 
-const run = (status: 'capturing' | 'completed', pagesDone: number) => ({
+type RunSource = 'pages' | 'app'
+
+const run = (status: 'capturing' | 'completed', pagesDone: number, source: RunSource = 'pages', itemIds: string[] = []) => ({
   id: 'run-1',
   projectId: PROJECT_ID,
   startedBy: AUDITOR.userId,
@@ -59,13 +74,18 @@ const run = (status: 'capturing' | 'completed', pagesDone: number) => ({
   capturedInRunId: 'run-1',
   scope: 'all',
   unassessedCategories: [],
-  categoriesTotal: 1,
-  categoriesDone: status === 'completed' ? 1 : 0,
+  categoriesTotal: source === 'app' ? itemIds.length : 1,
+  categoriesDone: status === 'completed' ? (source === 'app' ? itemIds.length : 1) : 0,
   pagesTotal: 3,
   pagesDone,
   tokensUsed: 1200,
   model: 'e2e-model',
   promptVersion: 'evidence-v1',
+  source,
+  checkedItemIds: status === 'completed' ? itemIds : [],
+  uncheckedItemIds: [],
+  currentItemId: status === 'capturing' && source === 'app' ? (itemIds[0] ?? null) : null,
+  currentStep: status === 'capturing' && source === 'app' ? 3 : 0,
   error: null,
   createdAt: '2026-11-04T09:00:00.000Z',
   startedAt: '2026-11-04T09:00:01.000Z',
@@ -87,6 +107,7 @@ const SUGGESTIONS = [
     id: 's1',
     runId: 'run-1',
     projectId: PROJECT_ID,
+    source: 'pages',
     itemId: 'i1',
     suggestedResult: 'no',
     reason: 'The sign-up page has no link to a privacy policy.',
@@ -98,6 +119,7 @@ const SUGGESTIONS = [
     id: 's2',
     runId: 'run-1',
     projectId: PROJECT_ID,
+    source: 'pages',
     itemId: 'i2',
     suggestedResult: 'yes',
     reason: 'The help page says guardians can switch on parental controls.',
@@ -109,6 +131,7 @@ const SUGGESTIONS = [
     id: 's3',
     runId: 'run-1',
     projectId: PROJECT_ID,
+    source: 'pages',
     itemId: 'i3',
     suggestedResult: 'partially',
     reason: 'A report link exists but only on some pages.',
@@ -116,6 +139,33 @@ const SUGGESTIONS = [
     flags: [{ type: 'low_confidence', reason: 'The pages that mention reporting are vague.' }],
     quotes: [],
   },
+]
+
+const APP_RESULT: Readonly<Record<string, 'yes' | 'no' | 'partially'>> = { i1: 'no', i2: 'yes', i3: 'partially' }
+
+/** What an app run suggests for the items it was asked to check. */
+const appSuggestions = (itemIds: string[]) =>
+  itemIds.map((itemId) => ({
+    id: `as-${itemId}`,
+    runId: 'run-1',
+    projectId: PROJECT_ID,
+    source: 'app',
+    itemId,
+    suggestedResult: APP_RESULT[itemId] ?? 'partially',
+    reason: `Signed in as Teen 15 and Adult 30, the app showed the same result for ${itemId}.`,
+    confidence: 'medium',
+    flags: [],
+    quotes: [],
+  }))
+
+/** Three steps for one suggestion: a page with a picture, a refused action, and a page with a picture. */
+const STEPS = [
+  { id: 'st-1', position: 1, accountLabel: 'Teen 15', line: 'Opened the settings page', outcome: 'done', refusalReason: null, pageId: 'pg-1', hasScreenshot: true },
+  { id: 'st-2', position: 2, accountLabel: 'Teen 15', line: 'Tried to press Delete account', outcome: 'refused', refusalReason: 'Deleting an account is never allowed.', pageId: null, hasScreenshot: false },
+  { id: 'st-3', position: 3, accountLabel: 'Adult 30', line: 'Read the privacy options', outcome: 'done', refusalReason: null, pageId: 'pg-2', hasScreenshot: true },
+]
+const CHANGES = [
+  { id: 'c-1', itemId: 'i1', accountLabel: 'Teen 15', pageUrl: 'http://127.0.0.1:5199/settings', control: 'Private account', before: 'on', after: 'off', restored: false, restoreDetail: 'The switch could not be found again.' },
 ]
 
 const ANSWER_OF: Readonly<Record<string, Answer>> = {
@@ -132,12 +182,17 @@ const SOURCE_BASE = { id: 'src-1', projectId: PROJECT_ID, createdBy: AUDITOR.use
 
 /** Installs every stub for one page. State lives in the closure, so a decision changes what the next GET returns. */
 export async function installStub(page: Page, options: StubOptions): Promise<Stub> {
-  const stub: Stub = { violations: [], decisions: [], savedAnswers: [] }
+  const stub: Stub = { violations: [], decisions: [], savedAnswers: [], accountBodies: [], appRunItems: [] }
   const answers = new Map<string, StoredAnswer>()
   const decisions = new Map<string, Json>()
   let runState: 'none' | 'capturing' | 'completed' = options.withRun ? 'completed' : 'none'
   let latestReads = 0
   let startUrls: string[] | null = null
+  let runSource: RunSource = 'pages'
+  let appRunItems: string[] = []
+  let appSource: { appUrl: string; loginDomains: string[]; updatedAt: string } | null = null
+  const accounts: Json[] = []
+  const currentSuggestions = (): Json[] => (runSource === 'app' ? appSuggestions(appRunItems) : SUGGESTIONS)
 
   // Registered first, so it has the lowest priority: anything the stubs below do not claim lands here.
   await page.route('**/*', (route) => {
@@ -218,7 +273,7 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
   const decide = (route: Route, suggestionId: string) => {
     const body = route.request().postDataJSON() as Json
     stub.decisions.push(body)
-    const suggestion = SUGGESTIONS.find((s) => s.id === suggestionId)
+    const suggestion = currentSuggestions().find((s) => s.id === suggestionId) as (typeof SUGGESTIONS)[number] | undefined
     if (!suggestion) return json(route, { error: 'That was not found.' }, 404)
     const accepted = body.decision === 'accepted'
     const finalResult = accepted ? ANSWER_OF[suggestion.suggestedResult] : (body.finalResult as Answer)
@@ -275,16 +330,45 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
       capturedAt: '2026-11-04T09:01:00.000Z',
     }
     if (runState === 'none') return json(route, { run: null, pages: [] })
-    return json(route, { run: runState === 'capturing' ? run('capturing', 1) : run('completed', 3), pages: [captured] })
+    return json(route, { run: runState === 'capturing' ? run('capturing', 1, runSource, appRunItems) : run('completed', 3, runSource, appRunItems), pages: [captured] })
   }
 
   const evidence = (route: Route, method: string, path: string): Promise<void> | null => {
-    if (!/^\/(projects\/[^/]+\/(evidence-|suggestions)|suggestions\/|evidence\/)/.test(path)) return null
+    if (!/^\/(projects\/[^/]+\/(evidence-|suggestions|app-|test-accounts)|suggestions\/|evidence\/)/.test(path)) return null
     if (options.evidenceDown) {
       return json(route, { error: 'AI evidence assessment is not set up on this server.' }, 503)
     }
+    if (options.appDown && /\/(app-|test-accounts)|\/suggestions\/[^/]+\/steps$/.test(path)) {
+      return json(route, { error: 'Checking inside the app is not set up on this server.' }, 503)
+    }
     if (path.endsWith('/evidence-sources')) return sources(route, method)
+    if (path.endsWith('/app-setup')) return json(route, { app: appSource, accounts, secretKeyConfigured: true })
+    if (path.endsWith('/app-source') && method === 'PUT') {
+      const body = route.request().postDataJSON() as { appUrl: string; loginDomains: string[] }
+      appSource = { ...body, updatedAt: '2026-11-04T08:30:00.000Z' }
+      return json(route, { app: appSource })
+    }
+    if (path.endsWith('/test-accounts') && method === 'POST') {
+      const body = route.request().postDataJSON() as SavedAccount
+      stub.accountBodies.push(body)
+      // A password is write-only: the view says only that one is saved.
+      const { password: _password, ...rest } = body
+      const account = { ...rest, id: `acct-${accounts.length + 1}`, hasPassword: true, updatedAt: '2026-11-04T08:31:00.000Z' }
+      accounts.push(account)
+      return json(route, { account }, 201)
+    }
+    if (path.endsWith('/app-runs') && method === 'POST') {
+      appRunItems = (route.request().postDataJSON() as { itemIds: string[] }).itemIds
+      stub.appRunItems.push(appRunItems)
+      runSource = 'app'
+      runState = 'capturing'
+      latestReads = 0
+      return json(route, { run: run('capturing', 0, 'app', appRunItems) }, 202)
+    }
+    if (path.endsWith('/app-changes')) return json(route, { changes: runSource === 'app' && runState === 'completed' ? CHANGES : [] })
+    if (/^\/suggestions\/[^/]+\/steps$/.test(path)) return json(route, { steps: STEPS, changes: CHANGES })
     if (path.endsWith('/evidence-runs') && method === 'POST') {
+      runSource = 'pages'
       runState = 'capturing'
       latestReads = 0
       return json(route, { run: run('capturing', 0) }, 202)
@@ -294,7 +378,7 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
       return json(
         route,
         runState === 'completed'
-          ? { run: run('completed', 3), suggestions: SUGGESTIONS, decisions: [...decisions.values()] }
+          ? { run: run('completed', 3, runSource, appRunItems), suggestions: currentSuggestions(), decisions: [...decisions.values()] }
           : { run: null, suggestions: [], decisions: [] },
       )
     }

@@ -360,3 +360,17 @@ describe('OverrideDialog', () => {
     expect(screen.getByRole('button', { name: /confirm/i })).toBeDisabled()
   })
 })
+
+describe('SuggestionCard replay', () => {
+  it('shows Replay steps for app suggestions only, for a Head Auditor too', () => {
+    const { unmount } = render(
+      <SuggestionCard suggestion={makeSuggestion({ source: 'app' })} decision={null} currentStatus={undefined} canDecide={false} onAccept={vi.fn()} onOverride={vi.fn()} onKeepMine={vi.fn()} />,
+    )
+    expect(screen.getByRole('button', { name: 'Replay steps' })).toBeInTheDocument()
+    unmount()
+    render(
+      <SuggestionCard suggestion={makeSuggestion({ source: 'pages' })} decision={null} currentStatus={undefined} canDecide onAccept={vi.fn()} onOverride={vi.fn()} onKeepMine={vi.fn()} />,
+    )
+    expect(screen.queryByRole('button', { name: 'Replay steps' })).not.toBeInTheDocument()
+  })
+})
