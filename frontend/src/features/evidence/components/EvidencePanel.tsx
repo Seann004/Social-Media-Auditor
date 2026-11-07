@@ -122,6 +122,8 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
 
   const running = run !== null && ACTIVE.includes(run.status)
   const canStart = !locked && sourcesState === 'ok' && !busy && !running
+  // Re-assess acts on the result run, so it does not depend on the chosen source or the page links.
+  const canReassess = source === 'pages' ? canStart : !locked && !busy && !running
 
   /**
    * Runs one action once at a time. A 409 from starting a run means one is already going, and the
@@ -251,8 +253,9 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
       {evidence.error ? <p role="alert" className="text-xs text-rose-600">{evidence.error.message}</p> : null}
       {message ? <p role="alert" className="text-xs text-rose-600">{message}</p> : null}
 
-      {!locked && source === 'pages' ? (
+      {!locked ? (
         <div className="flex flex-wrap items-center gap-2">
+          {source === 'pages' ? (
           <motion.button
             type="button"
             whileTap={{ scale: 0.97 }}
@@ -264,12 +267,13 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
             <Play size={14} weight="fill" aria-hidden="true" />
             Run assessment
           </motion.button>
+          ) : null}
           {resultRun ? (
             <>
               <button
                 type="button"
                 onClick={() => void onReassess('unfinished')}
-                disabled={!canStart}
+                disabled={!canReassess}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <ArrowsClockwise size={14} aria-hidden="true" />
@@ -278,7 +282,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
               <button
                 type="button"
                 onClick={() => void onReassess('all')}
-                disabled={!canStart}
+                disabled={!canReassess}
                 className="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Re-assess all categories

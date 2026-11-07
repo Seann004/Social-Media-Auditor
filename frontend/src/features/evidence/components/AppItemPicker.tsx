@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { groupPickItems } from '../appState'
 import type { PickItem } from '../appState'
 
@@ -11,6 +12,7 @@ interface Props {
 /** Grouped tickboxes. Once `max` are picked the rest are disabled. */
 export default function AppItemPicker({ items, picked, onChange, max = 10 }: Props) {
   const full = picked.size >= max
+  const noteId = useId()
   const toggle = (id: string): void => {
     const next = new Set(picked)
     if (next.has(id)) next.delete(id)
@@ -31,6 +33,7 @@ export default function AppItemPicker({ items, picked, onChange, max = 10 }: Pro
                   type="checkbox"
                   checked={checked}
                   disabled={full && !checked}
+                  aria-describedby={full && !checked ? noteId : undefined}
                   onChange={() => toggle(item.id)}
                   className="mt-0.5 accent-blue-600"
                 />
@@ -40,7 +43,7 @@ export default function AppItemPicker({ items, picked, onChange, max = 10 }: Pro
           })}
         </fieldset>
       ))}
-      {full ? <p className="text-xs text-slate-500">Up to {max} items per app run.</p> : null}
+      {full ? <p id={noteId} className="text-xs text-slate-500">Up to {max} items per app run.</p> : null}
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { PlayIcon as Play } from '@phosphor-icons/react'
 import { EvidenceApiError, startAppRun } from '../api'
@@ -25,7 +25,9 @@ const ACTIVE: RunView['status'][] = ['queued', 'capturing', 'assessing']
 
 /** The App branch of the evidence panel: setup, item picker and the Run button. */
 export default function AppRunSection({ projectId, setup, items, evidence, locked, onStarted, onSetupSaved }: Props) {
-  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [chosen, setChosen] = useState<Set<string>>(new Set())
+  // Items that left the checklist since they were ticked are not sent.
+  const picked = useMemo(() => new Set(items.filter((i) => chosen.has(i.id)).map((i) => i.id)), [items, chosen])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const running = evidence.run !== null && ACTIVE.includes(evidence.run.status)
@@ -57,12 +59,8 @@ export default function AppRunSection({ projectId, setup, items, evidence, locke
 
   return (
     <div className="space-y-4">
-      {setup.secretKeyConfigured ? (
-        <>
-          <AppSetup projectId={projectId} setup={setup} onSaved={onSetupSaved} disabled={locked} />
-          <AppItemPicker items={items} picked={picked} onChange={setPicked} />
-        </>
-      ) : null}
+      <AppSetup projectId={projectId} setup={setup} onSaved={onSetupSaved} disabled={locked} canWriteAccounts={setup.secretKeyConfigured} />
+      {setup.secretKeyConfigured ? <AppItemPicker items={items} picked={picked} onChange={setChosen} /> : null}
       {message ? <p role="alert" className="text-xs text-rose-600">{message}</p> : null}
       {blocker ? <p className="text-xs text-slate-500">{blocker}</p> : null}
       {!locked ? (

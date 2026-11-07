@@ -8,6 +8,8 @@ interface Props {
   setup: AppSetupResponse
   onSaved(): void | Promise<void>
   disabled?: boolean
+  /** False when the server has no key: accounts can be listed and removed, not added or edited. */
+  canWriteAccounts?: boolean
 }
 
 const AGE_LABEL = { under_18: 'Under 18', adult: 'Adult' } as const
@@ -20,7 +22,7 @@ const sentence = (err: unknown): string => (err instanceof EvidenceApiError ? er
 type Editing = { kind: 'new' } | { kind: 'edit'; account: TestAccountView } | null
 
 /** The app address, login domains and test accounts of a project. */
-export default function AppSetup({ projectId, setup, onSaved, disabled = false }: Props) {
+export default function AppSetup({ projectId, setup, onSaved, disabled = false, canWriteAccounts = true }: Props) {
   const [appUrl, setAppUrl] = useState(setup.app?.appUrl ?? '')
   const [domains, setDomains] = useState((setup.app?.loginDomains ?? []).join('\n'))
   const [sourceError, setSourceError] = useState<string | null>(null)
@@ -93,7 +95,7 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false }
                   <span className="block text-slate-500">Password saved</span>
                 </div>
                 <div className="flex gap-3">
-                  <button type="button" disabled={disabled} onClick={() => setEditing({ kind: 'edit', account: a })} aria-label={`Edit ${a.label}`} className={LINK_BUTTON}>Edit</button>
+                  {canWriteAccounts ? <button type="button" disabled={disabled} onClick={() => setEditing({ kind: 'edit', account: a })} aria-label={`Edit ${a.label}`} className={LINK_BUTTON}>Edit</button> : null}
                   <button type="button" disabled={disabled} onClick={() => void remove(a)} aria-label={`Remove ${a.label}`} className="rounded text-xs text-rose-600 hover:text-rose-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50">Remove</button>
                 </div>
               </li>
@@ -110,9 +112,9 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false }
             onSubmit={saveAccount}
             onCancel={() => setEditing(null)}
           />
-        ) : (
+        ) : canWriteAccounts ? (
           <button type="button" disabled={disabled} onClick={() => setEditing({ kind: 'new' })} className={LINK_BUTTON}>Add test account</button>
-        )}
+        ) : null}
       </div>
     </div>
   )

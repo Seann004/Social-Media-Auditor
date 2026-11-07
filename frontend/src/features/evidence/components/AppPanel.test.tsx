@@ -34,6 +34,7 @@ vi.mock('../api', async (importOriginal) => {
 const m = {
   getSources: vi.mocked(api.getSources),
   startRun: vi.mocked(api.startRun),
+  reassess: vi.mocked(api.reassess),
   getLatestRun: vi.mocked(api.getLatestRun),
   getSuggestions: vi.mocked(api.getSuggestions),
   getAppSetup: vi.mocked(api.getAppSetup),
@@ -170,7 +171,11 @@ describe('App source in the evidence panel', () => {
 
   it('editing an account never shows the password and a blank password keeps the saved one', async () => {
     const user = userEvent.setup()
-    m.updateTestAccount.mockResolvedValue({ account: account() })
+    const real = await vi.importActual<typeof import('../api')>('../api')
+    m.updateTestAccount.mockImplementation(real.updateTestAccount)
+    useStore.setState({ sessionToken: 'tok' })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ account: account() }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
     render(<Harness />)
     await openApp(user)
     await user.click(await screen.findByRole('button', { name: /edit teen 15/i }))
@@ -179,9 +184,11 @@ describe('App source in the evidence panel', () => {
     expect(password).toHaveAttribute('placeholder', 'Leave blank to keep the saved password')
     expect(screen.getByLabelText(/display handles/i)).toHaveValue('teen15')
     await user.click(screen.getByRole('button', { name: /save account/i }))
-    const sent = m.updateTestAccount.mock.calls[0]
-    expect(sent[1]).toBe('a1')
-    expect(sent[2].password ?? '').toBe('')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toContain('/test-accounts/a1')
+    expect(JSON.parse(init.body as string)).not.toHaveProperty('password')
+    vi.unstubAllGlobals()
   })
 
   it('lists accounts with label, age group and "Password saved", never a password', async () => {
@@ -249,12 +256,71 @@ describe('App source in the evidence panel', () => {
     })
     render(<Harness />)
     expect(await screen.findByText('Not checked: Item 3, Item 4')).toBeInTheDocument()
-    expect(screen.getByText('7 steps', { exact: false })).toBeInTheDocument()
+    expect(screen.queryByText(/steps/i)).not.toBeInTheDocument()
     expect(m.getRunChanges).toHaveBeenCalledWith('p1', 'run-1')
     const left = await screen.findByRole('heading', { name: 'Left changed' })
     expect(left.parentElement).toHaveTextContent('Teen 15: "Private profile" on /settings is on (was off). Could not switch it back.')
     const back = screen.getByRole('heading', { name: 'Put back' })
     expect(back.parentElement).toHaveTextContent('Teen 15: "Location" on /settings is off (was on). Put back.')
+  })
+
+  it('counts not-checked items that are no longer on the checklist', async () => {
+    const run = makeRun({ source: 'app', status: 'partial', checkedItemIds: ['i1'], uncheckedItemIds: ['i3', 'gone'] })
+    m.getLatestRun.mockResolvedValue({ run, pages: [] })
+    m.getSuggestions.mockResolvedValue({ run, suggestions: [], decisions: [] })
+    render(<Harness />)
+    expect(await screen.findByText('Not checked: Item 3, 1 item no longer on the checklist')).toBeInTheDocument()
+  })
+
+  it('says so and offers Retry when the changed settings cannot be loaded', async () => {
+    const user = userEvent.setup()
+    const run = makeRun({ source: 'app' })
+    m.getLatestRun.mockResolvedValue({ run, pages: [] })
+    m.getSuggestions.mockResolvedValue({ run, suggestions: [], decisions: [] })
+    m.getRunChanges.mockRejectedValueOnce(new EvidenceApiError(500, 'x'))
+    render(<Harness />)
+    expect(await screen.findByText('The changed settings of this run could not be loaded.')).toBeInTheDocument()
+    m.getRunChanges.mockResolvedValue({ changes: [change()] })
+    await user.click(screen.getByRole('button', { name: /retry/i }))
+    expect(await screen.findByRole('heading', { name: 'Left changed' })).toBeInTheDocument()
+    expect(screen.queryByText('The changed settings of this run could not be loaded.')).not.toBeInTheDocument()
+  })
+
+  it('offers Re-assess after an app run and calls the re-assess API', async () => {
+    const user = userEvent.setup()
+    const run = makeRun({ source: 'app' })
+    m.getLatestRun.mockResolvedValue({ run, pages: [] })
+    m.getSuggestions.mockResolvedValue({ run, suggestions: [], decisions: [] })
+    m.reassess.mockResolvedValue({ run })
+    render(<Harness />)
+    await user.click(await screen.findByRole('button', { name: /re-assess unfinished/i }))
+    expect(m.reassess).toHaveBeenCalledWith('p1', 'run-1', 'unfinished')
+    await user.click(screen.getByRole('button', { name: /re-assess all/i }))
+    expect(m.reassess).toHaveBeenCalledWith('p1', 'run-1', 'all')
+    expect(screen.queryByRole('button', { name: /^run assessment/i })).not.toBeInTheDocument()
+  })
+
+  it('shows "starting" instead of step 0 between items', async () => {
+    m.getLatestRun.mockResolvedValue({
+      run: makeRun({ source: 'app', status: 'assessing', finishedAt: null, currentItemId: 'i2', currentStep: 0, categoriesTotal: 2 }),
+      pages: [],
+    })
+    render(<Harness />)
+    expect(await screen.findByText('Checking in the app: Item 2 · starting')).toBeInTheDocument()
+  })
+
+  it('links the cap note to the disabled boxes and drops picked items that left the checklist', async () => {
+    const user = userEvent.setup()
+    m.startAppRun.mockResolvedValue({ run: makeRun({ source: 'app', status: 'queued' }) })
+    const view = render(<Harness />)
+    await openApp(user)
+    for (let n = 1; n <= 10; n += 1) await user.click(screen.getByRole('checkbox', { name: `Item ${n}` }))
+    const note = screen.getByText('Up to 10 items per app run.')
+    expect(screen.getByRole('checkbox', { name: 'Item 11' })).toHaveAttribute('aria-describedby', note.id)
+    view.rerender(<Harness items={manyItems.slice(1, 3)} />)
+    await waitFor(() => expect(screen.queryByRole('checkbox', { name: 'Item 1' })).not.toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: /run app check/i }))
+    expect(m.startAppRun).toHaveBeenCalledWith('p1', ['i2', 'i3'])
   })
 
   it('says the server is not set up when secretKeyConfigured is false, and pages runs still work', async () => {
@@ -266,6 +332,10 @@ describe('App source in the evidence panel', () => {
     await user.click(await screen.findByRole('radio', { name: /app \(test accounts\)/i }))
     expect(await screen.findByText("Checking inside the app isn't set up on the server yet.")).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /run app check/i })).toBeDisabled()
+    expect(screen.getByLabelText(/app address/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /remove teen 15/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /add test account/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /edit teen 15/i })).not.toBeInTheDocument()
     await user.click(screen.getByRole('radio', { name: /public pages/i }))
     await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://a.example/'))
     await user.click(screen.getByRole('button', { name: /^run assessment/i }))

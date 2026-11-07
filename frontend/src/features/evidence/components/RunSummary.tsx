@@ -82,7 +82,9 @@ function AppRunProgress({ run, items }: { run: RunView; items: PickItem[] }) {
         <Spinner size={14} className="animate-spin text-blue-600" aria-hidden="true" />
         {run.status === 'queued'
           ? STATUS_LABEL.queued
-          : `Checking in the app${label ? `: ${label}` : ''} · step ${run.currentStep} of ${APP_STEPS_PER_CHECK}`}
+          : `Checking in the app${label ? `: ${label}` : ''} · ${
+              run.currentStep > 0 ? `step ${run.currentStep} of ${APP_STEPS_PER_CHECK}` : 'starting'
+            }`}
       </p>
       <p className="text-xs text-slate-600">Items checked: {run.categoriesDone} of {run.categoriesTotal}</p>
     </div>
@@ -90,8 +92,9 @@ function AppRunProgress({ run, items }: { run: RunView; items: PickItem[] }) {
 }
 
 /** The settings an app run changed, loaded for the run being summarised. */
-function useRunChanges(run: RunView): AppChangeView[] {
-  const [loaded, setLoaded] = useState<{ runId: string; changes: AppChangeView[] } | null>(null)
+function useRunChanges(run: RunView): { changes: AppChangeView[]; failed: boolean; retry(): void } {
+  const [loaded, setLoaded] = useState<{ runId: string; changes: AppChangeView[] | null } | null>(null)
+  const [attempt, setAttempt] = useState(0)
   const isApp = run.source === 'app'
   useEffect(() => {
     if (!isApp) return
@@ -101,13 +104,18 @@ function useRunChanges(run: RunView): AppChangeView[] {
         if (alive) setLoaded({ runId: run.id, changes: res.changes })
       })
       .catch(() => {
-        if (alive) setLoaded({ runId: run.id, changes: [] })
+        if (alive) setLoaded({ runId: run.id, changes: null })
       })
     return () => {
       alive = false
     }
-  }, [isApp, run.projectId, run.id])
-  return loaded?.runId === run.id ? loaded.changes : []
+  }, [isApp, run.projectId, run.id, attempt])
+  const current = loaded?.runId === run.id ? loaded : null
+  return {
+    changes: current?.changes ?? [],
+    failed: current !== null && current.changes === null,
+    retry: () => setAttempt((n) => n + 1),
+  }
 }
 
 interface SummaryProps {
@@ -124,22 +132,33 @@ interface SummaryProps {
 /** What the last finished run produced. Always about the result run, never the latest. */
 export function RunSummary({ resultRun, suggestionCount, flaggedCount, pages, pagesBelongToResult, items = [] }: SummaryProps) {
   const when = formatWhen(resultRun)
-  const changes = useRunChanges(resultRun)
+  const { changes, failed: changesFailed, retry } = useRunChanges(resultRun)
   if (resultRun.source === 'app') {
-    const notChecked = resultRun.uncheckedItemIds
+    const known = resultRun.uncheckedItemIds
       .map((id) => items.find((item) => item.id === id)?.label)
       .filter((label): label is string => label !== undefined)
+    const gone = resultRun.uncheckedItemIds.length - known.length
+    const notChecked = gone > 0 ? [...known, `${gone} item${gone === 1 ? '' : 's'} no longer on the checklist`] : known
     return (
       <section aria-label="Last run" className="space-y-2">
         <h3 className="text-sm font-semibold text-slate-900">Last run</h3>
         <p className="text-xs text-slate-600">
           {when ? <time dateTime={resultRun.finishedAt ?? resultRun.createdAt}>{when}</time> : null}
           {when ? ' · ' : ''}
-          {resultRun.currentStep} steps · {plural(suggestionCount, 'suggestion')} · {flaggedCount} flagged
+          {plural(suggestionCount, 'suggestion')} · {flaggedCount} flagged
         </p>
         {resultRun.error ? <p className="text-xs text-amber-700">{resultRun.error}</p> : null}
         {notChecked.length > 0 ? <p className="text-xs text-slate-600">Not checked: {notChecked.join(', ')}</p> : null}
-        <AppChanges changes={changes} />
+        {changesFailed ? (
+          <p className="flex flex-wrap items-center gap-2 text-xs text-amber-700">
+            The changed settings of this run could not be loaded.
+            <button type="button" onClick={retry} className="rounded text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              Retry
+            </button>
+          </p>
+        ) : (
+          <AppChanges changes={changes} />
+        )}
       </section>
     )
   }
