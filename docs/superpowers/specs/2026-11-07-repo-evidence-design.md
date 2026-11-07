@@ -81,9 +81,9 @@ At run start the system takes these steps:
 1. Ask GitHub for the commit ID.
 2. Download that commit's archive.
 3. Keep the text files that pass the limits in 6.
-4. Store an index for the run: each file's path, size and line count.
+4. Keep the file list in memory for the run, and store for the run the repository, the commit ID and how many files were read and skipped.
 
-The files themselves are not stored. Only the pieces that are quoted get saved (7.5).
+The files themselves are not stored. Only the pieces sent to the AI are saved (7.5), so Re-assess can judge them again.
 
 ### 7.3 Finding the code for one item (cheap, two rounds at most)
 1. **Search words.** One small AI call, for all picked items together, turns each item into search words and likely file-name hints. For example, "Teen accounts private by default" becomes `private`, `minor`, `age`, `under18`, `default`, `visibility`, and hints like `user`, `account`, `settings`.
@@ -98,7 +98,7 @@ The files themselves are not stored. Only the pieces that are quoted get saved (
 - **Every repo suggestion carries a fixed note:** "Based on the code at commit `abc1234`, not on the live app."
 
 ### 7.5 Evidence
-Each quoted piece is stored with the run's evidence:
+Each piece sent to the AI is stored with the run's evidence, and the card marks the ones the suggestion quotes:
 - the repository;
 - the commit ID;
 - the path;
