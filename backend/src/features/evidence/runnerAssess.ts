@@ -138,6 +138,12 @@ export interface Round {
   isUnproven?: (quote: string, passage: Passage) => boolean
   /** Whether quotes of a page-text passage may get a close-up. Defaults to all of them. */
   takesCloseUp?: (passage: Passage) => boolean
+  /** For repo checks: whether the verified quotes come only from comments, docs or tests (the `comments_only` flag). */
+  commentsOnly?: (verified: { text: string; passage: Passage }[]) => boolean
+}
+
+function verifiedQuotes(drafts: QuoteDraft[]): { text: string; passage: Passage }[] {
+  return drafts.flatMap((d) => (d.verified && d.passage !== undefined ? [{ text: d.text, passage: d.passage }] : []))
 }
 
 async function closeUps(ctx: RunCtx, highlighter: Highlighter | null, quotesByPage: Map<string, string[]>): Promise<Map<string, string>> {
@@ -192,6 +198,7 @@ export async function storeRound(ctx: RunCtx, round: Round, batch: BatchContext,
         failedPages: batch.failedPages,
         source: batch.source,
         stoppedBy: batch.stoppedBy?.get(result.itemId) ?? null,
+        commentsOnly: round.commentsOnly?.(verifiedQuotes(drafts)) ?? false,
       }),
       passageIdsSent,
       source: batch.source,
