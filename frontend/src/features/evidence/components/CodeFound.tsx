@@ -32,12 +32,12 @@ function Piece({ piece }: { piece: CodePieceView }) {
       </div>
       <pre className="overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-xs leading-5 text-slate-100">
         {lines.map((line, i) => (
-          <div key={i} className="flex gap-3">
+          <span key={i} className="flex gap-3">
             <span className="w-8 shrink-0 select-none text-right text-slate-500">
               {piece.startLine + i}
             </span>
             <code className="whitespace-pre">{line}</code>
-          </div>
+          </span>
         ))}
       </pre>
     </li>

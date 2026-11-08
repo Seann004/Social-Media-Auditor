@@ -405,6 +405,20 @@ describe('SuggestionCard for a code repository suggestion', () => {
     expect(await screen.findByText('No code was kept for this suggestion.')).toBeInTheDocument()
   })
 
+  it("drops the earlier suggestion's commit while the next one's code is loading", async () => {
+    getCode.mockResolvedValueOnce({ commitSha: 'abc1234def5678', repoUrl: null, pieces: [] })
+    getCode.mockReturnValueOnce(new Promise(() => {}))
+    const props: CardProps = {
+      suggestion: { ...repoCard(), id: 'sug-a' }, decision: null, currentStatus: undefined, canDecide: true,
+      onAccept: vi.fn(), onOverride: vi.fn(), onKeepMine: vi.fn(),
+    }
+    const { rerender } = render(<SuggestionCard {...props} />)
+    expect(await screen.findByText('Based on the code at commit abc1234, not on the live app.')).toBeInTheDocument()
+    rerender(<SuggestionCard {...props} suggestion={{ ...repoCard(), id: 'sug-b' }} />)
+    expect(screen.getByText('Based on code, not on the live app.')).toBeInTheDocument()
+    expect(screen.queryByText(/commit abc1234/)).toBeNull()
+  })
+
   it('keeps the generic note when the code cannot be loaded', async () => {
     renderCard({ suggestion: repoCard() })
     await new Promise((r) => setTimeout(r, 20))

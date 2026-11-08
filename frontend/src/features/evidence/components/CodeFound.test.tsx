@@ -35,6 +35,16 @@ describe('CodeFound', () => {
     expect(getCode).toHaveBeenCalledWith('s-1')
   })
 
+  it('keeps only phrasing content inside the code block', async () => {
+    getCode.mockResolvedValue({ commitSha: 'abc1234def', repoUrl: null, pieces: [piece()] })
+    const { container } = render(<CodeFound suggestionId="s-1" />)
+    await screen.findByText('src/user.ts')
+    const pre = container.querySelector('pre')
+    expect(pre).not.toBeNull()
+    expect(pre?.querySelector('div')).toBeNull()
+    expect(pre?.querySelectorAll(':scope > span.flex')).toHaveLength(3)
+  })
+
   it('shows the Quoted badge only on the quoted piece', async () => {
     getCode.mockResolvedValue({
       commitSha: 'abc1234',

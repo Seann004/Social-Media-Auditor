@@ -61,6 +61,8 @@ function QuoteItem({ quote }: { quote: QuoteView }) {
 function useCommitNote(suggestionId: string, enabled: boolean): string {
   const [sha, setSha] = useState<string | null>(null)
   useEffect(() => {
+    // A new suggestion must not show the commit of the one before it while its own code loads.
+    setSha(null)
     if (!enabled) return
     let alive = true
     getCode(suggestionId)
