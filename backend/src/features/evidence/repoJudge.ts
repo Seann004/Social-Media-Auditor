@@ -21,6 +21,9 @@ import { abortable, type RunCtx } from './runnerShared.js'
 import type { Passage, Suggestion } from './types.js'
 
 export const REPO_NO_CODE_REASON = 'No code in the repository matches this item.'
+/** The no-code reason when the archive was larger than the limits and only its first part was read. */
+export const REPO_NO_CODE_TRUNCATED_REASON =
+  `${REPO_NO_CODE_REASON} Only the first part of the repository was read, because it is larger than the limits.`
 
 const PIECE_PASSAGE_POSITION = 0
 
@@ -240,12 +243,17 @@ export async function judgeRepoItem(ctx: RunCtx, input: RepoJudgeInput): Promise
   const { item, platform, meter } = input
   const batch = repoBatch(platform)
   const drafts = fitDrafts(findPieces(input.files, input.terms, { max: REPO_MAX_PIECES_PER_ITEM }))
-  if (drafts.length === 0) return storeSuggestion(ctx, withoutEvidence(ctx, item, batch, REPO_NO_CODE_REASON))
+  if (drafts.length === 0) {
+    const reason = input.snapshot.truncated ? REPO_NO_CODE_TRUNCATED_REASON : REPO_NO_CODE_REASON
+    return storeSuggestion(ctx, withoutEvidence(ctx, item, batch, reason))
+  }
 
   const first = await storePieces(ctx, input.repoRepo, input.snapshot, item.id, drafts, 1)
   let stored = first
   let results = await assessPieces(ctx, item, platform, first.map((s) => s.passage), meter)
-  if (results[0]?.suggestedResult === null && meter.used() < MAX_TOKENS_PER_RUN) {
+  // An answer that the item can't be judged from the code is final: more code would not change it.
+  const wantsMore = results[0]?.suggestedResult === null && results[0].webAssessable !== false
+  if (wantsMore && meter.used() < MAX_TOKENS_PER_RUN) {
     const second = await secondRound(ctx, input, first)
     if (second.length > 0) {
       // The new pieces answer what the AI asked for, so they go first; then round 1 while it fits.

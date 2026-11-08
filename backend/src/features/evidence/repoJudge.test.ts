@@ -6,7 +6,7 @@ import { fakeAudit, PROJECT } from './__fixtures__/runnerWorld.js'
 import { createMemoryRepoRepository, type MemoryRepoRepository } from './memoryRepoRepository.js'
 import { createMemoryRepository } from './memoryRepository.js'
 import { permalinkOf } from './repoAddress.js'
-import { headerOf, judgeRepoItem, REPO_NO_CODE_REASON, rejudgeRepoItem, storePieces } from './repoJudge.js'
+import { headerOf, judgeRepoItem, REPO_NO_CODE_REASON, REPO_NO_CODE_TRUNCATED_REASON, rejudgeRepoItem, storePieces } from './repoJudge.js'
 import type { RepoFile, RepoSnapshot, SearchTerms } from './repoTypes.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import type { TokenMeter } from './runnerAssess.js'
@@ -200,6 +200,29 @@ describe('judgeRepoItem', () => {
     expect(kit.calls).toHaveLength(1)
     expect(s?.suggestedResult).toBeNull()
     expect(s?.passageIdsSent).toHaveLength(1)
+  })
+
+  it('says only part of the repository was read when the snapshot is truncated and nothing matches', async () => {
+    const kit = await createKit()
+    const s = await judgeRepoItem(kit.ctx, {
+      item: ITEM, platform: 'Social', files: FILES.slice(0, 3), snapshot: { ...kit.snapshot, truncated: true },
+      terms: WORDS('nothingmatcheshere'), repoRepo: kit.repoRepo, meter: meterOf(),
+    })
+    expect(kit.calls).toHaveLength(0)
+    expect(s?.suggestedResult).toBeNull()
+    expect(s?.reason).toBe(REPO_NO_CODE_TRUNCATED_REASON)
+    expect(REPO_NO_CODE_TRUNCATED_REASON).toBe(
+      'No code in the repository matches this item. Only the first part of the repository was read, because it is larger than the limits.',
+    )
+  })
+
+  it('does not ask for more when the first answer says the item cannot be judged from the code', async () => {
+    const notAssessable = result({ suggestedResult: null, evidenceSufficient: false, webAssessable: false, reason: 'Needs a policy check.' })
+    const kit = await createKit([() => ({ results: [notAssessable], missingItemIds: [], tokensUsed: 70 })])
+    const s = await judge(kit)
+    expect(kit.fetch).not.toHaveBeenCalled()
+    expect(kit.calls).toHaveLength(1)
+    expect(s?.suggestedResult).toBeNull()
   })
 
   it('does not ask for more when the meter is at the run cap', async () => {
