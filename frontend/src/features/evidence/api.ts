@@ -4,6 +4,8 @@ import type {
   AppSetupResponse,
   AppSourceView,
   AppChangeView,
+  CodeEvidence,
+  RepoSourceView,
   DecisionRequest,
   DecisionResponse,
   EvidencePermission,
@@ -164,4 +166,20 @@ export function getRunChanges(projectId: string, runId: string): Promise<{ chang
 
 export function getSuggestionSteps(suggestionId: string): Promise<StepsResponse> {
   return call(`/suggestions/${encodeURIComponent(suggestionId)}/steps`)
+}
+
+export function getRepoSource(projectId: string): Promise<{ repo: RepoSourceView | null }> {
+  return call(`${project(projectId)}/repo-source`)
+}
+
+export function saveRepoSource(projectId: string, input: { repoUrl: string; branch: string | null }): Promise<{ repo: RepoSourceView }> {
+  return call(`${project(projectId)}/repo-source`, 'PUT', input)
+}
+
+export function startRepoRun(projectId: string, itemIds: string[]): Promise<RunStartResponse> {
+  return call(`${project(projectId)}/repo-runs`, 'POST', { itemIds })
+}
+
+export function getCode(suggestionId: string): Promise<CodeEvidence> {
+  return call(`/suggestions/${encodeURIComponent(suggestionId)}/code`)
 }

@@ -5,7 +5,11 @@ import {
   addTestAccount,
   deleteTestAccount,
   getAppSetup,
+  getCode,
+  getRepoSource,
   getRunChanges,
+  saveRepoSource,
+  startRepoRun,
   getSuggestionSteps,
   saveAppSource,
   startAppRun,
@@ -212,5 +216,40 @@ describe('app evidence api client', () => {
     fetchMock.mockResolvedValueOnce(reply(200, JSON.stringify({ steps: [], changes: [] })))
     await getSuggestionSteps('s 1')
     expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/suggestions\/s%201\/steps$/)
+  })
+})
+
+describe('repo evidence api client', () => {
+  it('getRepoSource reads repo-source', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, JSON.stringify({ repo: null })))
+    expect((await getRepoSource('p1')).repo).toBeNull()
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/projects\/p1\/repo-source$/)
+  })
+
+  it('saveRepoSource PUTs the address and branch, and surfaces a 400 sentence', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, JSON.stringify({ repo: { repoUrl: 'u', branch: 'dev', updatedAt: 't' } })))
+    await saveRepoSource('p1', { repoUrl: 'https://github.com/o/n', branch: 'dev' })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toMatch(/\/projects\/p1\/repo-source$/)
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({ repoUrl: 'https://github.com/o/n', branch: 'dev' })
+    fetchMock.mockResolvedValueOnce(reply(400, JSON.stringify({ error: "That branch name isn't valid." })))
+    const err = await failure(() => saveRepoSource('p1', { repoUrl: 'x', branch: '..' }))
+    expect(err.message).toBe("That branch name isn't valid.")
+  })
+
+  it('startRepoRun posts itemIds to repo-runs', async () => {
+    fetchMock.mockResolvedValueOnce(reply(202, JSON.stringify({ run: { id: 'r' } })))
+    await startRepoRun('p1', ['a', 'b'])
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toMatch(/\/projects\/p1\/repo-runs$/)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ itemIds: ['a', 'b'] })
+  })
+
+  it('getCode reads the code of a suggestion', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, JSON.stringify({ commitSha: 'abc', repoUrl: 'u', pieces: [] })))
+    expect((await getCode('s 1')).commitSha).toBe('abc')
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/suggestions\/s%201\/code$/)
   })
 })

@@ -9,7 +9,7 @@ export type AccessStatus = 'ok' | 'error' | 'timeout' | 'login_required' | 'bloc
 export type RunStatus = 'queued' | 'capturing' | 'assessing' | 'completed' | 'failed' | 'partial'
 export type RunScope = 'all' | 'unfinished'
 // Mirrors backend/src/features/evidence/appTypes.ts
-export type RunSource = 'pages' | 'app'
+export type RunSource = 'pages' | 'app' | 'repo'
 export type AgeGroup = 'under_18' | 'adult'
 export type AppStepOutcome = 'done' | 'refused' | 'failed' | 'blocked'
 export type FlagType =
@@ -19,6 +19,7 @@ export type FlagType =
   | 'unverified_quote'
   | 'low_confidence'
   | 'not_web_assessable'
+  | 'comments_only'
 
 export interface ReviewFlag {
   type: FlagType
@@ -224,4 +225,31 @@ export interface TestAccountInput {
 export interface StepsResponse {
   steps: AppStepView[]
   changes: AppChangeView[]
+}
+
+// Mirrors the repository views of backend/src/features/evidence (repo-source and code routes)
+export interface RepoSourceView {
+  repoUrl: string
+  branch: string | null
+  updatedAt: string
+}
+export interface CodePieceView {
+  id: string
+  path: string
+  startLine: number
+  endLine: number
+  code: string
+  url: string
+  round: number
+  quoted: boolean
+}
+export interface CodeEvidence {
+  commitSha: string
+  repoUrl: string
+  pieces: CodePieceView[]
+}
+
+/** Shown label for each flag type that needs a short name. */
+export const FLAG_LABEL: Partial<Record<FlagType, string>> = {
+  comments_only: 'Comments only',
 }

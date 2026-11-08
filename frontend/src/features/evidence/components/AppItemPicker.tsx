@@ -6,12 +6,15 @@ interface Props {
   items: PickItem[]
   picked: ReadonlySet<string>
   onChange(next: Set<string>): void
-  max?: number
+  /** How many items may be picked. */
+  limit?: number
+  /** Names the kind of run in the cap note: "app" or "repository". */
+  verb?: 'app' | 'repository'
 }
 
-/** Grouped tickboxes. Once `max` are picked the rest are disabled. */
-export default function AppItemPicker({ items, picked, onChange, max = 10 }: Props) {
-  const full = picked.size >= max
+/** Grouped tickboxes. Once `limit` are picked the rest are disabled. */
+export default function AppItemPicker({ items, picked, onChange, limit = 10, verb = 'app' }: Props) {
+  const full = picked.size >= limit
   const noteId = useId()
   const toggle = (id: string): void => {
     const next = new Set(picked)
@@ -43,7 +46,7 @@ export default function AppItemPicker({ items, picked, onChange, max = 10 }: Pro
           })}
         </fieldset>
       ))}
-      {full ? <p id={noteId} className="text-xs text-slate-500">Up to {max} items per app run.</p> : null}
+      {full ? <p id={noteId} className="text-xs text-slate-500">Up to {limit} items per {verb} run.</p> : null}
     </div>
   )
 }

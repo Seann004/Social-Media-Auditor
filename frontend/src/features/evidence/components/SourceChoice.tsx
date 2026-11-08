@@ -3,6 +3,7 @@ import type { RunSource } from '../types'
 const OPTIONS: { value: RunSource; label: string }[] = [
   { value: 'app', label: 'App (test accounts)' },
   { value: 'pages', label: 'Public pages' },
+  { value: 'repo', label: 'Code repository' },
 ]
 
 interface Props {

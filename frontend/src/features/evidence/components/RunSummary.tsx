@@ -57,6 +57,7 @@ function ProblemPages({ pages }: { pages: PageView[] }) {
 /** Live progress of the latest run while it is queued, capturing or assessing. */
 export function RunProgress({ run, pages, items = [] }: { run: RunView; pages: PageView[]; items?: PickItem[] }) {
   if (run.source === 'app') return <AppRunProgress run={run} items={items} />
+  if (run.source === 'repo') return <RepoRunProgress run={run} items={items} />
   const failed = pages.filter((p) => p.accessStatus !== 'ok').length
   return (
     <div aria-live="polite" className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -85,6 +86,25 @@ function AppRunProgress({ run, items }: { run: RunView; items: PickItem[] }) {
           : `Checking in the app${label ? `: ${label}` : ''} · ${
               run.currentStep > 0 ? `step ${run.currentStep} of ${APP_STEPS_PER_CHECK}` : 'starting'
             }`}
+      </p>
+      <p className="text-xs text-slate-600">Items checked: {run.categoriesDone} of {run.categoriesTotal}</p>
+    </div>
+  )
+}
+
+function RepoRunProgress({ run, items }: { run: RunView; items: PickItem[] }) {
+  const label = currentItemLabel(run, items)
+  const text =
+    run.status === 'queued'
+      ? STATUS_LABEL.queued
+      : run.status === 'capturing'
+        ? 'Reading the code'
+        : `Checking the code${label ? `: ${label}` : ''}`
+  return (
+    <div aria-live="polite" className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="flex items-center gap-2 text-sm font-medium text-slate-900">
+        <Spinner size={14} className="animate-spin text-blue-600" aria-hidden="true" />
+        {text}
       </p>
       <p className="text-xs text-slate-600">Items checked: {run.categoriesDone} of {run.categoriesTotal}</p>
     </div>
@@ -133,7 +153,7 @@ interface SummaryProps {
 export function RunSummary({ resultRun, suggestionCount, flaggedCount, pages, pagesBelongToResult, items = [] }: SummaryProps) {
   const when = formatWhen(resultRun)
   const { changes, failed: changesFailed, retry } = useRunChanges(resultRun)
-  if (resultRun.source === 'app') {
+  if (resultRun.source === 'app' || resultRun.source === 'repo') {
     const known = resultRun.uncheckedItemIds
       .map((id) => items.find((item) => item.id === id)?.label)
       .filter((label): label is string => label !== undefined)
@@ -149,7 +169,7 @@ export function RunSummary({ resultRun, suggestionCount, flaggedCount, pages, pa
         </p>
         {resultRun.error ? <p className="text-xs text-amber-700">{resultRun.error}</p> : null}
         {notChecked.length > 0 ? <p className="text-xs text-slate-600">Not checked: {notChecked.join(', ')}</p> : null}
-        {changesFailed ? (
+        {resultRun.source !== 'app' ? null : changesFailed ? (
           <p className="flex flex-wrap items-center gap-2 text-xs text-amber-700">
             The changed settings of this run could not be loaded.
             <button type="button" onClick={retry} className="rounded text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">

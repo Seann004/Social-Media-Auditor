@@ -9,6 +9,7 @@ import type { UseEvidenceResult } from '../useEvidence'
 import { useAppSetup } from '../useAppSetup'
 import type { ChecklistItem, UserRole } from '../../../types'
 import AppRunSection from './AppRunSection'
+import RepoRunSection from './RepoRunSection'
 import PanelBoundary from './PanelBoundary'
 import PermissionControl from './PermissionControl'
 import { RunProgress, RunSummary } from './RunSummary'
@@ -31,6 +32,7 @@ const spring = { type: 'spring', stiffness: 100, damping: 20 } as const
 const REASSESS_LABELS: Record<RunSource, { unfinished: string; all: string }> = {
   pages: { unfinished: 'Re-assess unfinished', all: 'Re-assess all categories' },
   app: { unfinished: 'Re-assess unfinished items', all: 'Re-assess all checked items' },
+  repo: { unfinished: 'Re-assess unfinished items', all: 'Re-assess all checked items' },
 }
 
 export const parseLinks = (text: string): string[] =>
@@ -202,7 +204,9 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
 
       <SourceChoice value={source} onChange={setChosenSource} />
 
-      {source === 'app' ? (
+      {source === 'repo' ? (
+        <RepoRunSection projectId={projectId} items={pickItems} evidence={evidence} locked={locked} onStarted={refresh} />
+      ) : source === 'app' ? (
         appSetup.setup ? (
           <AppRunSection
             projectId={projectId}
