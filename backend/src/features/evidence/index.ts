@@ -8,6 +8,7 @@ import { createAppRouter } from './appRoutes.js'
 import { createAuditData, type AuditData } from './auditData.js'
 import { MAX_ROUTE_PARAM_LENGTH, ROUTE_ID_PATTERN } from './config.js'
 import { createRunQueue } from './queue.js'
+import { createRepoRouter } from './repoRoutes.js'
 import type { RepoRepository } from './repoRepository.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import { createProjectLock } from './routeSupport.js'
@@ -69,6 +70,9 @@ const EVIDENCE_PATHS = [
   '/projects/:id/app-runs',
   '/projects/:id/evidence-runs/:runId/app-changes',
   '/suggestions/:id/steps',
+  '/projects/:id/repo-source',
+  '/projects/:id/repo-runs',
+  '/suggestions/:id/code',
 ]
 
 function unconfiguredRouter(): Router {
@@ -162,6 +166,7 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
         requestsPerMinute,
       }),
       createAppRouter({ repo, appRepo, audit, queue, guard, sessions, acquire, aiConfigured, secretKey, requestsPerMinute }),
+      createRepoRouter({ repo, repoRepo, audit, queue, sessions, acquire, aiConfigured, requestsPerMinute }),
     ],
     async start() {
       try {

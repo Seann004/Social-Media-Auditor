@@ -57,21 +57,21 @@ describe('createEvidenceModule', () => {
     expect(() => createEvidenceModule({ ...CONFIGURED, SESSION_SECRET: 'short' }, { admin })).toThrow(/at least 32/)
   })
 
-  it('returns the login, evidence and app routers when configured', () => {
-    expect(moduleWith().routers).toHaveLength(3)
+  it('returns the login, evidence, app and repo routers when configured', () => {
+    expect(moduleWith().routers).toHaveLength(4)
     expect(errors).not.toHaveBeenCalled()
   })
 
   it('warns once, and still starts, without a Groq key', () => {
     const m = moduleWith(undefined, { ...CONFIGURED, GROQ_API_KEY: undefined })
-    expect(m.routers).toHaveLength(3)
+    expect(m.routers).toHaveLength(4)
     expect(errors).toHaveBeenCalledTimes(1)
     expect(String(errors.mock.calls[0][0])).toContain('GROQ_API_KEY')
   })
 
   it('logs one startup line, and still starts, without EVIDENCE_SECRET_KEY', () => {
     const m = moduleWith(undefined, { ...CONFIGURED, EVIDENCE_SECRET_KEY: undefined })
-    expect(m.routers).toHaveLength(3)
+    expect(m.routers).toHaveLength(4)
     expect(errors).toHaveBeenCalledTimes(1)
     expect(errors.mock.calls[0]).toEqual([KEY_MISSING_LINE])
   })
