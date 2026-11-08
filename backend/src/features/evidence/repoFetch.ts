@@ -1,4 +1,5 @@
 import { REPO_FETCH_TIMEOUT_MS, REPO_GITHUB_HOSTS, REPO_MAX_DOWNLOAD_BYTES, REPO_MAX_REDIRECTS, USER_AGENT } from './config.js'
+import { isValidBranch } from './repoAddress.js'
 import type { UrlGuard } from './urlGuard.js'
 
 /** An error whose message is safe to show to an auditor. */
@@ -120,6 +121,7 @@ export function createGithubFetcher(deps: GithubFetcherDeps): GithubFetcher {
 
   return {
     async resolveCommit(owner, name, branch) {
+      if (branch !== null && !isValidBranch(branch)) throw new RepoFetchError(noBranchSentence(branch))
       const ref = branch === null ? 'HEAD' : branch.split('/').map(encodeURIComponent).join('/')
       const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits/${ref}`
       const response = await get(url, 'application/vnd.github.sha')

@@ -47,9 +47,17 @@ describe('resolveCommit', () => {
   it('encodes the branch', async () => {
     const f = createGithubFetcher({
       guard: allow,
-      fetchFn: fakeGithubFetch({ 'https://api.github.com/repos/acme/app/commits/feature/x%20y': text(SHA) }),
+      fetchFn: fakeGithubFetch({ 'https://api.github.com/repos/acme/app/commits/feature/x.y': text(SHA) }),
     })
-    expect(await f.resolveCommit('acme', 'app', 'feature/x y')).toBe(SHA)
+    expect(await f.resolveCommit('acme', 'app', 'feature/x.y')).toBe(SHA)
+  })
+
+  it('refuses an invalid branch before any request is made', async () => {
+    const fetchFn = vi.fn() as unknown as typeof fetch
+    const f = createGithubFetcher({ guard: allow, fetchFn })
+    expect(await message(f.resolveCommit('acme', 'app', 'a b'))).toBe('The branch a b was not found in this repository.')
+    expect(await message(f.resolveCommit('acme', 'app', '../x'))).toBe('The branch ../x was not found in this repository.')
+    expect(fetchFn).not.toHaveBeenCalled()
   })
 
   it('refuses a body that is not a sha', async () => {
@@ -66,16 +74,22 @@ describe('resolveCommit', () => {
     [500, null, OTHER],
   ])('maps status %s with branch %s', async (status, branch, sentence) => {
     const url = branch ? 'https://api.github.com/repos/acme/app/commits/dev' : API
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const f = createGithubFetcher({ guard: allow, fetchFn: fakeGithubFetch({ [url]: text('x', status as number) }) })
     expect(await message(f.resolveCommit('acme', 'app', branch))).toBe(sentence)
+    if (status === 500) expect(errorSpy).toHaveBeenCalled()
+    errorSpy.mockRestore()
   })
 
   it('reports a network failure with the general sentence', async () => {
     const fetchFn = (async () => {
       throw new TypeError('fetch failed')
     }) as unknown as typeof fetch
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const f = createGithubFetcher({ guard: allow, fetchFn })
     expect(await message(f.resolveCommit('acme', 'app', null))).toBe(OTHER)
+    expect(errorSpy).toHaveBeenCalled()
+    errorSpy.mockRestore()
   })
 })
 
