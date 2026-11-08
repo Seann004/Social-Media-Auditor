@@ -16,6 +16,7 @@ import {
 } from './config.js'
 import { DecisionError, recordDecision } from './decisions.js'
 import type { RunQueue } from './queue.js'
+import type { RepoRepository } from './repoRepository.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import { createProjectLock, jsonErrorHandler, projectGate, route, sessionOf, userLimiter, validParams } from './routeSupport.js'
 import { startReassess, startRun, sweepStaleRuns, type RunStartDeps, type StartOutcome } from './runStart.js'
@@ -37,6 +38,8 @@ export interface EvidenceRouterDeps {
   acquire?: (projectId: string) => (() => void) | null
   /** For the re-assess of an app run. Without it, an app run's unfinished cannot be re-assessed. */
   appRepo?: AppRepository
+  /** For the re-assess of a repo run. Without it, a repo run's unfinished cannot be re-assessed. */
+  repoRepo?: RepoRepository
   requestsPerMinute?: number
 }
 
@@ -76,7 +79,14 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
   const common = [requireSession(deps.sessions), userLimiter(deps.requestsPerMinute ?? API_REQUESTS_PER_MINUTE), validParams]
   const json = express.json({ limit: MAX_BODY_SIZE })
   const acquire = deps.acquire ?? createProjectLock()
-  const runDeps: RunStartDeps = { repo, audit, queue: deps.queue, acquire, ...(deps.appRepo ? { appRepo: deps.appRepo } : {}) }
+  const runDeps: RunStartDeps = {
+    repo,
+    audit,
+    queue: deps.queue,
+    acquire,
+    ...(deps.appRepo ? { appRepo: deps.appRepo } : {}),
+    ...(deps.repoRepo ? { repoRepo: deps.repoRepo } : {}),
+  }
   const { authorise, onProject } = projectGate(audit)
 
   const answerStart = (res: Response, outcome: StartOutcome): void => {

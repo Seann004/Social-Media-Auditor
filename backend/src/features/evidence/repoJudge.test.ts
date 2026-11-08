@@ -96,6 +96,7 @@ async function createKit(answers: Answer[] = [yesQuoting('isPrivate: age < 18')]
     },
     retryDelaysMs: [0, 0, 0],
     app: null,
+    code: null,
   }
   const ctx: RunCtx = { run, deps, signal: new AbortController().signal, robots: null, browser: () => deps.browserProvider() }
   const snapshot = await repoRepo.saveSnapshot({

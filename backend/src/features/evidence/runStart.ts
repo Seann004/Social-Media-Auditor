@@ -13,6 +13,8 @@ import {
   STALE_RUN_MARGIN_MS,
 } from './config.js'
 import type { RunQueue } from './queue.js'
+import type { RepoRepository } from './repoRepository.js'
+import { unfinishedRepoItems } from './repoRunPlan.js'
 import type { EvidenceRepository } from './repository.js'
 import { unfinishedCategories } from './runPlan.js'
 import type { EvidenceRun, RunScope } from './types.js'
@@ -24,6 +26,8 @@ export interface RunStartDeps {
   acquire: (projectId: string) => (() => void) | null
   /** For app runs and their re-assess. */
   appRepo?: AppRepository
+  /** For the re-assess of repo runs. */
+  repoRepo?: RepoRepository
   /** For tests. Defaults to the clock. */
   now?: () => number
 }
@@ -37,10 +41,12 @@ const RUN_IN_PROGRESS = 'A run is already in progress for this project.'
 const NOTHING_UNFINISHED = 'Nothing is unfinished.'
 const NEVER_OPENED = 'The unchecked items were never opened in the app; start a new app run to check them.'
 const APP_NOT_CONFIGURED = "Checking inside the app isn't configured on this server."
+const NEVER_OPENED_IN_CODE = 'The unchecked items were never opened in the code; start a new code run to check them.'
+const CODE_NOT_CONFIGURED = "Reading code repositories isn't configured on this server."
 
 const refuse = (status: 400 | 404 | 409 | 429, error: string): StartOutcome => ({ ok: false, status, error })
 
-/** How long a run may take: an app run has its own, longer limit. */
+/** How long a run may take: an app run has its own, longer limit. A repo run has a pages run's. */
 export function runTimeoutMsOf(run: Pick<EvidenceRun, 'source'>): number {
   return run.source === 'app' ? APP_RUN_TIMEOUT_MS : RUN_TIMEOUT_MS
 }
@@ -147,10 +153,25 @@ async function refusalIfNoAppItemUnfinished(deps: RunStartDeps, from: EvidenceRu
 }
 
 /**
+ * The same refusal for a repo run: the unfinished are the checked items with stored pieces and no
+ * suggestion from the code. When none is left and some items were never searched, only a new code
+ * run can check them.
+ */
+async function refusalIfNoRepoItemUnfinished(deps: RunStartDeps, from: EvidenceRun): Promise<StartOutcome | null> {
+  if (await sweepStaleRuns(deps, from.projectId)) return refuse(409, RUN_IN_PROGRESS)
+  if (!deps.repoRepo) return refuse(409, CODE_NOT_CONFIGURED)
+  const capture = { projectId: from.projectId, capturedInRunId: from.capturedInRunId }
+  const unfinished = await unfinishedRepoItems(deps.repo, deps.repoRepo, capture, from.checkedItemIds)
+  if (unfinished.length > 0) return null
+  return refuse(409, from.uncheckedItemIds.length > 0 ? NEVER_OPENED_IN_CODE : NOTHING_UNFINISHED)
+}
+
+/**
  * A run that assesses again from the pages an earlier run captured. It has no pages of its own, so it
  * points at the pages of the run it was made from. Only the latest results can be re-assessed: an old
  * tab would otherwise show suggestions from pages that are no longer the current ones. A re-assess of
- * an app run judges the recorded steps again, so it keeps the app run's source and checked items.
+ * an app run judges the recorded steps again, so it keeps the app run's source and checked items; a
+ * re-assess of a repo run does the same with the stored pieces of code.
  */
 export function startReassess(
   deps: RunStartDeps,
@@ -169,11 +190,12 @@ export function startReassess(
     if (!latest || latest.capturedInRunId !== from.capturedInRunId) {
       return { refusal: refuse(409, 'A newer run has replaced these results. Reload the page and assess again from the latest run.') }
     }
-    if (from.source === 'app') {
-      const refusal = scope === 'unfinished' ? await refusalIfNoAppItemUnfinished(deps, from) : null
+    if (from.source === 'app' || from.source === 'repo') {
+      const check = from.source === 'app' ? refusalIfNoAppItemUnfinished : refusalIfNoRepoItemUnfinished
+      const refusal = scope === 'unfinished' ? await check(deps, from) : null
       if (refusal) return { refusal }
-      // The new run judges with the same app prompt, so it records the same prompt version.
-      return { capturedInRunId: from.capturedInRunId, source: 'app', checkedItemIds: from.checkedItemIds, promptVersion: from.promptVersion }
+      // The new run judges with the same prompt, so it records the same prompt version.
+      return { capturedInRunId: from.capturedInRunId, source: from.source, checkedItemIds: from.checkedItemIds, promptVersion: from.promptVersion }
     }
     if (scope === 'unfinished') {
       const refusal = await refusalIfNothingUnfinished(deps, projectId, from.capturedInRunId)

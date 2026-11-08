@@ -8,12 +8,14 @@ import { createAppRouter } from './appRoutes.js'
 import { createAuditData, type AuditData } from './auditData.js'
 import { MAX_ROUTE_PARAM_LENGTH, ROUTE_ID_PATTERN } from './config.js'
 import { createRunQueue } from './queue.js'
+import type { RepoRepository } from './repoRepository.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import { createProjectLock } from './routeSupport.js'
 import { createEvidenceRouter } from './routes.js'
 import { runEvidenceJob, type RunnerDeps } from './runner.js'
 import { parseSecretKey } from './secrets.js'
 import { createSupabaseAppRepository } from './supabaseAppRepository.js'
+import { createSupabaseRepoRepository } from './supabaseRepoRepository.js'
 import { createSupabaseRepository, createSupabaseScreenshotStore } from './supabaseRepository.js'
 import { createUrlGuard } from './urlGuard.js'
 
@@ -32,6 +34,7 @@ export interface EvidenceModuleOptions {
   screenshots?: ScreenshotStore
   audit?: AuditData
   appRepo?: AppRepository
+  repoRepo?: RepoRepository
   requestsPerMinute?: number
   /** For tests. Defaults to runEvidenceJob. */
   runJob?: (runId: string, deps: RunnerDeps) => Promise<void>
@@ -116,6 +119,7 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
   const screenshots = options.screenshots ?? createSupabaseScreenshotStore(admin as SupabaseClient)
   const audit = options.audit ?? createAuditData({ client: () => admin })
   const appRepo = options.appRepo ?? createSupabaseAppRepository(admin as SupabaseClient)
+  const repoRepo = options.repoRepo ?? createSupabaseRepoRepository(admin as SupabaseClient)
   const hosts = allowedPrivateHosts(env)
   const guard = () => createUrlGuard({ allowedPrivateHosts: hosts })
   const apiKey = env.GROQ_API_KEY ?? ''
@@ -125,7 +129,16 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
   if (!secretKey) console.error(SECRET_KEY_MISSING)
 
   const queue = createRunQueue((runId) =>
-    (options.runJob ?? runEvidenceJob)(runId, { repo, screenshots, audit, guard: guard(), apiKey, model, app: { appRepo, secretKey } }),
+    (options.runJob ?? runEvidenceJob)(runId, {
+      repo,
+      screenshots,
+      audit,
+      guard: guard(),
+      apiKey,
+      model,
+      app: { appRepo, secretKey },
+      code: { repoRepo },
+    }),
   )
   // One lock for both routers: a page run and an app run of a project never start at the same time.
   const acquire = createProjectLock()
@@ -145,6 +158,7 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
         aiConfigured,
         acquire,
         appRepo,
+        repoRepo,
         requestsPerMinute,
       }),
       createAppRouter({ repo, appRepo, audit, queue, guard, sessions, acquire, aiConfigured, secretKey, requestsPerMinute }),

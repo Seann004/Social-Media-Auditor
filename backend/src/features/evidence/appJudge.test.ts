@@ -101,6 +101,7 @@ async function createKit(): Promise<Kit> {
     },
     retryDelaysMs: [0, 0, 0],
     app: null,
+    code: null,
   }
   const ctx: RunCtx = { run, deps, signal: new AbortController().signal, robots: null, browser: () => browserProvider() }
   const stepCtx: StepContext = { run, itemId: ITEM.id, repo, screenshots: repo, appRepo }

@@ -5,6 +5,7 @@ import { createSessions } from '../auth/session.js'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { createEvidenceModule, NOT_CONFIGURED_MESSAGE } from './index.js'
 import { createMemoryAppRepository } from './memoryAppRepository.js'
+import { createMemoryRepoRepository } from './memoryRepoRepository.js'
 import { createMemoryRepository } from './memoryRepository.js'
 import { makeAudit } from './routesTestKit.js'
 
@@ -131,10 +132,11 @@ describe('how the module is wired', () => {
   function build(env: Record<string, string | undefined>, runJob = vi.fn(async () => undefined), audit = makeAudit()) {
     const repo = createMemoryRepository()
     const appRepo = createMemoryAppRepository()
-    const m = createEvidenceModule(env, { admin, repo, screenshots: repo, audit, runJob, appRepo })
+    const repoRepo = createMemoryRepoRepository()
+    const m = createEvidenceModule(env, { admin, repo, screenshots: repo, audit, runJob, appRepo, repoRepo })
     const app = express()
     app.use('/api', ...m.routers)
-    return { app, repo, appRepo, runJob }
+    return { app, repo, appRepo, repoRepo, runJob }
   }
 
   async function readyForAppRun(appRepo: ReturnType<typeof createMemoryAppRepository>): Promise<void> {
@@ -165,6 +167,27 @@ describe('how the module is wired', () => {
     expect(deps.model).toBe('my-model')
     expect((await deps.guard.check('http://localhost:8080/')).allowed).toBe(true)
     expect((await deps.guard.check('http://localhost:9999/')).allowed).toBe(false)
+  })
+
+  it('passes the repo repository to every run as its code wiring', async () => {
+    const { app, repo, repoRepo, runJob } = build(CONFIGURED)
+    await repo.saveSource('p-1', ['https://example.com/'], 'u-aud')
+    await request(app).post('/api/projects/p-1/evidence-runs').set(head)
+    await vi.waitFor(() => expect(runJob).toHaveBeenCalledTimes(1))
+    const deps = (runJob.mock.calls[0] as unknown as [string, { code: { repoRepo: unknown; fetcher?: unknown } }])[1]
+    expect(deps.code.repoRepo).toBe(repoRepo)
+    expect(deps.code.fetcher).toBeUndefined()
+  })
+
+  it('gives the reassess route the repo repository, so a repo run with nothing unfinished is refused as such', async () => {
+    const { app, repo, repoRepo } = build(CONFIGURED)
+    const from = await repo.createRun({ projectId: 'p-1', startedBy: 'u-aud', scope: 'all', source: 'repo', checkedItemIds: ['item-1'] })
+    await repo.updateRun(from.id, { status: 'completed', finishedAt: new Date().toISOString() })
+    await repoRepo.addPieces([{ runId: from.id, itemId: 'item-1', pageId: 'pg', path: 'a.ts', startLine: 1, endLine: 2, commitSha: 'a'.repeat(40), round: 1 }])
+    await repo.addSuggestion({ runId: from.id, projectId: 'p-1', itemId: 'item-1', suggestedResult: 'yes', reason: 'r', confidence: 'high', flags: [], passageIdsSent: [], source: 'repo', quotes: [] })
+    const res = await request(app).post(`/api/projects/p-1/evidence-runs/${from.id}/reassess`).set(head).send({ scope: 'unfinished' })
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('Nothing is unfinished.')
   })
 
   it('defaults the model to openai/gpt-oss-120b when GROQ_MODEL is unset', async () => {

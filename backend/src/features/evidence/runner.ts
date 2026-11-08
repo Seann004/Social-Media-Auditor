@@ -6,6 +6,8 @@ import { capturePages } from './capture.js'
 import { MAX_TOKENS_PER_RUN, RUN_UPDATE_RETRY_DELAYS_MS } from './config.js'
 import { captureHighlights } from './highlight.js'
 import { relevantFailedPages } from './failedPages.js'
+import { createGithubFetcher, type GithubFetcher } from './repoFetch.js'
+import { executeRepoRun } from './repoRunner.js'
 import { createRobotsChecker } from './robots.js'
 import { planCategories, unfinishedCategories, type Category } from './runPlan.js'
 import { assessAndStore, type BatchContext, type TokenMeter } from './runnerAssess.js'
@@ -31,6 +33,7 @@ import {
   type RunnerDeps,
 } from './runnerShared.js'
 import type { CapturedPage, EvidenceRun, Suggestion } from './types.js'
+import type { UrlGuard } from './urlGuard.js'
 
 export type { RunnerDeps } from './runnerShared.js'
 
@@ -47,6 +50,8 @@ interface Progress {
   created: Suggestion[]
 }
 
+const defaultFetcher = (guard: UrlGuard, signal: AbortSignal): GithubFetcher => createGithubFetcher({ guard, signal })
+
 function resolve(deps: RunnerDeps): ResolvedDeps {
   return {
     repo: deps.repo,
@@ -61,6 +66,7 @@ function resolve(deps: RunnerDeps): ResolvedDeps {
     assessBatch: deps.assessBatch ?? defaultAssessBatch,
     retryDelaysMs: deps.retryDelaysMs ?? RUN_UPDATE_RETRY_DELAYS_MS,
     app: deps.app ?? null,
+    code: deps.code ? { repoRepo: deps.code.repoRepo, fetcher: deps.code.fetcher ?? defaultFetcher } : null,
   }
 }
 
@@ -187,9 +193,9 @@ async function endAfterCrash(ctx: RunCtx, err: unknown): Promise<void> {
   return fail(ctx, GENERIC_FAILURE)
 }
 
-/** Without a permission on record, robots.txt applies to a pages run. An app run reads neither. */
+/** Without a permission on record, robots.txt applies to a pages run. An app run or a repo run reads neither. */
 async function robotsGranted(run: EvidenceRun, deps: ResolvedDeps): Promise<boolean> {
-  if (run.source === 'app') return true
+  if (run.source === 'app' || run.source === 'repo') return true
   try {
     return (await deps.repo.getPermission(run.projectId))?.granted === true
   } catch (err) {
@@ -225,8 +231,8 @@ async function readRun(runId: string, deps: ResolvedDeps): Promise<EvidenceRun |
 /**
  * Runs one evidence job: capture (or reuse the pages of an earlier run), then assess category by
  * category, store suggestions, and end the run as completed, partial or failed. An app run goes to
- * executeAppRun instead. It never changes an answer or the score, and it never rejects: whatever
- * goes wrong ends up on the run.
+ * executeAppRun instead, and a repo run to executeRepoRun. It never changes an answer or the score,
+ * and it never rejects: whatever goes wrong ends up on the run.
  */
 export async function runEvidenceJob(runId: string, deps: RunnerDeps): Promise<void> {
   const resolved = resolve(deps)
@@ -241,7 +247,7 @@ export async function runEvidenceJob(runId: string, deps: RunnerDeps): Promise<v
     // The run's own time starts once it is known which kind of run it is.
     timer = setTimeout(() => controller.abort(), deps.runTimeoutMs ?? runTimeoutMsOf(run))
     ctx = await startContext(run, resolved, controller.signal)
-    await (run.source === 'app' ? executeAppRun(ctx) : execute(ctx))
+    await (run.source === 'app' ? executeAppRun(ctx) : run.source === 'repo' ? executeRepoRun(ctx) : execute(ctx))
   } catch (err) {
     try {
       if (ctx) await endAfterCrash(ctx, err)

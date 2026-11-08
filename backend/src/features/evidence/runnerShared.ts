@@ -6,6 +6,8 @@ import type { AssessInput, AssessItem, AssessOutput } from './assess.js'
 import type { AuditData } from './auditData.js'
 import type { CaptureOptions } from './capture.js'
 import type { HighlightOptions } from './highlight.js'
+import type { GithubFetcher } from './repoFetch.js'
+import type { RepoRepository } from './repoRepository.js'
 import type { EvidenceRepository, RunPatch, ScreenshotStore } from './repository.js'
 import type { RobotsChecker } from './robots.js'
 import type { TokenMeter } from './runnerAssess.js'
@@ -22,6 +24,15 @@ export interface AppRunnerDeps {
   /** For tests. Defaults to APP_RESTORE_GRACE_MS. */
   restoreGraceMs?: number
 }
+
+/** What a code repository run needs besides a pages run's dependencies. */
+export interface CodeRunnerDeps {
+  repoRepo: RepoRepository
+  /** Defaults to the real GitHub fetcher. */
+  fetcher?: (guard: UrlGuard, signal: AbortSignal) => GithubFetcher
+}
+
+export type ResolvedCodeDeps = Required<CodeRunnerDeps>
 
 export interface RunnerDeps {
   repo: EvidenceRepository
@@ -40,13 +51,15 @@ export interface RunnerDeps {
   assessBatch?: (input: AssessInput) => Promise<AssessOutput>
   /** For app runs. Without it, an app run fails with a sentence saying so. */
   app?: AppRunnerDeps | null
+  /** For code repository runs. Without it, a repo run fails with a sentence saying so. */
+  code?: CodeRunnerDeps | null
   /** For tests. Defaults to the run's own timeout: runTimeoutMsOf. */
   runTimeoutMs?: number
   /** Waits between tries at an update that failed. For tests. Defaults to RUN_UPDATE_RETRY_DELAYS_MS. */
   retryDelaysMs?: readonly number[]
 }
 
-export type ResolvedDeps = Required<Omit<RunnerDeps, 'runTimeoutMs'>>
+export type ResolvedDeps = Required<Omit<RunnerDeps, 'runTimeoutMs' | 'code'>> & { code: ResolvedCodeDeps | null }
 
 /** What the helpers that keep a run's status true need. A run that could not be read has only its id. */
 export interface RunHandle {
