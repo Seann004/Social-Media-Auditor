@@ -31,7 +31,11 @@ const toSource = (row: Row): RepoSource => ({
 
 const toSnapshot = (row: Row): RepoSnapshot => ({ ...(row as RepoSnapshot), branch: row.branch ?? null })
 
-const toPiece = (row: Row): RepoPiece => row as RepoPiece
+/** The position column only orders rows; it is not part of RepoPiece. */
+const toPiece = (row: Row): RepoPiece => {
+  const { position: _position, ...piece } = row
+  return piece as RepoPiece
+}
 
 export function createSupabaseRepoRepository(admin: SupabaseClient): RepoRepository {
   return {
@@ -86,11 +90,20 @@ export function createSupabaseRepoRepository(admin: SupabaseClient): RepoReposit
 
     async addPieces(input) {
       if (input.length === 0) return []
-      // One insert gives every row the same now(); distinct createdAt values keep the insertion order.
-      const base = Date.now()
-      const rows = input.map((p, i) => ({ ...p, createdAt: new Date(base + i).toISOString() }))
+      // Each piece gets the next free position in its run, so calls never interleave.
+      const last = unwrap(
+        'addPieces',
+        await admin
+          .from('Evidence_Repo_Piece')
+          .select('position')
+          .eq('runId', input[0].runId)
+          .order('position', { ascending: false })
+          .limit(1),
+      )
+      const start = last && last.length > 0 ? Number(last[0].position) + 1 : 0
+      const rows = input.map((p, i) => ({ ...p, position: start + i }))
       const saved = unwrap('addPieces', await admin.from('Evidence_Repo_Piece').insert(rows).select('*')) ?? []
-      return saved.map(toPiece).sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
+      return [...saved].sort((a, b) => a.position - b.position).map(toPiece)
     },
     async listPieces(runId, itemId) {
       const rows: Row[] = []
@@ -102,7 +115,7 @@ export function createSupabaseRepoRepository(admin: SupabaseClient): RepoReposit
             'listPieces',
             await query
               .order('round', { ascending: true })
-              .order('createdAt', { ascending: true })
+              .order('position', { ascending: true })
               .order('id', { ascending: true })
               .range(from, from + SUPABASE_READ_PAGE_SIZE - 1),
           ) ?? []

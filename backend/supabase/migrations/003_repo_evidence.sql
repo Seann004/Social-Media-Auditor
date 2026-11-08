@@ -54,6 +54,7 @@ create table if not exists "Evidence_Repo_Piece" (
   "endLine" integer not null,
   "commitSha" text not null,
   "round" integer not null check ("round" in (1, 2)),
+  "position" integer not null default 0,
   "createdAt" timestamptz not null default now()
 );
 alter table "Evidence_Repo_Piece" enable row level security;

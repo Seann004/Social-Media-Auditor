@@ -6,6 +6,7 @@ import type { EvidenceRepository } from './repository.js'
 import type { NewRepoPiece, NewRepoSnapshot } from './repoTypes.js'
 import { createMemoryRepository } from './memoryRepository.js'
 import { createMemoryRepoRepository } from './memoryRepoRepository.js'
+import { createSupabaseRepository } from './supabaseRepository.js'
 import { createSupabaseRepoRepository } from './supabaseRepoRepository.js'
 
 interface Harness {
@@ -162,6 +163,15 @@ describe.each(variants)('repo evidence repository (%s)', (_variant, factory) => 
     expect(await h.repo.listPieces(runId)).toHaveLength(4)
     expect(await h.repo.listPieces(randomUUID())).toEqual([])
     expect(await h.repo.addPieces([])).toEqual([])
+  })
+
+  it('keeps two addPieces calls for the same run and round in call order', async () => {
+    const runId = await newRunId()
+    const pageId = await newPageId(runId)
+    await h.repo.addPieces([piece(runId, h.itemId, pageId, 'a.ts', 1), piece(runId, h.itemId, pageId, 'b.ts', 1)])
+    await h.repo.addPieces([piece(runId, h.itemId, pageId, 'c.ts', 1), piece(runId, h.itemId, pageId, 'd.ts', 1)])
+    expect((await h.repo.listPieces(runId, h.itemId)).map((p) => p.path)).toEqual(['a.ts', 'b.ts', 'c.ts', 'd.ts'])
+    expect(await h.repo.listPieces(runId)).not.toHaveProperty('0.position')
   })
 
   it('deleting the run removes its snapshot and pieces', async () => {
