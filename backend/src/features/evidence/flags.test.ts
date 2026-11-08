@@ -135,4 +135,18 @@ describe('computeFlags for app checks', () => {
     expect(short.filter((f) => f.type === 'inaccessible')).toHaveLength(1)
     expect(types(input({ source: 'app', stoppedBy: null }))).not.toContain('inaccessible')
   })
+
+  it('adds comments_only when a claimed result rests only on comments or docs', () => {
+    const flags = computeFlags(input({ commentsOnly: true, suggestedResult: 'yes', quotes: [{ text: 'x', verified: true }] }))
+    expect(flags).toContainEqual({ type: 'comments_only', reason: 'Only comments or documentation support this.' })
+  })
+
+  it('leaves comments_only out for a null result', () => {
+    expect(types(input({ commentsOnly: true, suggestedResult: null }))).not.toContain('comments_only')
+  })
+
+  it('uses the code wording for a repo item that is not assessable', () => {
+    const flag = computeFlags(input({ webAssessable: false, source: 'repo' })).find((f) => f.type === 'not_web_assessable')
+    expect(flag?.reason).toBe("This item needs evidence the code can't show.")
+  })
 })

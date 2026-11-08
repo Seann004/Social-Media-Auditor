@@ -15,6 +15,8 @@ export interface FlagInput {
   source?: RunSource
   /** The page that ended an app check (a captcha, a 2-factor prompt, a bot check). */
   stoppedBy?: StoppedBy | null
+  /** A repo check whose verified quotes all come from comments, docs or tests. */
+  commentsOnly?: boolean
 }
 
 const MAX_URLS_NAMED = 3
@@ -22,6 +24,7 @@ const NO_QUOTE_REASON = 'The AI gave this result without quoting any captured pa
 const NOT_ASSESSABLE_REASON: Readonly<Record<RunSource, string>> = {
   pages: "This item needs internal evidence, which a website can't show.",
   app: "This item needs evidence the app can't show.",
+  repo: "This item needs evidence the code can't show.",
 }
 const CLAIM_RESULTS: readonly SuggestedResult[] = ['yes', 'no', 'partially']
 
@@ -89,6 +92,14 @@ export function computeFlags(input: FlagInput): ReviewFlag[] {
 
   if (input.confidence === 'low') {
     flags.push({ type: 'low_confidence', reason: 'The AI marked this suggestion as low confidence.' })
+  }
+
+  if (
+    input.commentsOnly &&
+    input.suggestedResult !== null &&
+    CLAIM_RESULTS.includes(input.suggestedResult)
+  ) {
+    flags.push({ type: 'comments_only', reason: 'Only comments or documentation support this.' })
   }
 
   if (!input.webAssessable) {

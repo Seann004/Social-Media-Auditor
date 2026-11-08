@@ -1,7 +1,7 @@
 /** Types for app evidence: the AI uses the platform's web app with test accounts. */
 
 export type AgeGroup = 'under_18' | 'adult'
-export type RunSource = 'pages' | 'app'
+export type RunSource = 'pages' | 'app' | 'repo'
 
 export interface AppSource {
   id: string

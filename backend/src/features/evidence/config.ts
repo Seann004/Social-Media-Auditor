@@ -132,3 +132,29 @@ export const APP_UNREADABLE_REPLIES_BEFORE_STOP = 3
 // Crypto and AI
 export const SECRET_KEY_BYTES = 32
 export const AI_REASONING_EFFORT = 'low'
+
+// Repo evidence: the AI checks items against the code of a public GitHub repository
+export const REPO_PROMPT_VERSION = 'repo-evidence-v1'
+export const REPO_MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+export const REPO_MAX_UNPACKED_BYTES = 200 * 1024 * 1024
+/** Kept files; reading stops after this many. */
+export const REPO_MAX_FILES = 5_000
+export const REPO_MAX_FILE_BYTES = 300_000
+export const REPO_MAX_ITEMS_PER_RUN = 10
+export const REPO_LINES_AROUND = 20
+export const REPO_MAX_PIECES_PER_ITEM = 6
+export const REPO_MAX_MORE_TERMS = 3
+export const REPO_MAX_SEARCH_WORDS = 12
+export const REPO_MAX_PATH_HINTS = 6
+export const REPO_PROMPT_PATHS_CHARS = 3_000
+export const REPO_FETCH_TIMEOUT_MS = 60_000
+export const REPO_MAX_REDIRECTS = 3
+/** Folders skipped at any depth. */
+export const REPO_SKIP_DIRS: readonly string[] = [
+  'node_modules', 'vendor', 'dist', 'build', '.git', '.next', 'out', 'coverage', 'target',
+]
+export const REPO_LOCK_FILES: readonly string[] = [
+  'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'Cargo.lock', 'poetry.lock', 'composer.lock', 'Gemfile.lock',
+]
+/** The only hosts a repo run talks to. */
+export const REPO_GITHUB_HOSTS: readonly string[] = ['api.github.com', 'codeload.github.com']
