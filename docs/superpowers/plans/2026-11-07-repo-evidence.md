@@ -334,7 +334,7 @@
   6. **Size cap:** a piece's `code` is its lines joined by `\n`. If that would exceed `MAX_CHARS_PER_PASSAGE - 200`, narrow it one line at a time from the edge farther from the first matching line, updating the start and end lines.
 
 - [ ] **Step 1: Write the failing tests.**
-  - A file matching 3 words outranks one matching 1 word 10 times (the cap of 5).
+  - A file matching 3 words on 2 lines each (score 6) outranks one matching 1 word 10 times (capped at 5).
   - A path hint lifts a weaker file above a stronger one.
   - Two matches 30 lines apart in a 200-line file give one merged window, with lines 1-based and inclusive.
   - The round-robin order across 3 files is fixed.
