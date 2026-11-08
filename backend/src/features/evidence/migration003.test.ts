@@ -29,8 +29,8 @@ describe('003_repo_evidence.sql', () => {
 
   it('drops no table and grants nothing, least of all to anon', () => {
     expect(sql).not.toMatch(/drop table/i)
-    expect(sql).not.toMatch(/\bgrant\b/i)
-    expect(sql).not.toMatch(/\banon\b/i.source.replace('', '')) 
+    expect(code).not.toMatch(/\bgrant\b/i)
+    expect(code).not.toMatch(/\banon\b/i)
   })
 
   it('checks a piece round is 1 or 2 and indexes runId and itemId', () => {
