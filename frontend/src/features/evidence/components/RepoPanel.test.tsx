@@ -102,6 +102,42 @@ describe('Code repository source in the evidence panel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Enter a public GitHub repository address, like https://github.com/owner/name.')
   })
 
+  it('links the error and the hint to the address field', async () => {
+    const user = userEvent.setup()
+    m.saveRepoSource.mockRejectedValue(new EvidenceApiError(400, 'Nope.'))
+    render(<Harness />)
+    await openRepo(user)
+    const input = screen.getByLabelText('Repository address')
+    expect(input).not.toHaveAttribute('aria-invalid')
+    expect(input).toHaveAccessibleDescription('Only public GitHub repositories. The code is read, never run.')
+    await user.click(screen.getByRole('button', { name: 'Save repository' }))
+    await screen.findByRole('alert')
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(input).toHaveAccessibleDescription('Nope. Only public GitHub repositories. The code is read, never run.')
+  })
+
+  it('says "Something went wrong. Try again." when saving fails without a server reply', async () => {
+    const user = userEvent.setup()
+    m.saveRepoSource.mockRejectedValue(new Error('boom'))
+    render(<Harness />)
+    await openRepo(user)
+    await user.type(screen.getByLabelText('Repository address'), 'x')
+    await user.click(screen.getByRole('button', { name: 'Save repository' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong. Try again.')
+  })
+
+  it('says "Something went wrong. Try again." when starting fails without a server reply', async () => {
+    const user = userEvent.setup()
+    m.getRepoSource.mockResolvedValue({ repo })
+    m.startRepoRun.mockRejectedValue(new Error('boom'))
+    render(<Harness />)
+    await openRepo(user)
+    await screen.findByText(repo.repoUrl, { selector: 'span' })
+    await user.click(screen.getByRole('checkbox', { name: 'Item 1' }))
+    await user.click(screen.getByRole('button', { name: 'Check the code' }))
+    expect(await screen.findByText('Something went wrong. Try again.')).toBeInTheDocument()
+  })
+
   it('caps the picker at 10 with the same style of message as the app', async () => {
     const user = userEvent.setup()
     render(<Harness />)

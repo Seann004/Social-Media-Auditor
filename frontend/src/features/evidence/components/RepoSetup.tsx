@@ -44,13 +44,13 @@ export default function RepoSetup({ repo, onSave, picked, onPick, items, canStar
       <form onSubmit={(e) => void submit(e)} className="space-y-2">
         <div>
           <label htmlFor="repo-url" className="mb-1 block text-xs font-medium text-slate-700">Repository address</label>
-          <input id="repo-url" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="https://github.com/owner/name" disabled={disabled} spellCheck={false} className={FIELD} />
+          <input id="repo-url" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="https://github.com/owner/name" aria-describedby={error ? 'repo-error repo-hint' : 'repo-hint'} aria-invalid={error ? true : undefined} disabled={disabled} spellCheck={false} className={FIELD} />
         </div>
         <div>
           <label htmlFor="repo-branch" className="mb-1 block text-xs font-medium text-slate-700">Branch (optional)</label>
           <input id="repo-branch" value={branch} onChange={(e) => setBranch(e.target.value)} disabled={disabled} spellCheck={false} className={FIELD} />
         </div>
-        {error ? <p role="alert" className="text-xs text-rose-600">{error}</p> : null}
+        {error ? <p id="repo-error" role="alert" className="text-xs text-rose-600">{error}</p> : null}
         <button
           type="submit"
           disabled={disabled || saving}
@@ -58,7 +58,7 @@ export default function RepoSetup({ repo, onSave, picked, onPick, items, canStar
         >
           Save repository
         </button>
-        <p className="text-xs text-slate-500">Only public GitHub repositories. The code is read, never run.</p>
+        <p id="repo-hint" className="text-xs text-slate-500">Only public GitHub repositories. The code is read, never run.</p>
       </form>
 
       {repo ? (

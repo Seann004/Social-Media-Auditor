@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { PlayIcon as Play } from '@phosphor-icons/react'
-import { EvidenceApiError, startAppRun } from '../api'
+import { startAppRun } from '../api'
 import { appRunBlocker } from '../appState'
 import type { PickItem } from '../appState'
-import type { AppSetupResponse, RunView } from '../types'
+import type { AppSetupResponse } from '../types'
 import type { UseEvidenceResult } from '../useEvidence'
+import { useItemRun } from '../useItemRun'
 import AppItemPicker from './AppItemPicker'
 import AppSetup from './AppSetup'
 
@@ -21,16 +21,14 @@ interface Props {
   onSetupSaved(): void | Promise<void>
 }
 
-const ACTIVE: RunView['status'][] = ['queued', 'capturing', 'assessing']
-
 /** The App branch of the evidence panel: setup, item picker and the Run button. */
 export default function AppRunSection({ projectId, setup, items, evidence, locked, onStarted, onSetupSaved }: Props) {
-  const [chosen, setChosen] = useState<Set<string>>(new Set())
-  // Items that left the checklist since they were ticked are not sent.
-  const picked = useMemo(() => new Set(items.filter((i) => chosen.has(i.id)).map((i) => i.id)), [items, chosen])
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
-  const running = evidence.run !== null && ACTIVE.includes(evidence.run.status)
+  const { setChosen, picked, busy, message, running, start: run } = useItemRun({
+    items,
+    run: evidence.run,
+    startRun: (ids) => startAppRun(projectId, ids),
+    onStarted,
+  })
   const blocker = appRunBlocker({
     hasApp: setup.app !== null,
     accountCount: setup.accounts.length,
@@ -39,23 +37,6 @@ export default function AppRunSection({ projectId, setup, items, evidence, locke
     locked,
     running,
   })
-
-  async function run(): Promise<void> {
-    setBusy(true)
-    setMessage(null)
-    try {
-      await startAppRun(projectId, [...picked])
-    } catch (err) {
-      if (!(err instanceof EvidenceApiError) || err.status !== 409) {
-        setMessage(err instanceof EvidenceApiError ? err.message : 'Something went wrong. Try again.')
-      }
-    }
-    try {
-      await onStarted()
-    } finally {
-      setBusy(false)
-    }
-  }
 
   return (
     <div className="space-y-4">

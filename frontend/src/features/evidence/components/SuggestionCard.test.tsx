@@ -373,4 +373,11 @@ describe('SuggestionCard replay', () => {
     )
     expect(screen.queryByRole('button', { name: 'Replay steps' })).not.toBeInTheDocument()
   })
+
+  it('shows no Replay steps for a repo suggestion', () => {
+    render(
+      <SuggestionCard suggestion={makeSuggestion({ source: 'repo' })} decision={null} currentStatus={undefined} canDecide onAccept={vi.fn()} onOverride={vi.fn()} onKeepMine={vi.fn()} />,
+    )
+    expect(screen.queryByRole('button', { name: 'Replay steps' })).not.toBeInTheDocument()
+  })
 })

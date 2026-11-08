@@ -6,6 +6,7 @@ import { EvidenceApiError, getSources, reassess, saveSources, setPermission, sta
 import { toPickItems } from '../appState'
 import type { EvidencePermission, RunScope, RunSource } from '../types'
 import type { UseEvidenceResult } from '../useEvidence'
+import { isRunActive } from '../useItemRun'
 import { useAppSetup } from '../useAppSetup'
 import type { ChecklistItem, UserRole } from '../../../types'
 import AppRunSection from './AppRunSection'
@@ -26,7 +27,6 @@ interface Props {
 }
 
 const SIGN_IN_AGAIN = 'AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.'
-const ACTIVE = ['queued', 'capturing', 'assessing']
 const spring = { type: 'spring', stiffness: 100, damping: 20 } as const
 /** Page runs work by category, app runs by checklist item. */
 const REASSESS_LABELS: Record<RunSource, { unfinished: string; all: string }> = {
@@ -127,7 +127,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
     )
   }
 
-  const running = run !== null && ACTIVE.includes(run.status)
+  const running = isRunActive(run)
   const canStart = !locked && sourcesState === 'ok' && !busy && !running
   // Re-assess acts on the result run, so it does not depend on the chosen source or the page links.
   const canReassess = source === 'pages' ? canStart : !locked && !busy && !running
