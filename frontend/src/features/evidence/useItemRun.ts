@@ -17,7 +17,6 @@ interface Options {
 }
 
 export interface UseItemRunResult {
-  chosen: Set<string>
   setChosen(next: Set<string>): void
   /** Picked ids in checklist order; items that left the checklist are dropped. */
   pickedIds: string[]
@@ -54,5 +53,5 @@ export function useItemRun({ items, run, startRun, onStarted }: Options): UseIte
     }
   }
 
-  return { chosen, setChosen, pickedIds, picked, busy, message, running: isRunActive(run), start }
+  return { setChosen, pickedIds, picked, busy, message, running: isRunActive(run), start }
 }

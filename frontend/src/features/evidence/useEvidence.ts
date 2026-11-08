@@ -5,16 +5,15 @@ import type {
   DecisionView,
   LatestRunResponse,
   PageView,
-  RunStatus,
   RunView,
   SuggestionsResponse,
   SuggestionView,
 } from './types'
+import { ACTIVE_STATUSES } from './useItemRun'
 
 const POLL_INTERVAL_MS = 3000
 /** Consecutive failed polls before the panel shows a problem (one 500 in a poll is normal noise). */
 const QUIET_FAILURES = 3
-const ACTIVE_STATUSES: ReadonlySet<RunStatus> = new Set(['queued', 'capturing', 'assessing'])
 /** Statuses that will not fix themselves, so polling stops. */
 const FATAL_STATUSES: ReadonlySet<number> = new Set([401, 403, 503])
 const NETWORK_MESSAGE = 'Could not reach the server. Check your connection and try again.'
@@ -51,7 +50,7 @@ const emptySnapshot = (projectId: string): Snapshot => ({
   decisionsByItem: new Map(),
 })
 
-const isActive = (run: RunView | null): boolean => run !== null && ACTIVE_STATUSES.has(run.status)
+const isActive = (run: RunView | null): boolean => run !== null && ACTIVE_STATUSES.includes(run.status)
 
 function toApiError(err: unknown): EvidenceApiError {
   return err instanceof EvidenceApiError ? err : new EvidenceApiError(0, NETWORK_MESSAGE)
