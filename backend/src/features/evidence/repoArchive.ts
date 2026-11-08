@@ -3,6 +3,7 @@ import {
   REPO_LOCK_FILES,
   REPO_MAX_FILES,
   REPO_MAX_FILE_BYTES,
+  REPO_MAX_TOTAL_LINES,
   REPO_MAX_UNPACKED_BYTES,
   REPO_SKIP_DIRS,
 } from './config.js'
@@ -13,6 +14,7 @@ export interface ArchiveLimits {
   maxUnpackedBytes: number
   maxFiles: number
   maxFileBytes: number
+  maxTotalLines: number
 }
 
 export interface ArchiveResult {
@@ -27,6 +29,8 @@ const UNREADABLE = "The repository's download could not be read."
 const BLOCK = 512
 const BINARY_SCAN_BYTES = 8_000
 const USTAR_MAGIC = Buffer.from('ustar\0')
+/** A control character (NUL, newline, tab, DEL...) in a path could fake a code line in a passage header. */
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/
 
 /** One tar entry after any long-name or pax header has been applied to it. */
 interface TarEntry {
@@ -116,7 +120,7 @@ function* tarEntries(tar: Buffer): Generator<TarEntry> {
 
 /** Splits a path into segments, or returns null when the path is not acceptable. */
 function cleanSegments(path: string): string[] | null {
-  if (path === '' || path.startsWith('/') || path.includes('\\') || path.includes('\0')) return null
+  if (path === '' || path.startsWith('/') || path.includes('\\') || CONTROL_CHARS.test(path)) return null
   const raw = path.split('/')
   const segments = raw[raw.length - 1] === '' ? raw.slice(0, -1) : raw
   if (segments.length === 0 || segments.some((s) => s === '' || s === '.' || s === '..')) return null
@@ -160,11 +164,13 @@ export function readArchive(gz: Buffer, limits: Partial<ArchiveLimits> = {}): Ar
   const maxUnpackedBytes = limits.maxUnpackedBytes ?? REPO_MAX_UNPACKED_BYTES
   const maxFiles = limits.maxFiles ?? REPO_MAX_FILES
   const maxFileBytes = limits.maxFileBytes ?? REPO_MAX_FILE_BYTES
+  const maxTotalLines = limits.maxTotalLines ?? REPO_MAX_TOTAL_LINES
 
   const tar = unpack(gz, maxUnpackedBytes)
   const files: RepoFile[] = []
   let skipped = 0
   let truncated = false
+  let totalLines = 0
   let top: string | null = null
 
   try {
@@ -192,11 +198,12 @@ export function readArchive(gz: Buffer, limits: Partial<ArchiveLimits> = {}): Ar
         skipped += 1
         continue
       }
-      if (files.length >= maxFiles) {
+      if (files.length >= maxFiles || totalLines + file.lines.length > maxTotalLines) {
         truncated = true
         break
       }
       files.push(file)
+      totalLines += file.lines.length
     }
   } catch (err) {
     if (err instanceof RepoFetchError) throw err

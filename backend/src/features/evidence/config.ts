@@ -140,6 +140,8 @@ export const REPO_MAX_UNPACKED_BYTES = 200 * 1024 * 1024
 /** Kept files; reading stops after this many. */
 export const REPO_MAX_FILES = 5_000
 export const REPO_MAX_FILE_BYTES = 300_000
+/** Kept lines across all files; reading stops before passing this many. */
+export const REPO_MAX_TOTAL_LINES = 2_000_000
 export const REPO_MAX_ITEMS_PER_RUN = 10
 export const REPO_LINES_AROUND = 20
 export const REPO_MAX_PIECES_PER_ITEM = 6

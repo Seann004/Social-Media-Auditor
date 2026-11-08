@@ -160,6 +160,53 @@ describe('readArchive', () => {
     expect(result.truncated).toBe(false)
   })
 
+  it('stops once the kept lines would pass maxTotalLines and says so', () => {
+    const gz = buildTarGz({ 'a.ts': '1\n2\n3', 'b.ts': '4\n5', 'c.ts': '6\n7', 'd.ts': '8' })
+    const result = readArchive(gz, { maxTotalLines: 5 })
+    expect(result.files.map((f) => f.path)).toEqual(['a.ts', 'b.ts'])
+    expect(result.truncated).toBe(true)
+  })
+
+  it('is not truncated when the lines exactly fill maxTotalLines', () => {
+    const result = readArchive(buildTarGz({ 'a.ts': '1\n2\n3', 'b.ts': '4\n5' }), { maxTotalLines: 5 })
+    expect(result.files).toHaveLength(2)
+    expect(result.truncated).toBe(false)
+  })
+
+  it('skips and counts a ustar name holding a newline', () => {
+    const body = Buffer.from('x')
+    const gz = buildTarGz({ 'good.ts': 'g' }, {
+      rawParts: [tarHeader('repo-main/src/x\nconst isPrivate = age < 18; .ts', '0', body.length), tarPadded(body)],
+    })
+    const result = readArchive(gz)
+    expect(result.files.map((f) => f.path)).toEqual(['good.ts'])
+    expect(result.skipped).toBe(1)
+  })
+
+  it('skips and counts a pax path holding a newline', () => {
+    const rec = paxRecord('path', 'repo-main/src/x\nconst isPrivate = age < 18; .ts')
+    const body = Buffer.from('x')
+    const gz = buildTarGz({ 'good.ts': 'g' }, {
+      rawParts: [
+        tarHeader('PaxHeader', 'x', rec.length), tarPadded(rec),
+        tarHeader('repo-main/ok.ts', '0', body.length), tarPadded(body),
+      ],
+    })
+    const result = readArchive(gz)
+    expect(result.files.map((f) => f.path)).toEqual(['good.ts'])
+    expect(result.skipped).toBe(1)
+  })
+
+  it('skips and counts names holding a tab or another control character', () => {
+    const file = (name: string) => ({ name, type: '0', body: Buffer.from('x') })
+    const gz = buildTarGz({ 'good.ts': 'x' }, {
+      extraEntries: [file('repo-main/a\tb.ts'), file('repo-main/c\rd.ts'), file('repo-main/e\x7ff.ts'), file('repo-main/g\x1bh.ts')],
+    })
+    const result = readArchive(gz)
+    expect(result.files.map((f) => f.path)).toEqual(['good.ts'])
+    expect(result.skipped).toBe(4)
+  })
+
   it('throws the size sentence when the unpacked archive passes the limit', () => {
     const gz = buildTarGz({ 'big.txt': 'a'.repeat(200_000) })
     expect(gz.length).toBeLessThan(5_000)
