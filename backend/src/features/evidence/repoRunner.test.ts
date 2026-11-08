@@ -1,10 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GroqLimitError } from '../../lib/groq.js'
 import { APP_RUN_TIMEOUT_MS, MAX_TOKENS_PER_RUN, RUN_TIMEOUT_MS } from './config.js'
+import { RepoFetchError } from './repoFetch.js'
 import { runEvidenceJob } from './runner.js'
 import { runTimeoutMsOf } from './runStart.js'
 import { PROJECT } from './__fixtures__/runnerWorld.js'
-import { createRepoRunKit, quoteFirstCodeLine, termsReply } from './__fixtures__/repoRunWorld.js'
+import { createRepoRunKit, quoteFirstCodeLine } from './__fixtures__/repoRunWorld.js'
+
+/** Never settles until the signal aborts, then rejects. */
+function untilAborted<T>(signal: AbortSignal | null | undefined): Promise<T> {
+  return new Promise<T>((_resolve, reject) => {
+    if (!signal) return
+    if (signal.aborted) return reject(new Error('aborted'))
+    signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+  })
+}
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -73,15 +83,44 @@ describe('executeRepoRun: capture', () => {
 
   it('running out of time ends partial with the timeout sentence', async () => {
     const kit = await createRepoRunKit()
-    kit.groqFetch.mockImplementation(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50))
-      return termsReply(['i1', 'i2'])
-    })
-    kit.deps.runTimeoutMs = 10
+    // The search-words call answers only when the run's signal aborts, so the timeout always lands there.
+    kit.groqFetch.mockImplementation((_url: string, init: RequestInit) => untilAborted(init.signal))
+    kit.deps.runTimeoutMs = 50
     const run = await kit.run()
     expect(run.status).toBe('partial')
     expect(run.error).toBe('The run ran out of time; 2 items not checked')
     expect(kit.judged).toHaveLength(0)
+    expect(kit.groqFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('running out of time during the download ends failed with the download timeout sentence', async () => {
+    const kit = await createRepoRunKit()
+    // As the real fetcher does: an aborted request comes out as its generic RepoFetchError.
+    const resolveCommit = vi.fn((signal: AbortSignal) =>
+      untilAborted<string>(signal).catch(() => {
+        throw new RepoFetchError('The repository could not be downloaded from GitHub. Try again later.')
+      }),
+    )
+    kit.deps.code = {
+      repoRepo: kit.repoRepo,
+      fetcher: (_guard, signal) => ({ resolveCommit: () => resolveCommit(signal), downloadArchive: async () => Buffer.alloc(0) }),
+    }
+    kit.deps.runTimeoutMs = 50
+    const run = await kit.run()
+    expect(resolveCommit).toHaveBeenCalledTimes(1)
+    expect(run).toMatchObject({ status: 'failed', error: 'The run ran out of time while downloading the code.' })
+    expect(kit.groqFetch).not.toHaveBeenCalled()
+  })
+
+  it('the default fetcher checks GitHub addresses with the run guard', async () => {
+    const kit = await createRepoRunKit()
+    kit.deps.code = { repoRepo: kit.repoRepo }
+    kit.deps.guard = { check: async () => ({ allowed: false, reason: 'refused in a test' }) }
+    const run = await kit.run()
+    expect(run).toMatchObject({ status: 'failed', error: 'The download tried to leave GitHub, so it was stopped.' })
+    // The stubbed global fetch is never reached: the guard refused the first address.
+    expect(kit.groqFetch).not.toHaveBeenCalled()
+    expect(kit.githubFetch).not.toHaveBeenCalled()
   })
 
   it('carries forward a pages suggestion for an item it did not pick', async () => {

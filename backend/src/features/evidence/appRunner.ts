@@ -6,7 +6,7 @@
  */
 import { decideStep as groqDecideStep } from './appAgent.js'
 import { runCheck, type CheckDeps } from './appCheck.js'
-import { judgeItem, liveHighlighter, type JudgeInput } from './appJudge.js'
+import { judgeItem, liveHighlighter } from './appJudge.js'
 import type { AppRepository } from './appRepository.js'
 import { restoreChanges } from './appRestore.js'
 import { unfinishedAppItems } from './appRunPlan.js'
@@ -16,35 +16,26 @@ import { isAiFinish } from './appSteps.js'
 import type { AgentAccount, AppChange, AppSource, AppStep, StoppedBy, TestAccount } from './appTypes.js'
 import type { AssessItem } from './assess.js'
 import { APP_MAX_TOKENS_PER_RUN, APP_RESTORE_GRACE_MS } from './config.js'
+import { endItemRun, judgeOrStop, pickedItems, withResult, type ItemResult, type Progress } from './itemRun.js'
 import type { TokenMeter } from './runnerAssess.js'
-import { autoMatchAnswers, carryForward, type StopReason } from './runnerFinish.js'
 import {
-  categoryKey,
   createMeter,
-  isGroqLimit,
   isRunGone,
   loadChecklist,
   logRunProblem,
-  RunAbortedError,
   RunFailure,
   RunGoneError,
   updateRun,
-  updateRunReliably,
   type AppRunnerDeps,
   type RunCtx,
 } from './runnerShared.js'
-import type { CapturedPage, Suggestion } from './types.js'
+import type { CapturedPage } from './types.js'
 
+export { appPartialSummary, itemIdsOfLostCategories } from './itemRun.js'
 export type { AppRunnerDeps } from './runnerShared.js'
 
 const NOT_CONFIGURED = "Checking inside the app isn't configured on this server."
 const SETUP_REMOVED = 'The app address or test accounts were removed before the run started.'
-
-interface Progress {
-  done: number
-  stop: StopReason | null
-  created: Suggestion[]
-}
 
 /** What a capture run checks with: the app, its accounts and an open session pool. */
 interface CheckSetup {
@@ -60,55 +51,10 @@ interface CheckSetup {
   meter: TokenMeter
 }
 
-const plural = (n: number): string => `${n} ${n === 1 ? 'item' : 'items'}`
-
-/** The sentence for the summary of a partial app run. */
-export function appPartialSummary(stop: StopReason | null, unchecked: number): string {
-  if (stop === 'limit') return `AI daily limit reached; ${plural(unchecked)} not checked`
-  if (stop === 'tokens') return `The AI budget for one run was used up; ${plural(unchecked)} not checked`
-  if (stop === 'timeout') return `The run ran out of time; ${plural(unchecked)} not checked`
-  return `${plural(unchecked)} could not be checked`
-}
-
-/** The items this run did not assess whose category lost a carried suggestion. */
-export function itemIdsOfLostCategories(items: AssessItem[], lostKeys: string[], ownItemIds: ReadonlySet<string>): string[] {
-  const lost = new Set(lostKeys)
-  return items.filter((i) => !ownItemIds.has(i.id) && lost.has(categoryKey(i))).map((i) => i.id)
-}
-
-const pickedItems = (items: AssessItem[], ids: string[]): AssessItem[] => items.filter((i) => ids.includes(i.id))
-
 function abortedOf(signal: AbortSignal): Promise<null> {
   if (signal.aborted) return Promise.resolve(null)
   return new Promise((resolve) => signal.addEventListener('abort', () => resolve(null), { once: true }))
 }
-
-/** What a failed judge call means: a limit or the run's time stops the run; anything else costs only its item. */
-async function stopForJudgeFailure(ctx: RunCtx, err: unknown): Promise<StopReason | null> {
-  if (err instanceof RunGoneError) throw err
-  if (err instanceof RunAbortedError || ctx.signal.aborted) return 'timeout'
-  if (isGroqLimit(err)) return 'limit'
-  if (await isRunGone(ctx)) throw new RunGoneError()
-  logRunProblem(ctx, 'An item could not be judged', err)
-  return null
-}
-
-/** Judges one item unless the run's time or token budget is spent first. */
-async function judgeOrStop(ctx: RunCtx, input: JudgeInput): Promise<{ created: Suggestion | null; stop: StopReason | null }> {
-  if (ctx.signal.aborted) return { created: null, stop: 'timeout' }
-  if (input.meter.used() >= APP_MAX_TOKENS_PER_RUN) return { created: null, stop: 'tokens' }
-  try {
-    return { created: await judgeItem(ctx, input), stop: null }
-  } catch (err) {
-    return { created: null, stop: await stopForJudgeFailure(ctx, err) }
-  }
-}
-
-const withResult = (progress: Progress, result: { created: Suggestion | null; stop: StopReason | null }): Progress => ({
-  done: progress.done + 1,
-  stop: result.stop,
-  created: result.created === null ? progress.created : [...progress.created, result.created],
-})
 
 /** The stored pages of the given steps, for close-ups. Without them, the card shows the step screenshots. */
 async function pagesOf(ctx: RunCtx, capturedInRunId: string, steps: AppStep[]): Promise<Map<string, CapturedPage>> {
@@ -187,15 +133,17 @@ async function checkOne(ctx: RunCtx, setup: CheckSetup, item: AssessItem, leftCh
   )
   if (outcome.stop !== null) return { created: null, stop: outcome.stop === 'error' ? null : outcome.stop }
   const pages = await pagesOf(ctx, ctx.run.id, outcome.steps)
-  return judgeOrStop(ctx, {
-    item,
-    platform: setup.platform,
-    steps: outcome.steps,
-    evidenceSteps: outcome.evidenceSteps,
-    stoppedBy: outcome.stoppedBy,
-    meter: setup.meter,
-    highlighter: liveHighlighter(ctx, setup.pool, outcome.steps, pages),
-  })
+  return judgeOrStop(ctx, { meter: setup.meter, maxTokens: APP_MAX_TOKENS_PER_RUN }, () =>
+    judgeItem(ctx, {
+      item,
+      platform: setup.platform,
+      steps: outcome.steps,
+      evidenceSteps: outcome.evidenceSteps,
+      stoppedBy: outcome.stoppedBy,
+      meter: setup.meter,
+      highlighter: liveHighlighter(ctx, setup.pool, outcome.steps, pages),
+    }),
+  )
 }
 
 async function checkItems(ctx: RunCtx, setup: CheckSetup, items: AssessItem[]): Promise<Progress> {
@@ -204,7 +152,7 @@ async function checkItems(ctx: RunCtx, setup: CheckSetup, items: AssessItem[]): 
   for (const item of items) {
     if (progress.stop !== null) break
     await updateRun(ctx, { currentItemId: item.id, currentStep: 0 })
-    let result: { created: Suggestion | null; stop: StopReason | null }
+    let result: ItemResult
     try {
       result = await checkOne(ctx, setup, item, leftChanged)
     } finally {
@@ -214,25 +162,6 @@ async function checkItems(ctx: RunCtx, setup: CheckSetup, items: AssessItem[]): 
     await updateRun(ctx, { categoriesDone: progress.done, tokensUsed: setup.meter.used() })
   }
   return progress
-}
-
-/** Copies the other suggestions forward, lists what has none of its own, and ends the run completed or partial. */
-async function endAppRun(ctx: RunCtx, items: AssessItem[], progress: Progress, notChecked: string[], meter: TokenMeter, anyCapture: boolean): Promise<void> {
-  const own = new Set(progress.created.map((s) => s.itemId))
-  const lostKeys = await carryForward(ctx, items, own, { anyCapture })
-  const uncheckedSet = new Set([...notChecked, ...itemIdsOfLostCategories(items, lostKeys, own)])
-  const unchecked = items.filter((i) => uncheckedSet.has(i.id))
-  await autoMatchAnswers(ctx, progress.created)
-  await updateRunReliably(ctx, {
-    status: unchecked.length === 0 ? 'completed' : 'partial',
-    uncheckedItemIds: unchecked.map((i) => i.id),
-    unassessedCategories: [...new Set(unchecked.map(categoryKey))],
-    categoriesDone: progress.done,
-    tokensUsed: meter.used(),
-    currentItemId: null,
-    error: unchecked.length === 0 ? null : appPartialSummary(progress.stop, unchecked.length),
-    finishedAt: new Date().toISOString(),
-  })
 }
 
 function configuredApp(ctx: RunCtx): AppRunnerDeps {
@@ -289,7 +218,7 @@ async function checkAndJudge(ctx: RunCtx): Promise<void> {
     await closePool(ctx, pool)
   }
   const own = new Set(progress.created.map((s) => s.itemId))
-  await endAppRun(ctx, items, progress, checked.filter((i) => !own.has(i.id)).map((i) => i.id), meter, true)
+  await endItemRun(ctx, items, progress, checked.filter((i) => !own.has(i.id)).map((i) => i.id), meter, true)
 }
 
 /** The step numbers the AI named as its evidence when it finished; none when it did not finish. */
@@ -336,22 +265,24 @@ async function reassess(ctx: RunCtx): Promise<void> {
     if (progress.stop !== null) break
     await updateRun(ctx, { currentItemId: item.id, currentStep: 0 })
     const itemSteps = steps.filter((s) => s.itemId === item.id)
-    const result = await judgeOrStop(ctx, {
-      item,
-      platform,
-      steps: itemSteps,
-      evidenceSteps: evidenceStepsOf(itemSteps),
-      stoppedBy: stoppedByOf(itemSteps, pages),
-      meter,
-      highlighter: null,
-    })
+    const result = await judgeOrStop(ctx, { meter, maxTokens: APP_MAX_TOKENS_PER_RUN }, () =>
+      judgeItem(ctx, {
+        item,
+        platform,
+        steps: itemSteps,
+        evidenceSteps: evidenceStepsOf(itemSteps),
+        stoppedBy: stoppedByOf(itemSteps, pages),
+        meter,
+        highlighter: null,
+      }),
+    )
     progress = withResult(progress, result)
     await updateRun(ctx, { categoriesDone: progress.done, tokensUsed: meter.used() })
   }
   const own = new Set(progress.created.map((s) => s.itemId))
   // An item not judged again keeps its carried suggestion, unless it was never opened in the app.
   const notChecked = checked.filter((i) => !own.has(i.id) && (targets.has(i.id) || !withSteps.has(i.id))).map((i) => i.id)
-  await endAppRun(ctx, items, progress, notChecked, meter, false)
+  await endItemRun(ctx, items, progress, notChecked, meter, false)
 }
 
 /**
