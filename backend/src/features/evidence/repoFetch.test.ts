@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createGithubFetcher, RepoFetchError } from './repoFetch.js'
 import { fakeGithubFetch } from './__fixtures__/fakeGithub.js'
 import type { UrlGuard } from './urlGuard.js'
@@ -16,6 +16,8 @@ const OTHER = 'The repository could not be downloaded from GitHub. Try again lat
 const allow: UrlGuard = { check: async () => ({ allowed: true }) }
 const redirect = (to: string) => () => new Response(null, { status: 302, headers: { location: to } })
 const text = (body: string, status = 200) => () => new Response(body, { status })
+
+afterEach(() => vi.restoreAllMocks())
 
 async function message(p: Promise<unknown>): Promise<string> {
   try {
@@ -44,12 +46,20 @@ describe('resolveCommit', () => {
     expect(seen[0]?.signal).toBeDefined()
   })
 
-  it('encodes the branch', async () => {
+  it('places the branch in the commit URL', async () => {
     const f = createGithubFetcher({
       guard: allow,
       fetchFn: fakeGithubFetch({ 'https://api.github.com/repos/acme/app/commits/feature/x.y': text(SHA) }),
     })
     expect(await f.resolveCommit('acme', 'app', 'feature/x.y')).toBe(SHA)
+  })
+
+  it('cuts a very long invalid branch to 255 characters in the sentence', async () => {
+    const fetchFn = vi.fn() as unknown as typeof fetch
+    const f = createGithubFetcher({ guard: allow, fetchFn })
+    const sentence = await message(f.resolveCommit('acme', 'app', 'a'.repeat(1000)))
+    expect(sentence).toBe(`The branch ${'a'.repeat(255)} was not found in this repository.`)
+    expect(fetchFn).not.toHaveBeenCalled()
   })
 
   it('refuses an invalid branch before any request is made', async () => {
@@ -78,7 +88,6 @@ describe('resolveCommit', () => {
     const f = createGithubFetcher({ guard: allow, fetchFn: fakeGithubFetch({ [url]: text('x', status as number) }) })
     expect(await message(f.resolveCommit('acme', 'app', branch))).toBe(sentence)
     if (status === 500) expect(errorSpy).toHaveBeenCalled()
-    errorSpy.mockRestore()
   })
 
   it('reports a network failure with the general sentence', async () => {
@@ -89,7 +98,6 @@ describe('resolveCommit', () => {
     const f = createGithubFetcher({ guard: allow, fetchFn })
     expect(await message(f.resolveCommit('acme', 'app', null))).toBe(OTHER)
     expect(errorSpy).toHaveBeenCalled()
-    errorSpy.mockRestore()
   })
 })
 

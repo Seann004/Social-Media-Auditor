@@ -26,6 +26,7 @@ const UNREADABLE = "The repository's download could not be read."
 
 const BLOCK = 512
 const BINARY_SCAN_BYTES = 8_000
+const USTAR_MAGIC = Buffer.from('ustar\0')
 
 /** One tar entry after any long-name or pax header has been applied to it. */
 interface TarEntry {
@@ -60,8 +61,10 @@ function parsePax(body: Buffer): Map<string, string> {
   while (pos < body.length) {
     const space = body.indexOf(0x20, pos)
     if (space === -1) break
-    const length = Number(body.subarray(pos, space).toString('ascii'))
-    if (!Number.isInteger(length) || length <= space - pos + 1 || pos + length > body.length) break
+    const digits = body.subarray(pos, space).toString('ascii')
+    if (!/^\d+$/.test(digits)) break
+    const length = Number(digits)
+    if (!Number.isSafeInteger(length) || length <= space - pos + 1 || pos + length > body.length) break
     const record = body.subarray(space + 1, pos + length - 1).toString('utf8')
     const eq = record.indexOf('=')
     if (eq > 0) out.set(record.slice(0, eq), record.slice(eq + 1))
@@ -97,7 +100,8 @@ function* tarEntries(tar: Buffer): Generator<TarEntry> {
       longName = cString(body, 0, body.length)
     } else if (!isMeta) {
       // 'g' (global pax) and 'K' (GNU long link) are ignored: links are never followed.
-      const prefix = cString(header, 345, 155)
+      const isUstar = header.subarray(257, 263).equals(USTAR_MAGIC)
+      const prefix = isUstar ? cString(header, 345, 155) : ''
       const base = cString(header, 0, 100)
       const ustarName = prefix ? `${prefix}/${base}` : base
       yield { path: paxPath ?? longName ?? ustarName, type, body }

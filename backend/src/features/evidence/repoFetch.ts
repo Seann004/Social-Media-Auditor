@@ -29,6 +29,7 @@ const OTHER = 'The repository could not be downloaded from GitHub. Try again lat
 
 const SHA = /^[0-9a-f]{40}$/
 const MAX_SHA_BODY_BYTES = 1_024
+const MAX_BRANCH_SHOWN = 255
 
 const noBranchSentence = (branch: string | null): string =>
   branch === null ? NOT_FOUND : `The branch ${branch} was not found in this repository.`
@@ -121,7 +122,7 @@ export function createGithubFetcher(deps: GithubFetcherDeps): GithubFetcher {
 
   return {
     async resolveCommit(owner, name, branch) {
-      if (branch !== null && !isValidBranch(branch)) throw new RepoFetchError(noBranchSentence(branch))
+      if (branch !== null && !isValidBranch(branch)) throw new RepoFetchError(noBranchSentence(branch.slice(0, MAX_BRANCH_SHOWN)))
       const ref = branch === null ? 'HEAD' : branch.split('/').map(encodeURIComponent).join('/')
       const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits/${ref}`
       const response = await get(url, 'application/vnd.github.sha')
