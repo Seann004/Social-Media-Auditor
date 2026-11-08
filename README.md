@@ -350,6 +350,7 @@ All set in `backend/src/features/evidence/config.ts`:
 | Download size | 50 MB |
 | Files kept | 5 000 |
 | Size of one file | 300 KB |
+| Lines kept in total | 2 000 000 |
 | Items per run | 10 |
 
 Folders such as `node_modules`, `dist` and `.git`, lock files, minified files and binary files are skipped. On Groq's free plan only about 3 items fit in one run before the daily limit is hit. The run then ends as **partial**, and the items already checked keep their suggestions.
@@ -358,7 +359,7 @@ Folders such as `node_modules`, `dist` and `.git`, lock files, minified files an
 
 This feature needs database migration `003_repo_evidence.sql`. Run it **after** `002`, in the Supabase SQL editor.
 
-### Before real use
+### Before real use of code evidence
 
 Using a platform's code for an audit usually needs that platform's agreement. Get permission first. The system does not check this for you.
 
