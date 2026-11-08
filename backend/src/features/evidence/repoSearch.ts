@@ -1,0 +1,153 @@
+/** Local search over the files of a repository: picks the code pieces that may answer a checklist item. */
+import { MAX_CHARS_PER_PASSAGE, REPO_LINES_AROUND, REPO_MAX_PIECES_PER_ITEM } from './config.js'
+import type { PieceDraft, RepoFile, SearchTerms } from './repoTypes.js'
+
+const COMMENT_STARTS = ['//', '#', '/*', '*', '*/', '<!--', '--', ';']
+const DOCS_EXTENSIONS = ['.md', '.mdx', '.txt', '.rst']
+const DOCS_OR_TEST_SEGMENTS = new Set(['docs', 'doc', 'test', 'tests', '__tests__', 'spec'])
+const CODE_CHAR_BUDGET = MAX_CHARS_PER_PASSAGE - 200
+const PER_WORD_LINE_CAP = 5
+const POINTS_PER_WORD_IN_PATH = 2
+const POINTS_PER_HINT_IN_PATH = 3
+
+export function pieceKey(d: Pick<PieceDraft, 'path' | 'startLine' | 'endLine'>): string {
+  return `${d.path}:${d.startLine}-${d.endLine}`
+}
+
+export function isCommentLine(line: string): boolean {
+  const t = line.trim()
+  return t === '' || COMMENT_STARTS.some((start) => t.startsWith(start))
+}
+
+export function isDocsOrTestPath(path: string): boolean {
+  const lower = path.toLowerCase()
+  if (DOCS_EXTENSIONS.some((ext) => lower.endsWith(ext))) return true
+  const segments = lower.split('/')
+  const fileName = segments[segments.length - 1] ?? ''
+  if (fileName.includes('.test.') || fileName.includes('.spec.')) return true
+  return segments.slice(0, -1).some((s) => DOCS_OR_TEST_SEGMENTS.has(s))
+}
+
+interface Window {
+  start: number // 0-based, inclusive
+  end: number // 0-based, inclusive
+  firstMatch: number // 0-based line of the first matching line
+  distinct: number
+  total: number
+}
+
+interface FileHit {
+  file: RepoFile
+  score: number
+  windows: Window[] // best first
+}
+
+function cleanList(list: string[]): string[] {
+  return list.map((s) => s.trim().toLowerCase()).filter((s) => s !== '')
+}
+
+/** For each line, the indexes of the words it contains. */
+function matchLines(lines: string[], words: string[]): number[][] {
+  return lines.map((line) => {
+    const lower = line.toLowerCase()
+    const hits: number[] = []
+    words.forEach((w, i) => {
+      if (lower.includes(w)) hits.push(i)
+    })
+    return hits
+  })
+}
+
+function buildWindows(perLine: number[][]): Window[] {
+  const spans: Array<{ start: number; end: number; firstMatch: number }> = []
+  perLine.forEach((hits, i) => {
+    if (hits.length === 0) return
+    const start = Math.max(0, i - REPO_LINES_AROUND)
+    const end = Math.min(perLine.length - 1, i + REPO_LINES_AROUND)
+    const last = spans[spans.length - 1]
+    if (last && start <= last.end + 1) last.end = Math.max(last.end, end)
+    else spans.push({ start, end, firstMatch: i })
+  })
+  const windows = spans.map((s) => {
+    const distinct = new Set<number>()
+    let total = 0
+    for (let i = s.start; i <= s.end; i++) {
+      for (const w of perLine[i] ?? []) distinct.add(w)
+      total += perLine[i]?.length ?? 0
+    }
+    return { ...s, distinct: distinct.size, total }
+  })
+  return [...windows].sort((a, b) => b.distinct - a.distinct || b.total - a.total || a.start - b.start)
+}
+
+function scoreFile(file: RepoFile, perLine: number[][], words: string[], hints: string[]): number {
+  const path = file.path.toLowerCase()
+  let score = 0
+  words.forEach((w, i) => {
+    const count = perLine.reduce((n, hits) => n + (hits.includes(i) ? 1 : 0), 0)
+    score += Math.min(count, PER_WORD_LINE_CAP)
+    if (path.includes(w)) score += POINTS_PER_WORD_IN_PATH
+  })
+  for (const h of hints) if (path.includes(h)) score += POINTS_PER_HINT_IN_PATH
+  return score
+}
+
+function toHit(file: RepoFile, words: string[], hints: string[], named: ReadonlySet<string>): FileHit | null {
+  const perLine = matchLines(file.lines, words)
+  const windows = buildWindows(perLine)
+  const score = scoreFile(file, perLine, words, hints)
+  if (windows.length > 0) return { file, score, windows }
+  if (!named.has(file.path) || file.lines.length === 0) return null
+  const end = Math.min(file.lines.length - 1, 2 * REPO_LINES_AROUND)
+  return { file, score, windows: [{ start: 0, end, firstMatch: 0, distinct: 0, total: 0 }] }
+}
+
+/** Joins lines[start..end]; narrows one line at a time from the edge farther from the first match until it fits. */
+function toDraft(file: RepoFile, w: Window): PieceDraft {
+  let { start, end } = w
+  let size = 0
+  for (let i = start; i <= end; i++) size += (file.lines[i]?.length ?? 0) + 1
+  size -= 1
+  while (size > CODE_CHAR_BUDGET && start < end) {
+    if (w.firstMatch - start > end - w.firstMatch) {
+      size -= (file.lines[start]?.length ?? 0) + 1
+      start++
+    } else {
+      size -= (file.lines[end]?.length ?? 0) + 1
+      end--
+    }
+  }
+  const code = file.lines.slice(start, end + 1).join('\n').slice(0, CODE_CHAR_BUDGET)
+  return { path: file.path, startLine: start + 1, endLine: end + 1, code }
+}
+
+export function findPieces(
+  files: RepoFile[],
+  terms: SearchTerms,
+  opts: { max?: number; exclude?: ReadonlySet<string> } = {},
+): PieceDraft[] {
+  const max = opts.max ?? REPO_MAX_PIECES_PER_ITEM
+  const exclude = opts.exclude ?? new Set<string>()
+  const words = cleanList(terms.words)
+  const hints = cleanList(terms.pathHints)
+  const named = new Set(terms.paths)
+
+  const hits = files
+    .map((f) => toHit(f, words, hints, named))
+    .filter((h): h is FileHit => h !== null)
+    .sort((a, b) => b.score - a.score || (a.file.path < b.file.path ? -1 : a.file.path > b.file.path ? 1 : 0))
+
+  const pieces: PieceDraft[] = []
+  const rounds = Math.max(0, ...hits.map((h) => h.windows.length))
+  for (let round = 0; round < rounds && pieces.length < max; round++) {
+    for (const hit of hits) {
+      const window = hit.windows[round]
+      if (!window) continue
+      const draft = toDraft(hit.file, window)
+      if (exclude.has(pieceKey(draft))) continue
+      pieces.push(draft)
+      if (pieces.length >= max) break
+    }
+  }
+  return pieces
+}
