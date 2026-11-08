@@ -46,46 +46,84 @@ function cleanList(list: string[]): string[] {
   return list.map((s) => s.trim().toLowerCase()).filter((s) => s !== '')
 }
 
-/** For each line, the indexes of the words it contains. */
-function matchLines(lines: string[], words: string[]): number[][] {
-  return lines.map((line) => {
-    const lower = line.toLowerCase()
-    const hits: number[] = []
-    words.forEach((w, i) => {
-      if (lower.includes(w)) hits.push(i)
-    })
-    return hits
-  })
+/** A line holding at least one search word, with the indexes of the words it holds. */
+interface LineMatch {
+  line: number // 0-based
+  words: number[]
 }
 
-function buildWindows(perLine: number[][]): Window[] {
-  const spans: Array<{ start: number; end: number; firstMatch: number }> = []
-  perLine.forEach((hits, i) => {
-    if (hits.length === 0) return
-    const start = Math.max(0, i - REPO_LINES_AROUND)
-    const end = Math.min(perLine.length - 1, i + REPO_LINES_AROUND)
+interface FileMatches {
+  matches: LineMatch[] // by line, ascending
+  linesPerWord: number[] // for each word, how many lines hold it
+}
+
+/** Counts the newlines in text[from, to). */
+function countNewlines(text: string, from: number, to: number): number {
+  let count = 0
+  for (let at = text.indexOf('\n', from); at !== -1 && at < to; at = text.indexOf('\n', at + 1)) count += 1
+  return count
+}
+
+/** The 0-based lines that hold word, read from the file's lower-cased text. */
+function linesHolding(lower: string, word: string): number[] {
+  const found: number[] = []
+  if (word.includes('\n')) return found // a word never spans two lines
+  let line = 0
+  let scanned = 0
+  let at = lower.indexOf(word)
+  while (at !== -1) {
+    line += countNewlines(lower, scanned, at)
+    found.push(line)
+    const nextLine = lower.indexOf('\n', at)
+    if (nextLine === -1) break
+    line += 1
+    scanned = nextLine + 1
+    at = lower.indexOf(word, scanned)
+  }
+  return found
+}
+
+/** Only the lines that match: the file's text is lower-cased once, and no array is built per line. */
+function matchLines(lines: string[], words: string[]): FileMatches {
+  const lower = lines.join('\n').toLowerCase()
+  const byLine = new Map<number, number[]>()
+  const linesPerWord = words.map((word, i) => {
+    const found = linesHolding(lower, word)
+    for (const line of found) byLine.set(line, [...(byLine.get(line) ?? []), i])
+    return found.length
+  })
+  const matches = [...byLine.entries()]
+    .map(([line, hit]) => ({ line, words: hit }))
+    .sort((a, b) => a.line - b.line)
+  return { matches, linesPerWord }
+}
+
+function buildWindows(matches: LineMatch[], lineCount: number): Window[] {
+  const spans: Array<{ start: number; end: number; firstMatch: number; distinct: Set<number>; total: number }> = []
+  for (const { line, words } of matches) {
+    const start = Math.max(0, line - REPO_LINES_AROUND)
+    const end = Math.min(lineCount - 1, line + REPO_LINES_AROUND)
     const last = spans[spans.length - 1]
-    if (last && start <= last.end + 1) last.end = Math.max(last.end, end)
-    else spans.push({ start, end, firstMatch: i })
-  })
-  const windows = spans.map((s) => {
-    const distinct = new Set<number>()
-    let total = 0
-    for (let i = s.start; i <= s.end; i++) {
-      for (const w of perLine[i] ?? []) distinct.add(w)
-      total += perLine[i]?.length ?? 0
+    if (last && start <= last.end + 1) {
+      spans[spans.length - 1] = {
+        ...last,
+        end: Math.max(last.end, end),
+        distinct: new Set([...last.distinct, ...words]),
+        total: last.total + words.length,
+      }
+    } else {
+      spans.push({ start, end, firstMatch: line, distinct: new Set(words), total: words.length })
     }
-    return { ...s, distinct: distinct.size, total }
-  })
-  return [...windows].sort((a, b) => b.distinct - a.distinct || b.total - a.total || a.start - b.start)
+  }
+  const windows = spans.map((s) => ({ start: s.start, end: s.end, firstMatch: s.firstMatch, distinct: s.distinct.size, total: s.total }))
+  return windows.sort((a, b) => b.distinct - a.distinct || b.total - a.total || a.start - b.start)
 }
 
-function scoreFile(file: RepoFile, perLine: number[][], words: string[], hints: string[]): number {
+function scoreFile(file: RepoFile, linesPerWord: number[], words: string[], hints: string[]): number {
   const path = file.path.toLowerCase()
   let score = 0
   words.forEach((w, i) => {
-    const count = perLine.reduce((n, hits) => n + (hits.includes(i) ? 1 : 0), 0)
-    score += Math.min(count, PER_WORD_LINE_CAP)
+    score += Math.min(linesPerWord[i] ?? 0, PER_WORD_LINE_CAP)
     if (path.includes(w)) score += POINTS_PER_WORD_IN_PATH
   })
   for (const h of hints) if (path.includes(h)) score += POINTS_PER_HINT_IN_PATH
@@ -93,9 +131,9 @@ function scoreFile(file: RepoFile, perLine: number[][], words: string[], hints: 
 }
 
 function toHit(file: RepoFile, words: string[], hints: string[], named: ReadonlySet<string>): FileHit | null {
-  const perLine = matchLines(file.lines, words)
-  const windows = buildWindows(perLine)
-  const score = scoreFile(file, perLine, words, hints)
+  const { matches, linesPerWord } = matchLines(file.lines, words)
+  const windows = buildWindows(matches, file.lines.length)
+  const score = scoreFile(file, linesPerWord, words, hints)
   if (windows.length > 0) return { file, score, windows }
   if (!named.has(file.path) || file.lines.length === 0) return null
   const end = Math.min(file.lines.length - 1, 2 * REPO_LINES_AROUND)

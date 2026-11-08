@@ -104,6 +104,40 @@ describe('findPieces', () => {
     expect(findPieces([], terms({ words: ['zzz'] }))).toEqual([])
   })
 
+  it('gives the same pieces as the dense matcher on a mixed corpus', () => {
+    // Expected values were recorded from the earlier one-array-per-line matcher.
+    const lines = (n: number, at: Record<number, string>) => Array.from({ length: n }, (_, i) => at[i + 1] ?? `line ${i + 1}`)
+    const corpus = [
+      file('src/auth/AgeGate.ts', lines(120, { 5: 'const MIN_AGE = 13', 30: 'if (user.Age < MIN_AGE) block()', 31: 'Parental CONSENT required', 90: 'age check again' })),
+      file('src/profile/privacy.ts', lines(80, { 10: 'isPrivate = age < 18', 11: 'default PRIVATE for minors', 70: 'ΣΊΣΥΦΟΣ privacy' })),
+      file('docs/consent.md', lines(50, { 2: 'Consent policy', 45: 'parental consent age' })),
+      file('src/empty.ts', []),
+      file('src/named.ts', lines(60, {})),
+      file('src/crlf.ts', ['age\r', 'x', 'CONSENT\r']),
+    ]
+    const range = (p: { path: string; startLine: number; endLine: number }) => `${p.path}:${p.startLine}-${p.endLine}`
+    const first = findPieces(corpus, terms({
+      words: ['age', 'consent', 'private', 'σίσυφος'], pathHints: ['auth', 'profile'], paths: ['src/named.ts', 'src/empty.ts'],
+    }), { max: 10 })
+    expect(first.map(range)).toEqual([
+      'src/auth/AgeGate.ts:1-51', 'src/profile/privacy.ts:1-31', 'docs/consent.md:25-50', 'src/crlf.ts:1-3',
+      'src/named.ts:1-41', 'src/auth/AgeGate.ts:70-110', 'src/profile/privacy.ts:50-80', 'docs/consent.md:1-22',
+    ])
+    expect(first.map((p) => p.code.length)).toEqual([452, 270, 220, 15, 318, 346, 255, 174])
+    for (const p of first) {
+      const source = corpus.find((f) => f.path === p.path)!
+      expect(p.code).toBe(source.lines.slice(p.startLine - 1, p.endLine).join('\n'))
+    }
+    const second = findPieces(corpus, terms({ words: ['  AGE ', '', 'block'] }), {
+      max: 3, exclude: new Set(['src/auth/AgeGate.ts:10-51']),
+    })
+    expect(second.map(range)).toEqual(['src/auth/AgeGate.ts:1-50', 'docs/consent.md:25-50', 'src/crlf.ts:1-3'])
+  })
+
+  it('never matches a word across two lines', () => {
+    expect(findPieces([file('a.ts', ['par', 'ental'])], terms({ words: ['par\nental'] }))).toEqual([])
+  })
+
   it('sorts equal scores by path so the order is stable', () => {
     const files = [file('b.ts', ['k']), file('c.ts', ['k']), file('a.ts', ['k'])]
     expect(findPieces(files, terms({ words: ['k'] })).map((p) => p.path)).toEqual(['a.ts', 'b.ts', 'c.ts'])
