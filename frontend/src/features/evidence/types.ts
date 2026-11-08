@@ -244,8 +244,8 @@ export interface CodePieceView {
   quoted: boolean
 }
 export interface CodeEvidence {
-  commitSha: string
-  repoUrl: string
+  commitSha: string | null
+  repoUrl: string | null
   pieces: CodePieceView[]
 }
 

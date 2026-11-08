@@ -8,8 +8,9 @@ import type { QuoteView } from '../types'
 import OverrideDialog from './OverrideDialog'
 import SuggestionCard from './SuggestionCard'
 
-vi.mock('../api', async (importOriginal) => ({ ...(await importOriginal<typeof import('../api')>()), getScreenshotUrl: vi.fn() }))
+vi.mock('../api', async (importOriginal) => ({ ...(await importOriginal<typeof import('../api')>()), getScreenshotUrl: vi.fn(), getCode: vi.fn() }))
 const getScreenshotUrl = vi.mocked(api.getScreenshotUrl)
+const getCode = vi.mocked(api.getCode)
 
 const quote = (over: Partial<QuoteView> = {}): QuoteView => ({
   id: 'q1',
@@ -40,6 +41,7 @@ function renderCard(over: Partial<CardProps> = {}) {
 
 beforeEach(() => {
   getScreenshotUrl.mockReset().mockResolvedValue('https://files.example/shot.jpg')
+  getCode.mockReset().mockRejectedValue(new Error('no code'))
 })
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -379,5 +381,33 @@ describe('SuggestionCard replay', () => {
       <SuggestionCard suggestion={makeSuggestion({ source: 'repo' })} decision={null} currentStatus={undefined} canDecide onAccept={vi.fn()} onOverride={vi.fn()} onKeepMine={vi.fn()} />,
     )
     expect(screen.queryByRole('button', { name: 'Replay steps' })).not.toBeInTheDocument()
+  })
+})
+
+describe('SuggestionCard for a code repository suggestion', () => {
+  const repoCard = () => makeSuggestion({ source: 'repo', flags: [{ type: 'comments_only', reason: 'Only comments or documentation support this.' }] })
+
+  it('shows the short commit note once the code is known, and the comments_only label with its reason', async () => {
+    getCode.mockResolvedValue({ commitSha: 'abc1234def5678', repoUrl: 'https://github.com/acme/app', pieces: [] })
+    renderCard({ suggestion: repoCard() })
+    expect(screen.getByText('Based on code, not on the live app.')).toBeInTheDocument()
+    expect(await screen.findByText('Based on the code at commit abc1234, not on the live app.')).toBeInTheDocument()
+    expect(screen.getByText('Comments only')).toBeInTheDocument()
+    expect(screen.getByText('Only comments or documentation support this.')).toBeInTheDocument()
+  })
+
+  it('offers Code found instead of Replay steps and loads the code on open', async () => {
+    const user = userEvent.setup()
+    getCode.mockResolvedValue({ commitSha: 'abc1234def', repoUrl: null, pieces: [] })
+    renderCard({ suggestion: repoCard() })
+    expect(screen.queryByRole('button', { name: 'Replay steps' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Code found' }))
+    expect(await screen.findByText('No code was kept for this suggestion.')).toBeInTheDocument()
+  })
+
+  it('keeps the generic note when the code cannot be loaded', async () => {
+    renderCard({ suggestion: repoCard() })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.getByText('Based on code, not on the live app.')).toBeInTheDocument()
   })
 })

@@ -62,9 +62,13 @@ export interface Stub {
   accountBodies: SavedAccount[]
   /** Item ids sent to start an app run. */
   appRunItems: string[][]
+  /** Item ids sent to start a code repository run. */
+  repoRunItems: string[][]
+  /** Repository addresses saved. */
+  repoBodies: { repoUrl: string; branch: string | null }[]
 }
 
-type RunSource = 'pages' | 'app'
+type RunSource = 'pages' | 'app' | 'repo'
 
 const run = (status: 'capturing' | 'completed', pagesDone: number, source: RunSource = 'pages', itemIds: string[] = []) => ({
   id: 'run-1',
@@ -74,8 +78,8 @@ const run = (status: 'capturing' | 'completed', pagesDone: number, source: RunSo
   capturedInRunId: 'run-1',
   scope: 'all',
   unassessedCategories: [],
-  categoriesTotal: source === 'app' ? itemIds.length : 1,
-  categoriesDone: status === 'completed' ? (source === 'app' ? itemIds.length : 1) : 0,
+  categoriesTotal: source !== 'pages' ? itemIds.length : 1,
+  categoriesDone: status === 'completed' ? (source !== 'pages' ? itemIds.length : 1) : 0,
   pagesTotal: 3,
   pagesDone,
   tokensUsed: 1200,
@@ -158,6 +162,52 @@ const appSuggestions = (itemIds: string[]) =>
     quotes: [],
   }))
 
+const COMMIT_SHA = 'abc1234def5678abc1234def5678abc1234def56'
+const REPO_URL = 'https://github.com/acme/social-app'
+
+/** What a repository run suggests for the items it was asked to check. */
+const repoSuggestions = (itemIds: string[]) =>
+  itemIds.map((itemId) => ({
+    id: `rs-${itemId}`,
+    runId: 'run-1',
+    projectId: PROJECT_ID,
+    source: 'repo',
+    itemId,
+    suggestedResult: APP_RESULT[itemId] ?? 'partially',
+    reason: `The code decides this for ${itemId}.`,
+    confidence: 'medium',
+    flags: [],
+    quotes: [],
+  }))
+
+/** The code the AI looked at: one quoted piece, one extra piece. */
+const CODE = {
+  commitSha: COMMIT_SHA,
+  repoUrl: REPO_URL,
+  pieces: [
+    {
+      id: 'cp-1',
+      path: 'src/accounts/privacy.ts',
+      startLine: 41,
+      endLine: 43,
+      code: 'export function defaults(age: number) {\n  return { isPrivate: age < 18 }\n}',
+      url: `${REPO_URL}/blob/${COMMIT_SHA}/src/accounts/privacy.ts#L41-L43`,
+      round: 1,
+      quoted: true,
+    },
+    {
+      id: 'cp-2',
+      path: 'src/accounts/signup.ts',
+      startLine: 10,
+      endLine: 11,
+      code: 'const minAge = 13\nexport { minAge }',
+      url: `${REPO_URL}/blob/${COMMIT_SHA}/src/accounts/signup.ts#L10-L11`,
+      round: 1,
+      quoted: false,
+    },
+  ],
+}
+
 /** Three steps for one suggestion: a page with a picture, a refused action, and a page with a picture. */
 const STEPS = [
   { id: 'st-1', position: 1, accountLabel: 'Teen 15', line: 'Opened the settings page', outcome: 'done', refusalReason: null, pageId: 'pg-1', hasScreenshot: true },
@@ -182,7 +232,7 @@ const SOURCE_BASE = { id: 'src-1', projectId: PROJECT_ID, createdBy: AUDITOR.use
 
 /** Installs every stub for one page. State lives in the closure, so a decision changes what the next GET returns. */
 export async function installStub(page: Page, options: StubOptions): Promise<Stub> {
-  const stub: Stub = { violations: [], decisions: [], savedAnswers: [], accountBodies: [], appRunItems: [] }
+  const stub: Stub = { violations: [], decisions: [], savedAnswers: [], accountBodies: [], appRunItems: [], repoRunItems: [], repoBodies: [] }
   const answers = new Map<string, StoredAnswer>()
   const decisions = new Map<string, Json>()
   let runState: 'none' | 'capturing' | 'completed' = options.withRun ? 'completed' : 'none'
@@ -190,9 +240,13 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
   let startUrls: string[] | null = null
   let runSource: RunSource = 'pages'
   let appRunItems: string[] = []
+  let repoRunItems: string[] = []
+  let repoSource: { repoUrl: string; branch: string | null; updatedAt: string } | null = null
   let appSource: { appUrl: string; loginDomains: string[]; updatedAt: string } | null = null
   const accounts: Json[] = []
-  const currentSuggestions = (): Json[] => (runSource === 'app' ? appSuggestions(appRunItems) : SUGGESTIONS)
+  const runItems = (): string[] => (runSource === 'repo' ? repoRunItems : appRunItems)
+  const currentSuggestions = (): Json[] =>
+    runSource === 'app' ? appSuggestions(appRunItems) : runSource === 'repo' ? repoSuggestions(repoRunItems) : SUGGESTIONS
 
   // Registered first, so it has the lowest priority: anything the stubs below do not claim lands here.
   await page.route('**/*', (route) => {
@@ -330,11 +384,11 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
       capturedAt: '2026-11-04T09:01:00.000Z',
     }
     if (runState === 'none') return json(route, { run: null, pages: [] })
-    return json(route, { run: runState === 'capturing' ? run('capturing', 1, runSource, appRunItems) : run('completed', 3, runSource, appRunItems), pages: [captured] })
+    return json(route, { run: runState === 'capturing' ? run('capturing', 1, runSource, runItems()) : run('completed', 3, runSource, runItems()), pages: [captured] })
   }
 
   const evidence = (route: Route, method: string, path: string): Promise<void> | null => {
-    if (!/^\/(projects\/[^/]+\/(evidence-|suggestions|app-|test-accounts)|suggestions\/|evidence\/)/.test(path)) return null
+    if (!/^\/(projects\/[^/]+\/(evidence-|suggestions|app-|repo-|test-accounts)|suggestions\/|evidence\/)/.test(path)) return null
     if (options.evidenceDown) {
       return json(route, { error: 'AI evidence assessment is not set up on this server.' }, 503)
     }
@@ -365,6 +419,24 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
       latestReads = 0
       return json(route, { run: run('capturing', 0, 'app', appRunItems) }, 202)
     }
+    if (path.endsWith('/repo-source')) {
+      if (method === 'PUT') {
+        const body = route.request().postDataJSON() as { repoUrl: string; branch: string | null }
+        stub.repoBodies.push(body)
+        repoSource = { ...body, updatedAt: '2026-11-04T08:30:00.000Z' }
+        return json(route, { repo: repoSource })
+      }
+      return json(route, { repo: repoSource })
+    }
+    if (path.endsWith('/repo-runs') && method === 'POST') {
+      repoRunItems = (route.request().postDataJSON() as { itemIds: string[] }).itemIds
+      stub.repoRunItems.push(repoRunItems)
+      runSource = 'repo'
+      runState = 'capturing'
+      latestReads = 0
+      return json(route, { run: run('capturing', 0, 'repo', repoRunItems) }, 202)
+    }
+    if (/^\/suggestions\/[^/]+\/code$/.test(path)) return json(route, CODE)
     if (path.endsWith('/app-changes')) return json(route, { changes: runSource === 'app' && runState === 'completed' ? CHANGES : [] })
     if (/^\/suggestions\/[^/]+\/steps$/.test(path)) return json(route, { steps: STEPS, changes: CHANGES })
     if (path.endsWith('/evidence-runs') && method === 'POST') {
@@ -378,7 +450,7 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
       return json(
         route,
         runState === 'completed'
-          ? { run: run('completed', 3, runSource, appRunItems), suggestions: currentSuggestions(), decisions: [...decisions.values()] }
+          ? { run: run('completed', 3, runSource, runItems()), suggestions: currentSuggestions(), decisions: [...decisions.values()] }
           : { run: null, suggestions: [], decisions: [] },
       )
     }

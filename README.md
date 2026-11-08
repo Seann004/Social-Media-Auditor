@@ -327,6 +327,41 @@ Using a real platform's web app with test accounts usually needs that platform's
 
 The server's browser is locked down so that a page cannot reach internal addresses through it. One effect is that features which use WebSockets, such as live chat and live notifications, do not work in it. A check that needs those features cannot be done.
 
+## Code repository evidence
+
+The panel has a third source, **Code repository**. Here the AI reads the source code of a platform's **public GitHub repository** and looks for code that answers a checklist item (for example, code that makes new accounts of under-18 users private).
+
+**What is read.** The auditor saves a repository address such as `https://github.com/owner/name` (a branch is optional). The system downloads a copy of the code and keeps it in memory only. It looks for the parts of the code that match the item and sends those short passages to the AI as text.
+
+**Public GitHub only.** Private repositories and other websites do not work. No GitHub login or token is used.
+
+**Nothing from the repository is run.** The code is only read as text. It is never installed, started or saved to disk. The AI is told that the text in the code is data and not instructions, so a comment in the code cannot tell it what to answer.
+
+**The auditor still decides.** A code run only gives suggestions, the same as the other sources. No answer or score changes until an auditor presses Accept or Override. Each code suggestion has a **Code found** button that shows the exact lines the AI looked at, with a link to open them on GitHub. The card also says which commit was read, for example "Based on the code at commit abc1234, not on the live app." So the suggestion reflects the code, not the running app. They can differ.
+
+**Comments-only answers are flagged.** If a Yes, No or Partially answer rests only on comments, documentation or test files, the card shows a **Comments only** flag, because that is weak proof of what the app really does.
+
+### Limits
+
+All set in `backend/src/features/evidence/config.ts`:
+
+| Limit | Value |
+|---|---|
+| Download size | 50 MB |
+| Files kept | 5 000 |
+| Size of one file | 300 KB |
+| Items per run | 10 |
+
+Folders such as `node_modules`, `dist` and `.git`, lock files, minified files and binary files are skipped. On Groq's free plan only about 3 items fit in one run before the daily limit is hit. The run then ends as **partial**, and the items already checked keep their suggestions.
+
+### Setup
+
+This feature needs database migration `003_repo_evidence.sql`. Run it **after** `002`, in the Supabase SQL editor.
+
+### Before real use
+
+Using a platform's code for an audit usually needs that platform's agreement. Get permission first. The system does not check this for you.
+
 ---
 
 ## Tests

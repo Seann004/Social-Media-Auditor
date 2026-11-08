@@ -195,7 +195,7 @@ describe('Code repository source in the evidence panel', () => {
     render(<Harness />)
     await waitFor(() => expect(screen.getByRole('radio', { name: 'Code repository' })).toBeChecked())
     expect(await screen.findByText('Not checked: Item 3')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Re-assess unfinished items' }))
+    await user.click(screen.getByRole('button', { name: 'Re-assess from the code' }))
     expect(m.reassess).toHaveBeenCalledWith('p1', 'run-1', 'unfinished')
   })
 

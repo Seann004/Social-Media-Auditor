@@ -32,7 +32,7 @@ const spring = { type: 'spring', stiffness: 100, damping: 20 } as const
 const REASSESS_LABELS: Record<RunSource, { unfinished: string; all: string }> = {
   pages: { unfinished: 'Re-assess unfinished', all: 'Re-assess all categories' },
   app: { unfinished: 'Re-assess unfinished items', all: 'Re-assess all checked items' },
-  repo: { unfinished: 'Re-assess unfinished items', all: 'Re-assess all checked items' },
+  repo: { unfinished: 'Re-assess from the code', all: 'Re-assess all from the code' },
 }
 
 export const parseLinks = (text: string): string[] =>

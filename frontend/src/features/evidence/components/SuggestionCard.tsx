@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { RobotIcon as Robot } from '@phosphor-icons/react'
 import type { ChecklistItemStatus } from '../../../types'
+import { getCode } from '../api'
 import { isHttpUrl } from '../safeUrl'
 import { suggestionState, toAnswerStatus, type CardState } from '../state'
-import type { DecisionView, QuoteView, SuggestionView } from '../types'
+import { FLAG_LABEL, type DecisionView, type QuoteView, type SuggestionView } from '../types'
+import CodeFound from './CodeFound'
 import { RESULT_LABEL } from './OverrideDialog'
 import QuoteThumbnail from './QuoteThumbnail'
 import ReplaySteps from './ReplaySteps'
@@ -55,6 +57,26 @@ function QuoteItem({ quote }: { quote: QuoteView }) {
   )
 }
 
+/** The commit the code was read at, once the server has said so. Until then (or if it fails) the note stays general. */
+function useCommitNote(suggestionId: string, enabled: boolean): string {
+  const [sha, setSha] = useState<string | null>(null)
+  useEffect(() => {
+    if (!enabled) return
+    let alive = true
+    getCode(suggestionId)
+      .then((code) => {
+        if (alive) setSha(code.commitSha)
+      })
+      .catch(() => {
+        if (alive) setSha(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [suggestionId, enabled])
+  return sha ? `Based on the code at commit ${sha.slice(0, 7)}, not on the live app.` : 'Based on code, not on the live app.'
+}
+
 function DecisionNote({ decision }: { decision: DecisionView }) {
   if (decision.decision === 'accepted') return <p className="text-xs font-medium text-emerald-700">Accepted</p>
   return (
@@ -67,6 +89,9 @@ function DecisionNote({ decision }: { decision: DecisionView }) {
 
 export default function SuggestionCard({ suggestion, decision, currentStatus, canDecide, busy = false, error, onAccept, onOverride, onKeepMine }: SuggestionCardProps) {
   const [replaying, setReplaying] = useState(false)
+  const [showCode, setShowCode] = useState(false)
+  const isRepo = suggestion.source === 'repo'
+  const codeNote = useCommitNote(suggestion.id, isRepo)
   const state = suggestionState({ suggestion, decision, currentStatus })
   const suggested = suggestion.suggestedResult
   const decided = state === 'accepted' || state === 'overridden'
@@ -99,7 +124,10 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
       {suggestion.flags.length > 0 && (
         <ul className="list-disc space-y-0.5 pl-5 text-xs text-blue-700">
           {suggestion.flags.map((flag, i) => (
-            <li key={`${flag.type}-${i}`}>{flag.reason}</li>
+            <li key={`${flag.type}-${i}`}>
+              {FLAG_LABEL[flag.type] ? <span className="mr-1.5 rounded bg-blue-100 px-1.5 py-0.5 font-medium">{FLAG_LABEL[flag.type]}</span> : null}
+              {flag.reason}
+            </li>
           ))}
         </ul>
       )}
@@ -120,6 +148,8 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
         </p>
       )}
 
+      {isRepo && <p className="text-xs text-slate-500">{codeNote}</p>}
+
       {suggestion.source === 'app' && (
         <div>
           <button type="button" onClick={() => setReplaying(true)} className="rounded text-xs font-medium text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -127,6 +157,19 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
           </button>
         </div>
       )}
+      {isRepo && (
+        <div>
+          <button
+            type="button"
+            aria-expanded={showCode}
+            onClick={() => setShowCode((open) => !open)}
+            className="rounded text-xs font-medium text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            Code found
+          </button>
+        </div>
+      )}
+      {isRepo && showCode && <CodeFound suggestionId={suggestion.id} />}
       {replaying && <ReplaySteps suggestionId={suggestion.id} onClose={() => setReplaying(false)} />}
 
       {showActions && (
