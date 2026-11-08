@@ -2,13 +2,16 @@
  * Judges one checklist item from pieces of a code repository. Each piece is stored as a page at its
  * GitHub permalink with one passage (a header line naming the file and lines, then the code), then
  * goes to Phase 1's assessment. When the first answer is null, one small call asks for more search
- * words and the item is judged once more over both rounds' pieces. Only the final round is stored.
+ * words and the item is judged once more: the new pieces first, then the first round's pieces that
+ * still fit. Each call stays within MAX_INPUT_TOKENS_PER_CALL, and a piece that is not sent is not
+ * stored. Only the final round is stored as the suggestion.
  */
 import { createHash } from 'node:crypto'
-import type { AssessItem } from './assess.js'
-import { MAX_TOKENS_PER_RUN, REPO_MAX_PIECES_PER_ITEM } from './config.js'
+import { estimateTokens, type AssessItem } from './assess.js'
+import { MAX_INPUT_TOKENS_PER_CALL, MAX_TOKENS_PER_RUN, REPO_MAX_PIECES_PER_ITEM } from './config.js'
 import { isQuoteVerified, normaliseForMatch } from './quotes.js'
 import { permalinkOf } from './repoAddress.js'
+import { cutToFit, withinBudget } from './repoBudget.js'
 import type { RepoRepository } from './repoRepository.js'
 import { findPieces, isCommentLine, isDocsOrTestPath, pieceKey } from './repoSearch.js'
 import { askMoreTerms } from './repoTerms.js'
@@ -48,6 +51,24 @@ export function headerOf(path: string, startLine: number, endLine: number): stri
   return `File ${path}, lines ${startLine}–${endLine}`
 }
 
+function passageText(d: PieceDraft): string {
+  return `${headerOf(d.path, d.startLine, d.endLine)}\n${d.code}`
+}
+
+/** The drafts, in rank order, whose passages fit one call together; a piece too big alone is cut down first. */
+function fitDrafts(drafts: PieceDraft[]): PieceDraft[] {
+  const sized = drafts.map((d) => cutToFit(d, passageText, MAX_INPUT_TOKENS_PER_CALL))
+  return withinBudget(sized, (d) => estimateTokens(passageText(d)), MAX_INPUT_TOKENS_PER_CALL)
+}
+
+const passageCost = (p: Passage): number => estimateTokens(p.text)
+
+/** A stored passage too big for one call alone is sent cut short (never the case with the search's cap). */
+function sendable(p: Passage): Passage {
+  const maxChars = MAX_INPUT_TOKENS_PER_CALL * 4
+  return p.text.length > maxChars ? { ...p, text: p.text.slice(0, maxChars) } : p
+}
+
 function splitPassage(text: string): { header: string; code: string } {
   const at = text.indexOf('\n')
   return at === -1 ? { header: text, code: '' } : { header: text.slice(0, at), code: text.slice(at + 1) }
@@ -68,7 +89,7 @@ export async function storePieces(
   const passages: Passage[] = []
   for (const d of drafts) {
     const header = headerOf(d.path, d.startLine, d.endLine)
-    const text = `${header}\n${d.code}`
+    const text = passageText(d)
     const link = permalinkOf(snapshot.owner, snapshot.name, snapshot.commitSha, d.path, d.startLine, d.endLine)
     const page = await ctx.deps.repo.addPage(ctx.run.id, {
       url: link,
@@ -184,7 +205,10 @@ async function storeFinal(
   return stored ?? null
 }
 
-/** Round 2: more terms from the AI, a search for new pieces, and their storing. Empty when nothing new is found. */
+/**
+ * Round 2: more terms from the AI, a search for new pieces, and the storing of those that fit one
+ * call. Empty when nothing new is found.
+ */
 async function secondRound(ctx: RunCtx, input: RepoJudgeInput, first: StoredPiece[]): Promise<StoredPiece[]> {
   const { item, platform, files, meter } = input
   const more = await abortable(
@@ -201,7 +225,7 @@ async function secondRound(ctx: RunCtx, input: RepoJudgeInput, first: StoredPiec
   )
   meter.add(more.tokensUsed)
   const exclude = new Set(first.map((s) => pieceKey(s.piece)))
-  const drafts = findPieces(files, more.terms, { exclude, max: REPO_MAX_PIECES_PER_ITEM })
+  const drafts = fitDrafts(findPieces(files, more.terms, { exclude, max: REPO_MAX_PIECES_PER_ITEM }))
   if (drafts.length === 0) return []
   return storePieces(ctx, input.repoRepo, input.snapshot, item.id, drafts, 2)
 }
@@ -215,7 +239,7 @@ async function secondRound(ctx: RunCtx, input: RepoJudgeInput, first: StoredPiec
 export async function judgeRepoItem(ctx: RunCtx, input: RepoJudgeInput): Promise<Suggestion | null> {
   const { item, platform, meter } = input
   const batch = repoBatch(platform)
-  const drafts = findPieces(input.files, input.terms, { max: REPO_MAX_PIECES_PER_ITEM })
+  const drafts = fitDrafts(findPieces(input.files, input.terms, { max: REPO_MAX_PIECES_PER_ITEM }))
   if (drafts.length === 0) return storeSuggestion(ctx, withoutEvidence(ctx, item, batch, REPO_NO_CODE_REASON))
 
   const first = await storePieces(ctx, input.repoRepo, input.snapshot, item.id, drafts, 1)
@@ -224,7 +248,9 @@ export async function judgeRepoItem(ctx: RunCtx, input: RepoJudgeInput): Promise
   if (results[0]?.suggestedResult === null && meter.used() < MAX_TOKENS_PER_RUN) {
     const second = await secondRound(ctx, input, first)
     if (second.length > 0) {
-      stored = [...first, ...second]
+      // The new pieces answer what the AI asked for, so they go first; then round 1 while it fits.
+      const used = second.reduce((n, s) => n + passageCost(s.passage), 0)
+      stored = [...second, ...withinBudget(first, (s) => passageCost(s.passage), MAX_INPUT_TOKENS_PER_CALL, used)]
       results = await assessPieces(ctx, item, platform, stored.map((s) => s.passage), meter)
     }
   }
@@ -233,14 +259,17 @@ export async function judgeRepoItem(ctx: RunCtx, input: RepoJudgeInput): Promise
 }
 
 /**
- * Re-assess: one call over the stored passages of the item's pieces, with the same rules. Never
- * searches. With no pieces, stores the no-code suggestion.
+ * Re-assess: one call over the stored passages of the item's pieces, with the same rules and the
+ * same budget: round 2 first, then round 1, each in stored order. Never searches. With no pieces,
+ * stores the no-code suggestion.
  */
 export async function rejudgeRepoItem(ctx: RunCtx, input: RepoRejudgeInput): Promise<Suggestion | null> {
   const { item, platform, pieces, meter } = input
   const batch = repoBatch(platform)
   if (pieces.length === 0) return storeSuggestion(ctx, withoutEvidence(ctx, item, batch, REPO_NO_CODE_REASON))
-  const passages = await ctx.deps.repo.listPassagesOfPages(pieces.map((p) => p.pageId))
+  const ordered = [...pieces.filter((p) => p.round === 2), ...pieces.filter((p) => p.round === 1)]
+  const stored = await ctx.deps.repo.listPassagesOfPages(ordered.map((p) => p.pageId))
+  const passages = withinBudget(stored.map(sendable), passageCost, MAX_INPUT_TOKENS_PER_CALL)
   const results = await assessPieces(ctx, item, platform, passages, meter)
   const pathOfPage = new Map(pieces.map((p) => [p.pageId, p.path]))
   return storeFinal(ctx, item, batch, passages, results, pathOfPage)

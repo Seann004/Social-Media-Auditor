@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GroqLimitError } from '../../lib/groq.js'
-import type { AssessedItem, AssessInput, AssessItem, AssessOutput } from './assess.js'
-import { MAX_TOKENS_PER_RUN } from './config.js'
+import { estimateTokens, type AssessedItem, type AssessInput, type AssessItem, type AssessOutput } from './assess.js'
+import { MAX_INPUT_TOKENS_PER_CALL, MAX_TOKENS_PER_RUN } from './config.js'
 import { fakeAudit, PROJECT } from './__fixtures__/runnerWorld.js'
 import { createMemoryRepoRepository, type MemoryRepoRepository } from './memoryRepoRepository.js'
 import { createMemoryRepository } from './memoryRepository.js'
@@ -281,5 +281,82 @@ describe('rejudgeRepoItem', () => {
     expect(kit.calls).toHaveLength(0)
     expect(s?.reason).toBe(REPO_NO_CODE_REASON)
     expect(s?.source).toBe('repo')
+  })
+})
+
+/** A file whose one piece is close to the 3 800-character cap: one matching line among long ones. */
+function bigFile(path: string, word: string): RepoFile {
+  const filler = Array.from({ length: 20 }, (_, i) => `  const filler${i} = '${'x'.repeat(180)}'`)
+  return { path, lines: [`export const ${word} = true`, ...filler] }
+}
+const sentTokens = (passages: Passage[]) => passages.reduce((n, p) => n + estimateTokens(p.text), 0)
+const NULL_ANSWER: Answer = () => ({ results: [NULL_RESULT], missingItemIds: [], tokensUsed: 70 })
+
+describe('the input budget of each repo judge call', () => {
+  const NEEDLES = Array.from({ length: 6 }, (_, i) => bigFile(`src/needle${i}.ts`, `needle${i}`))
+  const OTHERS = Array.from({ length: 2 }, (_, i) => bigFile(`src/other${i}.ts`, `otherword${i}`))
+
+  it('round 1 stores and sends only the ranked pieces that fit the budget', async () => {
+    const kit = await createKit()
+    const s = await judgeRepoItem(kit.ctx, {
+      item: ITEM, platform: 'Social', files: NEEDLES, snapshot: kit.snapshot, terms: WORDS('needle'), repoRepo: kit.repoRepo, meter: meterOf(),
+    })
+    const sent = kit.calls[0].passages
+    expect(sent.length).toBeGreaterThan(0)
+    expect(sent.length).toBeLessThan(6)
+    expect(sentTokens(sent)).toBeLessThanOrEqual(MAX_INPUT_TOKENS_PER_CALL)
+    const pieces = await kit.repoRepo.listPieces(kit.ctx.run.id, ITEM.id)
+    expect(pieces).toHaveLength(sent.length)
+    expect(pieces.map((p) => p.pageId)).toEqual(sent.map((p) => p.pageId))
+    expect(s?.passageIdsSent).toEqual(sent.map((p) => p.id))
+  })
+
+  it('round 2 sends its new pieces first, then the round-1 pieces that still fit', async () => {
+    const kit = await createKit([NULL_ANSWER, yesQuoting('export const otherword0 = true')], { words: ['otherword'], paths: [] })
+    const s = await judgeRepoItem(kit.ctx, {
+      item: ITEM, platform: 'Social', files: [...NEEDLES, ...OTHERS], snapshot: kit.snapshot, terms: WORDS('needle'), repoRepo: kit.repoRepo, meter: meterOf(),
+    })
+    expect(kit.calls).toHaveLength(2)
+    const first = kit.calls[0].passages
+    const final = kit.calls[1].passages
+    const pieces = await kit.repoRepo.listPieces(kit.ctx.run.id, ITEM.id)
+    const roundTwo = pieces.filter((p) => p.round === 2)
+    expect(roundTwo.map((p) => p.path)).toEqual(['src/other0.ts', 'src/other1.ts'])
+    expect(final.slice(0, 2).map((p) => p.pageId)).toEqual(roundTwo.map((p) => p.pageId))
+    const roundOneSent = final.slice(2)
+    expect(roundOneSent.length).toBeLessThan(first.length)
+    expect(roundOneSent.map((p) => p.id)).toEqual(first.slice(0, roundOneSent.length).map((p) => p.id))
+    expect(sentTokens(final)).toBeLessThanOrEqual(MAX_INPUT_TOKENS_PER_CALL)
+    expect(s?.passageIdsSent).toEqual(final.map((p) => p.id))
+    expect(s?.suggestedResult).toBe('yes')
+  })
+
+  it('round 2 stores only the new pieces that were sent', async () => {
+    const MANY = Array.from({ length: 6 }, (_, i) => bigFile(`src/many${i}.ts`, `manyword${i}`))
+    const kit = await createKit([NULL_ANSWER], { words: ['manyword'], paths: [] })
+    await judgeRepoItem(kit.ctx, {
+      item: ITEM, platform: 'Social', files: [FILES[0], ...MANY], snapshot: kit.snapshot, terms: WORDS('isPrivate'), repoRepo: kit.repoRepo, meter: meterOf(),
+    })
+    const final = kit.calls[1].passages
+    const roundTwo = (await kit.repoRepo.listPieces(kit.ctx.run.id, ITEM.id)).filter((p) => p.round === 2)
+    expect(roundTwo.length).toBeLessThan(6)
+    expect(final.slice(0, roundTwo.length).map((p) => p.pageId)).toEqual(roundTwo.map((p) => p.pageId))
+    expect(sentTokens(final)).toBeLessThanOrEqual(MAX_INPUT_TOKENS_PER_CALL)
+  })
+
+  it('rejudge keeps the budget, round 2 first, then round 1', async () => {
+    const kit = await createKit([yesQuoting('export const needle0 = true')])
+    const draftOf = (f: RepoFile) => ({ path: f.path, startLine: 1, endLine: f.lines.length, code: f.lines.join('\n').slice(0, 3_800) })
+    const one = await storePieces(kit.ctx, kit.repoRepo, kit.snapshot, ITEM.id, NEEDLES.slice(0, 3).map(draftOf), 1)
+    const two = await storePieces(kit.ctx, kit.repoRepo, kit.snapshot, ITEM.id, NEEDLES.slice(3, 6).map(draftOf), 2)
+    const pieces = await kit.repoRepo.listPieces(kit.ctx.run.id, ITEM.id)
+    const s = await rejudgeRepoItem(kit.ctx, { item: ITEM, platform: 'Social', pieces, meter: meterOf() })
+    const sent = kit.calls[0].passages
+    expect(kit.calls).toHaveLength(1)
+    expect(sentTokens(sent)).toBeLessThanOrEqual(MAX_INPUT_TOKENS_PER_CALL)
+    expect(sent.slice(0, 3).map((p) => p.id)).toEqual(two.map((x) => x.passage.id))
+    expect(sent.slice(3).map((p) => p.id)).toEqual(one.slice(0, sent.length - 3).map((x) => x.passage.id))
+    expect(sent.length).toBeLessThan(6)
+    expect(s?.passageIdsSent).toEqual(sent.map((p) => p.id))
   })
 })
