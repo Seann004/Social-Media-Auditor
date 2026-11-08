@@ -44,6 +44,7 @@ function result(over: Partial<AssessedItem> = {}): AssessedItem {
 }
 
 const NULL_RESULT = result({ suggestedResult: null, evidenceSufficient: false, reason: 'Not enough code.' })
+const NULL_RESULT_ANSWER: Answer = () => ({ results: [NULL_RESULT], missingItemIds: [], tokensUsed: 70 })
 
 /** Quotes `text` from the first sent passage that holds it (or names `pick`). */
 function yesQuoting(text: string, pick: (p: Passage) => boolean = (p) => p.text.includes(text)): Answer {
@@ -245,6 +246,30 @@ describe('judgeRepoItem', () => {
       },
     ])
     await expect(judge(kit)).rejects.toBeInstanceOf(GroqLimitError)
+  })
+
+  it('does not flag comments_only when a quote covers a comment line and the code line after it', async () => {
+    const mixed: RepoFile = { path: 'src/mixed.ts', lines: ['// note: teens start private', 'const isPrivate = age < 18'] }
+    const quote = '// note: teens start private const isPrivate = age < 18'
+    const kit = await createKit([yesQuoting(quote, (p) => p.text.startsWith('File src/mixed.ts'))])
+    const s = await judgeRepoItem(kit.ctx, {
+      item: ITEM, platform: 'Social', files: [mixed], snapshot: kit.snapshot, terms: WORDS('isPrivate'), repoRepo: kit.repoRepo, meter: meterOf(),
+    })
+    expect(s?.quotes[0].verified).toBe(true)
+    expect(s?.flags.map((f) => f.type)).not.toContain('comments_only')
+  })
+
+  it.each([
+    ['a 429 limit', () => new Response('{}', { status: 429, headers: { 'retry-after': '7200' } }), GroqLimitError],
+    ['a 500', () => new Response('{}', { status: 500 }), Error],
+  ])('throws %s from the follow-up more-terms call on to the caller', async (_name, reply, kind) => {
+    const kit = await createKit([NULL_RESULT_ANSWER])
+    kit.fetch.mockImplementation(async () => reply())
+    const failure = judge(kit)
+    await expect(failure).rejects.toBeInstanceOf(kind)
+    if (kind === Error) await expect(failure).rejects.toThrow('Groq request failed with status 500')
+    expect(kit.fetch).toHaveBeenCalled()
+    expect(kit.calls).toHaveLength(1)
   })
 
   it('counts every call on the meter', async () => {
