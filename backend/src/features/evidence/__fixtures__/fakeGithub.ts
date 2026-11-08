@@ -10,6 +10,8 @@ export interface ExtraTarEntry {
 export interface BuildTarOptions {
   topFolder?: string
   extraEntries?: ExtraTarEntry[]
+  /** Raw tar blocks appended before the end marker, for headers buildTarGz does not write itself. */
+  rawParts?: Buffer[]
 }
 
 const BLOCK = 512
@@ -18,7 +20,7 @@ function octal(value: number, length: number): string {
   return value.toString(8).padStart(length - 1, '0') + '\0'
 }
 
-function header(name: string, type: string, size: number): Buffer {
+export function tarHeader(name: string, type: string, size: number): Buffer {
   const h = Buffer.alloc(BLOCK)
   h.write(name.slice(0, 100), 0, 100, 'utf8')
   h.write(octal(0o644, 8), 100, 8)
@@ -35,13 +37,13 @@ function header(name: string, type: string, size: number): Buffer {
   return h
 }
 
-function padded(body: Buffer): Buffer {
+export function tarPadded(body: Buffer): Buffer {
   const rest = body.length % BLOCK
   return rest === 0 ? body : Buffer.concat([body, Buffer.alloc(BLOCK - rest)])
 }
 
 /** One pax record: "<length> <key>=<value>\n", where length counts the whole record. */
-function paxRecord(key: string, value: string): Buffer {
+export function paxRecord(key: string, value: string): Buffer {
   const rest = Buffer.byteLength(` ${key}=${value}\n`)
   let length = rest + 1
   while (String(length).length + rest !== length) length = String(length).length + rest
@@ -52,9 +54,9 @@ function entry(name: string, type: string, body: Buffer): Buffer[] {
   const parts: Buffer[] = []
   if (Buffer.byteLength(name) > 100) {
     const pax = paxRecord('path', name)
-    parts.push(header('PaxHeader', 'x', pax.length), padded(pax))
+    parts.push(tarHeader('PaxHeader', 'x', pax.length), tarPadded(pax))
   }
-  parts.push(header(name, type, body.length), padded(body))
+  parts.push(tarHeader(name, type, body.length), tarPadded(body))
   return parts
 }
 
@@ -66,6 +68,7 @@ export function buildTarGz(files: Record<string, string | Buffer>, opts: BuildTa
     parts.push(...entry(`${top}/${path}`, '0', Buffer.isBuffer(content) ? content : Buffer.from(content)))
   }
   for (const extra of opts.extraEntries ?? []) parts.push(...entry(extra.name, extra.type, extra.body ?? Buffer.alloc(0)))
+  parts.push(...(opts.rawParts ?? []))
   parts.push(Buffer.alloc(BLOCK * 2))
   return gzipSync(Buffer.concat(parts))
 }
