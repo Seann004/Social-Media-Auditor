@@ -12,7 +12,7 @@ import type { Suggestion } from './types.js'
 export interface RepoSuggestionInfo {
   /** Null when the snapshot of the capture is missing. */
   commitSha: string | null
-  /** True when the item has stored code pieces in that capture, or passages were sent for it. */
+  /** True when the item has stored code pieces in that capture: what "Code found" would show. */
   hasCode: boolean
 }
 
@@ -23,17 +23,16 @@ interface CaptureCode {
 
 const distinct = (ids: readonly string[]): string[] => [...new Set(ids)]
 
-async function originsOf(repo: EvidenceRepository, suggestions: readonly Suggestion[]): Promise<Map<string, Suggestion>> {
-  const known = new Map(suggestions.map((s) => [s.id, s]))
-  const missing = distinct(suggestions.flatMap((s) => (s.originSuggestionId && !known.has(s.originSuggestionId) ? [s.originSuggestionId] : [])))
-  const fetched = await Promise.all(missing.map((id) => repo.getSuggestion(id)))
-  for (const s of fetched) if (s) known.set(s.id, s)
-  const origins = new Map<string, Suggestion>()
+/** The run that first assessed each suggestion: its own, or for a copy its origin's, read in one batch. */
+async function assessedRunsOf(repo: EvidenceRepository, suggestions: readonly Suggestion[]): Promise<Map<string, string>> {
+  const originIds = distinct(suggestions.flatMap((s) => (s.originSuggestionId ? [s.originSuggestionId] : [])))
+  const originRuns = originIds.length > 0 ? await repo.getSuggestionRunIds(originIds) : {}
+  const runs = new Map<string, string>()
   for (const s of suggestions) {
-    const origin = s.originSuggestionId ? known.get(s.originSuggestionId) : s
-    if (origin) origins.set(s.id, origin)
+    const runId = s.originSuggestionId ? originRuns[s.originSuggestionId] : s.runId
+    if (runId) runs.set(s.id, runId)
   }
-  return origins
+  return runs
 }
 
 async function capturesOf(repo: EvidenceRepository, runIds: readonly string[]): Promise<Map<string, string>> {
@@ -60,16 +59,15 @@ export async function repoSuggestionInfo(
 ): Promise<Map<string, RepoSuggestionInfo>> {
   const repoOnes = suggestions.filter((s) => s.source === 'repo')
   if (repoOnes.length === 0) return new Map()
-  const origins = await originsOf(repo, repoOnes)
-  const captures = await capturesOf(repo, [...origins.values()].map((o) => o.runId))
+  const assessedRuns = await assessedRunsOf(repo, repoOnes)
+  const captures = await capturesOf(repo, [...assessedRuns.values()])
   const code = await codeOf(repoRepo, [...captures.values()])
   return new Map(
     repoOnes.map((s) => {
-      const origin = origins.get(s.id)
-      const capture = origin ? captures.get(origin.runId) : undefined
+      const runId = assessedRuns.get(s.id)
+      const capture = runId ? captures.get(runId) : undefined
       const found = capture ? code.get(capture) : undefined
-      const sent = s.passageIdsSent.length > 0 || (origin?.passageIdsSent.length ?? 0) > 0
-      return [s.id, { commitSha: found?.commitSha ?? null, hasCode: sent || (found?.itemsWithPieces.has(s.itemId) ?? false) }]
+      return [s.id, { commitSha: found?.commitSha ?? null, hasCode: found?.itemsWithPieces.has(s.itemId) ?? false }]
     }),
   )
 }

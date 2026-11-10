@@ -284,6 +284,20 @@ describe('supabase repository without a database', () => {
       await expect(repo.listDecisions('p')).rejects.toThrow('listDecisions: down')
     })
 
+    it('getSuggestionRunIds reads id and runId page by page, ordered by id, and nothing for no ids', async () => {
+      const reads = newReads()
+      const rows: Row[] = Array.from({ length: 1_203 }, (_, i) => ({ id: `s${String(i).padStart(4, '0')}`, runId: `r${i % 3}` }))
+      const repo = createSupabaseRepository({ from: () => cappedTable(rows, reads) } as unknown as SupabaseClient)
+      const got = await repo.getSuggestionRunIds(rows.map((r) => r.id as string))
+      expect(Object.keys(got)).toHaveLength(1_203)
+      expect(got.s0004).toBe('r1')
+      expect(reads.orders).toEqual(expect.arrayContaining(['id']))
+      expect(reads.ranges[0]).toEqual([0, SUPABASE_READ_PAGE_SIZE - 1])
+      const none = newReads()
+      expect(await createSupabaseRepository({ from: () => cappedTable(rows, none) } as unknown as SupabaseClient).getSuggestionRunIds([])).toEqual({})
+      expect(none.ranges).toEqual([])
+    })
+
     const quoteRows = (n: number): Row[] => Array.from({ length: n }, (_, i) => ({ id: `q${String(i).padStart(4, '0')}`, suggestionId: 's1', quoteText: 't', verified: true }))
     const suggestionRow = { id: 's1', runId: 'r', projectId: 'p', itemId: 'i', reason: '', confidence: 'low' }
 

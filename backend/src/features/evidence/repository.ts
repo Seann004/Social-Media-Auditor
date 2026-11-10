@@ -129,6 +129,8 @@ export interface EvidenceRepository {
   getSuggestion(id: string): Promise<Suggestion | null>
   /** The summary of each known id, in one read. Unknown ids are left out. */
   getSuggestionSummaries(ids: string[]): Promise<Record<string, SuggestionSummary>>
+  /** The run of each suggestion, in one batched read; unknown ids are left out. */
+  getSuggestionRunIds(ids: string[]): Promise<Record<string, string>>
   getQuote(id: string): Promise<SuggestionQuote | null>
 
   addDecision(input: NewDecision): Promise<Decision>

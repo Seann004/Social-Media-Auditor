@@ -258,6 +258,10 @@ export function createMemoryRepository(): EvidenceRepository & ScreenshotStore {
       }
       return out
     },
+    async getSuggestionRunIds(ids) {
+      const wanted = new Set(ids)
+      return Object.fromEntries(suggestions.filter((s) => wanted.has(s.id)).map((s) => [s.id, s.runId]))
+    },
     async getQuote(id) {
       for (const s of suggestions) {
         const quote = s.quotes.find((q) => q.id === id)

@@ -405,6 +405,13 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
         rows.map((r) => [r.id, { suggestedResult: r.suggestedResult ?? null, originSuggestionId: r.originSuggestionId ?? null }]),
       )
     },
+    async getSuggestionRunIds(ids) {
+      if (ids.length === 0) return {}
+      const rows = await readAllRows('getSuggestionRunIds', (from, to) =>
+        admin.from('AI_Suggestion').select('id, runId').in('id', ids).order('id').range(from, to),
+      )
+      return Object.fromEntries(rows.map((r) => [r.id, r.runId]))
+    },
     async getQuote(id) {
       const row = unwrapById(
         'getQuote',

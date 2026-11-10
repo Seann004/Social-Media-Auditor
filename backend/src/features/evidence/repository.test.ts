@@ -207,6 +207,15 @@ describe.each(variants)('evidence repository (%s)', (variant, factory) => {
     expect(await h.repo.getSuggestionSummaries([])).toEqual({})
   })
 
+  it('getSuggestionRunIds reads the run of many suggestions at once and skips unknown ids', async () => {
+    const run = await newRun()
+    const later = await newRun()
+    const a = await h.repo.addSuggestion(suggestion(run.id))
+    const b = await h.repo.addSuggestion({ ...suggestion(later.id), originSuggestionId: a.id })
+    expect(await h.repo.getSuggestionRunIds([a.id, b.id, randomUUID()])).toEqual({ [a.id]: run.id, [b.id]: later.id })
+    expect(await h.repo.getSuggestionRunIds([])).toEqual({})
+  })
+
   it('addPassages returns the saved passages', async () => {
     const run = await newRun()
     const page = await h.repo.addPage(run.id, pageInput())

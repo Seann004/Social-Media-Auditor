@@ -57,7 +57,8 @@ describe('the suggestion listing, for repo suggestions', () => {
     expect(byItem.get('item-1')).toMatchObject({ commitSha: 'abc1234def', hasCode: true })
     // No piece and nothing sent: no code matched, so the card offers no "Code found".
     expect(byItem.get('item-2')).toMatchObject({ commitSha: 'abc1234def', hasCode: false })
-    expect(byItem.get('item-3')).toMatchObject({ commitSha: 'abc1234def', hasCode: true })
+    // Passages sent but no piece kept: the code endpoint would show nothing, so there is no code to offer.
+    expect(byItem.get('item-3')).toMatchObject({ commitSha: 'abc1234def', hasCode: false })
     // A code piece has no screenshot: the card must not ask for one.
     expect(byItem.get('item-1')!.quotes[0].pageHasScreenshot).toBe(false)
   })
@@ -89,6 +90,44 @@ describe('the suggestion listing, for repo suggestions', () => {
     await w.repo.addSuggestion(suggestion(pagesRun.id, 'item-1', { source: 'pages', passageIdsSent: ['p1'] }))
     await w.repo.updateRun(pagesRun.id, { status: 'completed' })
     expect((await list(w))[0]).toMatchObject({ commitSha: null, hasCode: false })
+  })
+})
+
+describe('the suggestion listing: batched and safe reads', () => {
+  it('reads the runs of many carried copies in one batch, never one suggestion at a time', async () => {
+    const w = setup()
+    const origins = []
+    for (const [i, sha] of ['aaaa111', 'bbbb222', 'cccc333'].entries()) {
+      const { run } = await repoCapture(w, sha, [`item-${i + 1}`])
+      origins.push(await w.repo.addSuggestion(suggestion(run.id, `item-${i + 1}`)))
+      await w.repo.updateRun(run.id, { status: 'completed' })
+    }
+    const latest = await w.repo.createRun({ projectId: P1, startedBy: 'u-aud', scope: 'all', source: 'repo' })
+    for (const origin of origins) await w.repo.addSuggestion(suggestion(latest.id, origin.itemId, { originSuggestionId: origin.id }))
+    await w.repo.updateRun(latest.id, { status: 'completed' })
+    let batches = 0
+    const single = vi.spyOn(w.repo, 'getSuggestion')
+    const original = w.repo.getSuggestionRunIds.bind(w.repo)
+    w.repo.getSuggestionRunIds = async (ids) => {
+      batches += 1
+      return original(ids)
+    }
+    const byItem = new Map((await list(w)).map((s) => [s.itemId, s]))
+    expect(byItem.get('item-1')).toMatchObject({ commitSha: 'aaaa111', hasCode: true })
+    expect(byItem.get('item-3')).toMatchObject({ commitSha: 'cccc333', hasCode: true })
+    expect(batches).toBe(1)
+    expect(single).not.toHaveBeenCalled()
+  })
+
+  it('a failing code store leaves the listing working, with no commit and no code', async () => {
+    const w = setup()
+    const { run } = await repoCapture(w, 'abc1234def', ['item-1'])
+    await w.repo.addSuggestion(suggestion(run.id, 'item-1'))
+    await w.repo.updateRun(run.id, { status: 'completed' })
+    vi.spyOn(w.repoRepo, 'getSnapshot').mockRejectedValue(new Error('store down'))
+    const suggestions = await list(w)
+    expect(suggestions[0]).toMatchObject({ commitSha: null, hasCode: false })
+    expect(console.error).toHaveBeenCalled()
   })
 })
 

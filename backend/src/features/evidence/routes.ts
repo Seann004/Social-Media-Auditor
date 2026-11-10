@@ -17,7 +17,7 @@ import {
 import { DecisionError, recordDecision } from './decisions.js'
 import type { RunQueue } from './queue.js'
 import type { RepoRepository } from './repoRepository.js'
-import { repoSuggestionInfo } from './repoSuggestionInfo.js'
+import { repoSuggestionInfo, type RepoSuggestionInfo } from './repoSuggestionInfo.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import { createProjectLock, jsonErrorHandler, projectGate, route, sessionOf, userLimiter, validParams } from './routeSupport.js'
 import { startReassess, startRun, sweepStaleRuns, type RunStartDeps, type StartOutcome } from './runStart.js'
@@ -89,6 +89,16 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
     ...(deps.repoRepo ? { repoRepo: deps.repoRepo } : {}),
   }
   const { authorise, onProject } = projectGate(audit)
+
+  /** A failing code store must not break the listing: repo suggestions then show no commit and no code. */
+  const repoInfoOrNone = async (runId: string, found: Suggestion[]): Promise<Map<string, RepoSuggestionInfo>> => {
+    try {
+      return await repoSuggestionInfo(repo, deps.repoRepo, found)
+    } catch (err) {
+      console.error(`[evidence] run ${runId}: could not read the code behind repo suggestions`, err instanceof Error ? err.message : err)
+      return new Map()
+    }
+  }
 
   const answerStart = (res: Response, outcome: StartOutcome): void => {
     if (outcome.ok) res.status(202).json({ run: toRunView(outcome.run) })
@@ -201,7 +211,7 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
       const pageIds = [...new Set(found.flatMap((s) => s.quotes.map((q) => q.pageId)).filter((id): id is string => id !== null))]
       const summaries = pageIds.length > 0 ? await repo.getPageSummaries(pageIds) : []
       const pages = new Map<string, PageSummary>(summaries.map((p) => [p.id, p]))
-      const [decisions, repoInfo] = await Promise.all([latestDecisionViews(repo, req.params.id, found), repoSuggestionInfo(repo, deps.repoRepo, found)])
+      const [decisions, repoInfo] = await Promise.all([latestDecisionViews(repo, req.params.id, found), repoInfoOrNone(run.id, found)])
       res.json({ run: toRunView(run), suggestions: found.map((s) => toSuggestionView(s, pages, repoInfo.get(s.id))), decisions })
     }),
   )
