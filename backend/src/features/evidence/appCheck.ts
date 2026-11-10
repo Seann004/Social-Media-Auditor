@@ -5,6 +5,7 @@
  */
 import { StepDecisionError, type AccountStatus, type DecideStep, type StepPrompt } from './appAgent.js'
 import type { AppRepository } from './appRepository.js'
+import { pageDetail } from './appStepNotes.js'
 import { checkAction, detectBlock, type SafetyContext } from './appSafety.js'
 import type { AppSession, AppSessionPool } from './appSession.js'
 import {
@@ -126,12 +127,13 @@ export function leftChangedLine(change: AppChange): string {
   return `${change.accountLabel}: "${change.control}" on ${pathOf(change.pageUrl)} is ${change.after} (was ${change.before})`
 }
 
-function doneDetail(change: DetectedChange | null, beforeUrl: string | null, afterUrl: string): string {
+/** `typed`: every text the AI typed in this check, so that the page repeating one is not quoted as its message (ruling A20). */
+function doneDetail(change: DetectedChange | null, typed: readonly string[], before: AppView | null, after: AppView | null, afterUrl: string): string {
   if (change !== null) {
     if (change.chosen !== undefined) return `"${change.chosen}" is now on`
     return ON_OFF_CHANGE_ROLES.includes(change.role) ? `"${change.control}" is now ${change.after}` : `"${change.control}" set to "${change.after}"`
   }
-  return beforeUrl === afterUrl ? 'page unchanged' : `page ${pathOf(afterUrl)} opened`
+  return pageDetail(before, after, afterUrl, typed)
 }
 
 export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<CheckOutcome> {
@@ -272,7 +274,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     }
     account = target
     view = await readView()
-    const detail = view === null ? 'page unchanged' : `page ${pathOf(view.url)} opened`
+    const detail = view === null ? 'page unchanged' : pageDetail(null, view, view.url)
     await record({ action, outcome: 'done', detail, refusalReason: null, view, screenshot: view === null ? null : await shoot() })
     noteExplored(view?.url ?? pool.get(target.id)?.currentUrl() ?? '', 'switch')
   }
@@ -345,7 +347,8 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       signedInNow = signInControl && loginPaths.has(who.id) && !stillSigningIn
       await noteSave(el, before, who)
     }
-    const detail = doneDetail(change, before?.url ?? null, afterUrl)
+    const typed = [...steps, { action }].flatMap((s) => (s.action.type === 'type' ? [s.action.text] : []))
+    const detail = doneDetail(change, typed, before, after, afterUrl)
     await record({ action, outcome: 'done', detail, refusalReason: null, view: after, describedOn: before, screenshot: after === null ? null : await shoot() })
     noteExplored(afterUrl, signedInNow ? 'sign-in' : 'other')
   }

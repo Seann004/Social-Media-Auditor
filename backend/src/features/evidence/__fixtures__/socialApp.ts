@@ -414,14 +414,14 @@ export async function startSocialApp(): Promise<SocialApp> {
     state = change(state)
   }
 
-  /** `at` is the path of the sign-in form; success goes to `home`. */
-  const signIn = (ctx: Ctx, at = '/login', home = '/home') => {
+  /** `at` is the path of the sign-in form; success goes to `home`. With `echo`, a failure repeats the login name. */
+  const signIn = (ctx: Ctx, at = '/login', home = '/home', echo = false) => {
     const typed = ctx.form.get('username') ?? ''
     const account = LOGIN_NAMES[typed]
     const handle = account ?? typed
     const ok = account !== undefined && PASSWORDS[account] === ctx.form.get('password') && !state.deleted.includes(account)
     update((s) => ({ ...s, loginAttempts: [...s.loginAttempts, { handle, ok }] }))
-    if (!ok) return send(ctx.res, loginPage('Wrong password', at))
+    if (!ok) return send(ctx.res, loginPage(echo ? `Wrong password for ${escapeHtml(typed)}` : 'Wrong password', at))
     if (mode.captchaOnLogin) return redirect(ctx.res, '/captcha')
     if (mode.twoFactorOnLogin) return redirect(ctx.res, '/two-factor')
     const sid = randomBytes(12).toString('hex')
@@ -519,6 +519,9 @@ export async function startSocialApp(): Promise<SocialApp> {
     'GET /start': (ctx) => send(ctx.res, ctx.viewer ? homePage(ctx.viewer) : loginPage(null, '/start')),
     'POST /start': (ctx) => signIn(ctx, '/start', '/start'),
     'GET /find': (ctx) => send(ctx.res, findPage()),
+    // A sign-in form whose error repeats the login name that was typed, as some platforms do.
+    'GET /login-echo': (ctx) => send(ctx.res, loginPage(null, '/login-echo')),
+    'POST /login-echo': (ctx) => signIn(ctx, '/login-echo', '/home', true),
     // A public landing page whose "Log in" link leads to the sign-in form, as on TikTok or Instagram.
     'GET /welcome': (ctx) => send(ctx.res, page('Welcome', '<h1>Social</h1><p>Share moments with friends.</p><a href="/login">Log in</a>')),
     'GET /captcha': (ctx) =>
