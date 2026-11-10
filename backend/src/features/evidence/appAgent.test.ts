@@ -11,6 +11,8 @@ import {
 } from './config.js'
 import { appActionSchema, buildStepPrompt, decideStep, StepDecisionError, type AccountStatus, type StepPrompt } from './appAgent.js'
 import type { AppElement, AppView } from './appTypes.js'
+import { repeatRefusal } from './appRepeat.js'
+import { describeAction, stepLine } from './appSteps.js'
 
 // Real callers build AccountStatus from TestAccount rows, which carry the login name; TypeScript lets the
 // extra properties through. The runtime object here has them, so a builder that spreads the account leaks.
@@ -300,5 +302,23 @@ describe('decideStep', () => {
     run.abort()
     const err = await decideStep({ prompt: promptWith(), apiKey: 'KEY', model: 'm', signal: run.signal }).catch((e) => e)
     expect(err).toMatchObject({ name: 'AbortError' })
+  })
+})
+
+describe('buildStepPrompt and the repeat hint', () => {
+  it('keeps the next step of a repeated fill on a long field label inside the cut history line', () => {
+    const field = (ref: string, name: string, inputType: string | null): AppElement => ({
+      ref, role: 'textbox', name, tag: 'input', inputType, href: null, groupId: 'g1', state: {}, contextText: '',
+    })
+    const login = field('e2', 'Phone number, username, or email', null)
+    const password = field('e3', 'Password', 'password')
+    const signIn: AppElement = { ...element(4), name: 'Sign in', inputType: 'submit', groupId: 'g1' }
+    const page: AppView = { ...view('Log in', 0), elements: [login, password, signIn], hasPasswordField: true }
+    const action = { type: 'fill_credential', ref: 'e2', account: 'Teen 15', field: 'login' } as const
+    const reason = repeatRefusal(action, login, page, { account: 'Teen 15', filled: () => true })
+    const line = stepLine(5, 'Teen 15', describeAction(action, page), 'refused', reason)
+    const data = parsedUser(promptWith({ history: [line] }))
+    expect(data.steps[0]).toContain('click the "Sign in" button (e4) next.')
+    expect(line.length).toBeLessThanOrEqual(APP_HISTORY_LINE_CHARS)
   })
 })

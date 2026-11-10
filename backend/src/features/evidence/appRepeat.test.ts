@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isRepeat, labelOf, pageState, repeatRefusal, REPEATED_ACTION, type DoneAction } from './appRepeat.js'
+import { isRepeat, labelOf, pageState, repeatRefusal, REPEATED_ACTION, REPEATED_FILL, type DoneAction } from './appRepeat.js'
 import type { AppAction, AppElement, AppView } from './appTypes.js'
 
 const el = (over: Partial<AppElement> = {}): AppElement => ({
@@ -94,37 +94,34 @@ describe('repeatRefusal: what the refusal of a repeat tells the AI', () => {
   const search = el({ ref: 'e9', name: 'Search', inputType: 'search', groupId: 'g2' })
   const page = view([login, password, show, signIn, search])
   const filledOf = (...fields: AppElement[]) => (field: AppElement) => fields.some((f) => labelOf(f) === labelOf(field))
+  const ctx = (...fields: AppElement[]) => ({ account: 'Teen 15', filled: filledOf(...fields) })
 
-  it('after both credential fields are filled, a repeated fill points at the sign-in button', () => {
-    const reason = repeatRefusal(FILL, login, page, { account: 'Teen 15', filled: filledOf(login, password) })
-    expect(reason.startsWith(REPEATED_ACTION)).toBe(true)
-    expect(reason).toContain('For Teen 15 this check has already filled "Username" (e1) and "Password" (e2) in this form.')
-    expect(reason.endsWith('Both fields are filled: click the "Sign in" button (e4) next.')).toBe(true)
+  it('after both credential fields are filled, a repeated fill says, briefly, to click the sign-in button', () => {
+    expect(repeatRefusal(FILL, login, page, ctx(login, password))).toBe(
+      `${REPEATED_FILL} Both fields are filled: click the "Sign in" button (e4) next.`,
+    )
   })
 
   it('with only one field filled, it names the field still to fill', () => {
-    const reason = repeatRefusal(FILL, login, page, { account: 'Teen 15', filled: filledOf(login) })
-    expect(reason).toContain('already filled "Username" (e1) in this form.')
-    expect(reason.endsWith('Next, fill "Password" (e2).')).toBe(true)
-    expect(reason).not.toContain('Sign in')
+    expect(repeatRefusal(FILL, login, page, ctx(login))).toBe(`${REPEATED_FILL} Next, fill "Password" (e2).`)
   })
 
-  it('a typed fill counts as a fill too', () => {
+  it('a typed fill counts as a fill too, and never shows the typed text', () => {
     const typed: Act = { type: 'type', ref: 'e1', text: 'teen.login@example.test' }
-    const reason = repeatRefusal(typed, login, page, { account: 'Teen 15', filled: filledOf(login, password) })
-    expect(reason.endsWith('Both fields are filled: click the "Sign in" button (e4) next.')).toBe(true)
-    expect(reason).not.toContain('teen.login')
+    const reason = repeatRefusal(typed, login, page, ctx(login, password))
+    expect(reason).toBe(`${REPEATED_FILL} Both fields are filled: click the "Sign in" button (e4) next.`)
   })
 
-  it('names no button when the form has none that signs in', () => {
+  it('with every field filled and no button that signs in, it says what was filled after the generic reason', () => {
     const noButton = view([login, password, show])
-    const reason = repeatRefusal(FILL, login, noButton, { account: 'Teen 15', filled: filledOf(login, password) })
-    expect(reason).toBe(`${REPEATED_ACTION} For Teen 15 this check has already filled "Username" (e1) and "Password" (e2) in this form.`)
+    expect(repeatRefusal(FILL, login, noButton, ctx(login, password))).toBe(
+      `${REPEATED_ACTION} For Teen 15 this check has already filled "Username" (e1) and "Password" (e2) in this form.`,
+    )
   })
 
   it('keeps the generic wording for a repeat that is not a fill, or without a page', () => {
     const click: Act = { type: 'click', ref: 'e3' }
-    expect(repeatRefusal(click, show, page, { account: 'Teen 15', filled: filledOf(login, password) })).toBe(REPEATED_ACTION)
+    expect(repeatRefusal(click, show, page, ctx(login, password))).toBe(REPEATED_ACTION)
     expect(repeatRefusal({ type: 'open_link', url: '/settings' }, null, page, { account: 'Teen 15', filled: () => true })).toBe(REPEATED_ACTION)
     expect(repeatRefusal(FILL, login, null, { account: 'Teen 15', filled: () => true })).toBe(REPEATED_ACTION)
   })
@@ -133,5 +130,24 @@ describe('repeatRefusal: what the refusal of a repeat tells the AI', () => {
     const holding = view([{ ...login, state: { value: 'teen.login@example.test' } }, { ...password, state: { value: 'Teen-Pass-111' } }, signIn])
     const reason = repeatRefusal(FILL, login, holding, { account: 'Teen 15', filled: () => true })
     expect(reason).not.toMatch(/teen\.login|Teen-Pass/)
+  })
+
+  it('prefers a sign-in button over "Continue with Google" placed before it', () => {
+    const google = el({ ref: 'e5', role: 'button', name: 'Continue with Google', tag: 'button', inputType: 'button' })
+    const withGoogle = view([login, password, google, signIn])
+    expect(repeatRefusal(FILL, login, withGoogle, ctx(login, password))).toContain('click the "Sign in" button (e4) next.')
+  })
+
+  it('falls back to Continue or Submit, never to a provider button, and swaps double quotes in names', () => {
+    const apple = el({ ref: 'e5', role: 'button', name: 'Continue with Apple', tag: 'button', inputType: 'button' })
+    const github = el({ ref: 'e6', role: 'button', name: 'GitHub', tag: 'button', inputType: 'submit' })
+    const cont = el({ ref: 'e7', role: 'button', name: 'Continue "now"', tag: 'button', inputType: 'submit' })
+    expect(repeatRefusal(FILL, login, view([login, password, apple, github, cont]), ctx(login, password))).toContain(
+      `click the "Continue 'now'" button (e7) next.`,
+    )
+    const onlyProviders = view([login, password, apple, el({ ref: 'e8', role: 'button', name: 'Log in with Facebook', tag: 'button' })])
+    expect(repeatRefusal(FILL, login, onlyProviders, ctx(login, password))).not.toContain('click the')
+    const quotedField = el({ ref: 'e2', name: 'Your "secret" word', inputType: 'password' })
+    expect(repeatRefusal(FILL, login, view([login, quotedField, signIn]), ctx(login))).toContain(`Next, fill "Your 'secret' word" (e2).`)
   })
 })

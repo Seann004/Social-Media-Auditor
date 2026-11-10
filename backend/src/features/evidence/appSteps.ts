@@ -1,7 +1,7 @@
 /** The words of an app check's steps, and how each step is stored as evidence. */
 import { randomUUID } from 'node:crypto'
 import { outlineLines } from './appRead.js'
-import { REPEATED_ACTION } from './appRepeat.js'
+import { REPEATED_ACTION, REPEATED_FILL } from './appRepeat.js'
 import type { AppRepository } from './appRepository.js'
 import type { AgentAccount, AppAction, AppElement, AppStep, AppStepOutcome, AppView } from './appTypes.js'
 import { splitControlLines, splitIntoPassages } from './passages.js'
@@ -109,7 +109,7 @@ export const FINISHED_TOO_EARLY = 'Finished too early: look at the page where th
 export const LOOK_FURTHER = 'Asked to look further'
 
 /** The refusal reasons that only steer the AI (the early-finish nudge, a refused repeat), not safety rules. */
-const HINT_REASONS: readonly string[] = [FINISHED_TOO_EARLY, REPEATED_ACTION]
+const HINT_REASONS: readonly string[] = [FINISHED_TOO_EARLY, REPEATED_ACTION, REPEATED_FILL]
 
 /**
  * Whether a refused step is a hint to look further, told by its refusal reason. It is stored as a

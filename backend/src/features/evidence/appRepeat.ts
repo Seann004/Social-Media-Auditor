@@ -3,11 +3,16 @@
  * changed nothing on the page and nothing has changed since, is refused so that the AI tries
  * something else (a live run typed the login into the e-mail field four times in a row).
  */
-import { isCredentialField, isSignInButton, isTextField } from './appFields.js'
+import { isCredentialField, isTextField, signInButtonOf } from './appFields.js'
 import type { AppAction, AppElement, AppView } from './appTypes.js'
 
 /** The refusal of a repeat. The AI sees it in its history. */
 export const REPEATED_ACTION = 'Repeated the same action; try something different, such as the next field or a different page.'
+/**
+ * The short refusal of a repeated fill that comes with its next step. Short, so that the step line,
+ * which the AI's history cuts at APP_HISTORY_LINE_CHARS, still ends with the step to take.
+ */
+export const REPEATED_FILL = 'Repeated the same fill.'
 
 type ActAction = Exclude<AppAction, { type: 'finish' } | { type: 'switch_account' }>
 
@@ -96,7 +101,9 @@ export interface RepeatHintContext {
   filled: (field: AppElement) => boolean
 }
 
-const quoted = (el: AppElement): string => `"${el.name.trim()}" (${el.ref})`
+/** A name in double quotes: a double quote inside it becomes a single one. */
+const quotedName = (el: AppElement): string => `"${el.name.trim().replace(/"/g, "'")}"`
+const quoted = (el: AppElement): string => `${quotedName(el)} (${el.ref})`
 
 function listed(items: string[]): string {
   return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
@@ -109,30 +116,30 @@ function formFields(el: AppElement, view: AppView): AppElement[] {
 
 function nextStep(el: AppElement, view: AppView, fields: AppElement[], ctx: RepeatHintContext): string | null {
   const credentials = fields.filter(isCredentialField)
-  const button = view.elements.find((other) => other.groupId === el.groupId && isSignInButton(other))
-  if (credentials.length > 0 && credentials.every(ctx.filled) && button !== undefined) {
+  const button = signInButtonOf(view.elements.filter((other) => other.groupId === el.groupId))
+  if (credentials.length > 0 && credentials.every(ctx.filled) && button !== null) {
     const which = credentials.length === 2 ? 'Both fields are' : credentials.length === 1 ? 'The field is' : 'All the fields are'
-    return `${which} filled: click the "${button.name.trim()}" button (${button.ref}) next.`
+    return `${which} filled: click the ${quotedName(button)} button (${button.ref}) next.`
   }
   const unfilled = [...credentials, ...fields.filter((f) => !isCredentialField(f))].find((f) => !ctx.filled(f))
   return unfilled === undefined ? null : `Next, fill ${quoted(unfilled)}.`
 }
 
 /**
- * The refusal of a repeat. A repeated fill (a credential or a typed text) also says which fields of
- * its form this check already filled for the account in use, and what to do next: the form's sign-in
- * button once every credential field is filled, else the next empty field. It names only fields, refs
- * and buttons the AI already sees, never a value. It is a hint: nothing is clicked for the AI.
+ * The refusal of a repeat. A repeated fill (a credential or a typed text) says what to do next: the
+ * form's sign-in button once every credential field is filled, else the next empty field. Then the
+ * reason is the short REPEATED_FILL, and the step comes right after it, so that the cut history line
+ * the AI reads still holds it. With no next step, the generic reason is followed by the fields this
+ * check already filled for the account in use. It names only fields, refs and buttons the AI already
+ * sees, never a value. It is a hint: nothing is clicked for the AI.
  */
 export function repeatRefusal(action: ActAction, el: AppElement | null, view: AppView | null, ctx: RepeatHintContext): string {
   if ((action.type !== 'fill_credential' && action.type !== 'type') || el === null || view === null) return REPEATED_ACTION
   const fields = formFields(el, view)
+  const next = nextStep(el, view, fields, ctx)
+  if (next !== null) return `${REPEATED_FILL} ${next}`
   const done = fields.filter(ctx.filled).map(quoted)
+  if (done.length === 0) return REPEATED_ACTION
   const who = ctx.account === null ? 'This check has' : `For ${ctx.account} this check has`
-  const parts = [
-    REPEATED_ACTION,
-    done.length === 0 ? null : `${who} already filled ${listed(done)} in this form.`,
-    nextStep(el, view, fields, ctx),
-  ]
-  return parts.filter((p): p is string => p !== null).join(' ')
+  return `${REPEATED_ACTION} ${who} already filled ${listed(done)} in this form.`
 }

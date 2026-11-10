@@ -157,7 +157,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   let earlyFinishRefused = false
   /** The last step when it was a done action: an identical action next, on an unchanged page, is refused. */
   let lastDone: DoneAction | null = null
-  /** Per account, the fields this check filled (a fill or a typed text), by path and label: for the repeat hint. */
+  /** Per account, the fields this check filled (a fill or a typed text), by path, form and label: for the repeat hint. */
   let filledFields: ReadonlyMap<string, ReadonlySet<string>> = new Map()
 
   await pool.resetAll()
@@ -201,7 +201,16 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     }
   }
 
-  const fieldKey = (field: AppElement, at: AppView): string => `${pathOf(at.url)}\u0001${labelOf(field) ?? ''}`
+  const pathKey = (url: string): string => `${pathOf(url)}\u0001`
+  const fieldKey = (field: AppElement, at: AppView): string => `${pathKey(at.url)}${field.groupId ?? ''}\u0001${labelOf(field) ?? ''}`
+
+  /** Forgets the fields filled for the account on the page at `url`: its form was sent or left. */
+  function forgetFilled(url: string, who: AgentAccount): void {
+    const keys = filledFields.get(who.id)
+    if (keys === undefined) return
+    const kept = new Set([...keys].filter((key) => !key.startsWith(pathKey(url))))
+    filledFields = new Map(filledFields).set(who.id, kept)
+  }
 
   /** Whether this check filled the field, on this page, for the account in use. */
   function wasFilled(field: AppElement, at: AppView | null): boolean {
@@ -352,6 +361,9 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       await record({ action, outcome: 'failed', detail: result.detail, refusalReason: null, view: after, describedOn: before, screenshot: after === null ? null : await shoot() })
       return
     }
+    // A sign-in click sends the form (a failed one shows it again, emptied), and a new address leaves it.
+    const signInClick = action.type === 'click' && el !== null && SIGN_IN_CONTROL.test(el.name)
+    if (before !== null && (signInClick || before.url !== afterUrl)) forgetFilled(before.url, who)
     if ((action.type === 'fill_credential' || action.type === 'type') && before !== null && el !== null) noteFilled(el, before, who)
     if (action.type === 'fill_credential' && action.field === 'password' && before !== null) {
       loginPaths = new Map(loginPaths).set(who.id, pathOf(before.url))

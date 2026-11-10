@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StepPrompt } from './appAgent.js'
 import { REPEATED_ACTION } from './appCheck.js'
+import { REPEATED_FILL } from './appRepeat.js'
+import { buildStepPrompt } from './appAgent.js'
 import { closeBrowser } from './browser.js'
 import { TEST_TIMEOUT_MS } from './__fixtures__/pages.js'
 import { makeAccount, startAppWorld, TEEN_PASSWORD, type AppWorld } from './__fixtures__/appWorld.js'
@@ -39,12 +41,12 @@ describe('runCheck: what a refused repeat says', () => {
     expect(outcome.steps.slice(0, 5).map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'refused'])
     const reason = outcome.steps[4].refusalReason ?? ''
     const button = refOf(agent.prompts[4], 'button', 'Sign in')
-    expect(reason.startsWith(REPEATED_ACTION)).toBe(true)
-    expect(reason).toContain('For Teen 15 this check has already filled "Username"')
-    expect(reason.endsWith(`Both fields are filled: click the "Sign in" button (${button}) next.`)).toBe(true)
+    expect(reason).toBe(`${REPEATED_FILL} Both fields are filled: click the "Sign in" button (${button}) next.`)
     // Still shown as a hint, and the AI reads it in its history.
     expect(outcome.steps[4].line).toContain('Asked to look further:')
     expect(agent.prompts[5].history.at(-1)).toContain('Both fields are filled')
+    // The AI reads the history through buildStepPrompt, which cuts long lines: the hint must survive it.
+    expect(buildStepPrompt(agent.prompts[5]).user).toContain(`click the \\"Sign in\\" button (${button}) next.`)
     for (const secret of ['teen.login@example.test', TEEN_PASSWORD]) expect(JSON.stringify(outcome.steps)).not.toContain(secret)
   })
 
@@ -52,9 +54,25 @@ describe('runCheck: what a refused repeat says', () => {
     const [switchTo] = signIn('Teen 15')
     const { outcome, agent } = await kit.check([switchTo, fillLogin, fillLogin, FINISH, FINISH])
     const reason = outcome.steps[2].refusalReason ?? ''
-    expect(reason.endsWith(`Next, fill "Password" (${refOf(agent.prompts[2], 'textbox', 'Password')}).`)).toBe(true)
+    expect(reason).toBe(`${REPEATED_FILL} Next, fill "Password" (${refOf(agent.prompts[2], 'textbox', 'Password')}).`)
     expect(reason).not.toContain('Sign in')
     expect(reason).not.toContain('teen.login')
+  })
+
+  it('after a failed sign-in click, a later repeated fill is not told both fields are filled', async () => {
+    const wrongTeen = makeAccount(
+      { id: 'acc-teen', label: 'Teen 15', ageGroup: 'under_18', age: 15, loginName: 'teen.login@example.test', handles: ['teen15'] },
+      'Not-The-Password',
+      world.secretKey,
+    )
+    await kit.pool.closeAll()
+    kit = createCheckKit(world, [wrongTeen, world.adult])
+    const { outcome, agent } = await kit.check([...signIn('Teen 15'), fillLogin, fillLogin, FINISH, FINISH])
+    expect(outcome.steps[3].line).toContain('Wrong password')
+    expect(outcome.steps.slice(4, 6).map((s) => s.outcome)).toEqual(['done', 'refused'])
+    const reason = outcome.steps[5].refusalReason ?? ''
+    expect(reason).not.toContain('Both fields are filled')
+    expect(reason).toBe(`${REPEATED_FILL} Next, fill "Password" (${refOf(agent.prompts[5], 'textbox', 'Password')}).`)
   })
 
   it('a repeat that is not a fill keeps the generic wording', async () => {
@@ -70,11 +88,11 @@ describe('runCheck: the same action again on an unchanged page', () => {
     const [switchTo] = signIn('Teen 15')
     const { outcome, agent } = await kit.check([switchTo, fillLogin, fillLogin, fillLogin, FINISH, FINISH])
     expect(outcome.steps.map((s) => s.outcome).slice(0, 4)).toEqual(['done', 'done', 'refused', 'refused'])
-    // A fill repeat carries the form hint after the reason (see 'what a refused repeat says').
-    expect(outcome.steps[2].refusalReason?.startsWith(REPEATED_ACTION)).toBe(true)
+    // A fill repeat gets the short fill reason and its next step (see 'what a refused repeat says').
+    expect(outcome.steps[2].refusalReason?.startsWith(REPEATED_FILL)).toBe(true)
     // A hint to change tactics, like the early-finish nudge: not a safety refusal.
-    expect(outcome.steps[2].line.startsWith(`Step 3 · Teen 15 · Asked to look further: filled the login of Teen 15 into "Username". ${REPEATED_ACTION}`)).toBe(true)
-    expect(agent.prompts[3].history.at(-1)).toContain(REPEATED_ACTION)
+    expect(outcome.steps[2].line.startsWith(`Step 3 · Teen 15 · Asked to look further: filled the login of Teen 15 into "Username". ${REPEATED_FILL}`)).toBe(true)
+    expect(agent.prompts[3].history.at(-1)).toContain(REPEATED_FILL)
     // Not the early-finish nudge: the first finish after it is still refused as too early.
     expect(outcome.steps[4]).toMatchObject({ outcome: 'refused', refusalReason: expect.stringMatching(/^Finished too early/) })
   })
@@ -84,7 +102,7 @@ describe('runCheck: the same action again on an unchanged page', () => {
     const { outcome, agent } = await kit.check([switchTo, ...Array.from({ length: 10 }, () => fillLogin)], {}, { maxSteps: 5 })
     expect(outcome.steps).toHaveLength(5)
     expect(agent.prompts).toHaveLength(5)
-    expect(outcome.steps.slice(2).every((s) => s.refusalReason?.startsWith(REPEATED_ACTION))).toBe(true)
+    expect(outcome.steps.slice(2).every((s) => s.refusalReason?.startsWith(REPEATED_FILL))).toBe(true)
   })
 
   it('allows the same click again when the last one changed the page', async () => {
@@ -136,8 +154,8 @@ describe('runCheck: the same action again on an unchanged page', () => {
     expect(outcome.steps.map((s) => [s.outcome, s.refusalReason?.slice(0, 20) ?? null])).toEqual([
       ['done', null],
       ['done', null],
-      ['refused', REPEATED_ACTION.slice(0, 20)],
-      ['refused', REPEATED_ACTION.slice(0, 20)],
+      ['refused', REPEATED_FILL.slice(0, 20)],
+      ['refused', REPEATED_FILL.slice(0, 20)],
       ['refused', 'Finished too early: '],
       ['done', null],
     ])
