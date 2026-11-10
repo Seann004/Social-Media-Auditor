@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { byLabel } from './accountOrder.js'
 import { TestAccountLabelTakenError, type AppRepository } from './appRepository.js'
 import type { AppChange, AppSource, AppStep, TestAccount } from './appTypes.js'
+import { dbCall, dbInsert } from './supabaseRetry.js'
 
 interface DbResult<T> {
   data: T | null
@@ -130,7 +132,15 @@ export function createSupabaseAppRepository(admin: SupabaseClient): AppRepositor
     },
 
     async addStep(input) {
-      const row = required('addStep', await admin.from('Evidence_App_Step').insert(input).select('*').single())
+      const id = randomUUID()
+      const row = required(
+        'addStep',
+        await dbInsert(
+          'addStep',
+          () => admin.from('Evidence_App_Step').insert({ ...input, id }).select('*').single(),
+          () => admin.from('Evidence_App_Step').select('*').eq('id', id).single(),
+        ),
+      )
       return toStep(row)
     },
     async listSteps(runId, itemId) {
@@ -141,13 +151,21 @@ export function createSupabaseAppRepository(admin: SupabaseClient): AppRepositor
     },
 
     async addChange(input) {
-      const row = required('addChange', await admin.from('Evidence_App_Change').insert(input).select('*').single())
+      const id = randomUUID()
+      const row = required(
+        'addChange',
+        await dbInsert(
+          'addChange',
+          () => admin.from('Evidence_App_Change').insert({ ...input, id }).select('*').single(),
+          () => admin.from('Evidence_App_Change').select('*').eq('id', id).single(),
+        ),
+      )
       return toChange(row)
     },
     async updateChange(id, patch) {
       const row = required(
         'updateChange',
-        await admin.from('Evidence_App_Change').update(patch).eq('id', id).select('*').single(),
+        await dbCall('updateChange', () => admin.from('Evidence_App_Change').update(patch).eq('id', id).select('*').single()),
       )
       return toChange(row)
     },

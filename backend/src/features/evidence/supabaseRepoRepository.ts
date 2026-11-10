@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { SUPABASE_READ_PAGE_SIZE } from './config.js'
 import type { RepoRepository } from './repoRepository.js'
 import type { RepoPiece, RepoSnapshot, RepoSource } from './repoTypes.js'
+import { dbCall, dbInsert } from './supabaseRetry.js'
 
 interface DbResult<T> {
   data: T | null
@@ -72,11 +74,13 @@ export function createSupabaseRepoRepository(admin: SupabaseClient): RepoReposit
     async saveSnapshot(input) {
       const row = required(
         'saveSnapshot',
-        await admin
-          .from('Evidence_Repo_Snapshot')
-          .upsert({ ...input, createdAt: new Date().toISOString() }, { onConflict: 'runId' })
-          .select('*')
-          .single(),
+        await dbCall('saveSnapshot', () =>
+          admin
+            .from('Evidence_Repo_Snapshot')
+            .upsert({ ...input, createdAt: new Date().toISOString() }, { onConflict: 'runId' })
+            .select('*')
+            .single(),
+        ),
       )
       return toSnapshot(row)
     },
@@ -101,8 +105,17 @@ export function createSupabaseRepoRepository(admin: SupabaseClient): RepoReposit
           .limit(1),
       )
       const start = last && last.length > 0 ? Number(last[0].position) + 1 : 0
-      const rows = input.map((p, i) => ({ ...p, position: start + i }))
-      const saved = unwrap('addPieces', await admin.from('Evidence_Repo_Piece').insert(rows).select('*')) ?? []
+      const rows = input.map((p, i) => ({ ...p, id: randomUUID(), position: start + i }))
+      const ids = rows.map((r) => r.id)
+      const saved =
+        unwrap(
+          'addPieces',
+          await dbInsert(
+            'addPieces',
+            () => admin.from('Evidence_Repo_Piece').insert(rows).select('*'),
+            () => admin.from('Evidence_Repo_Piece').select('*').in('id', ids),
+          ),
+        ) ?? []
       return [...saved].sort((a, b) => a.position - b.position).map(toPiece)
     },
     async listPieces(runId, itemId) {

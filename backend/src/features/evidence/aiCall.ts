@@ -1,5 +1,6 @@
 import { groqFetchWithRetry } from '../../lib/groq.js'
-import { AI_REASONING_EFFORT, AI_TEMPERATURE, GROQ_MAX_WAIT_MS } from './config.js'
+import { AI_REASONING_EFFORT, AI_TEMPERATURE, GROQ_MAX_WAIT_MS, GROQ_NETWORK_RETRY_DELAYS_MS } from './config.js'
+import { retryOnNetworkFailure } from './networkRetry.js'
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const REASONING_MODEL_PREFIX = 'openai/gpt-oss'
@@ -20,8 +21,34 @@ export interface GroqJsonResult {
   tokens: number
 }
 
-/** One JSON-mode Groq call. A daily limit surfaces as GroqLimitError; other failures throw with the status only. */
+interface GroqBody {
+  choices?: { message?: { content?: string } }[]
+  usage?: { total_tokens?: number }
+}
+
+/**
+ * One JSON-mode Groq call. A daily limit surfaces as GroqLimitError; other failures throw with the status only.
+ * A failure of the network itself (no HTTP status) is tried again after short waits; an HTTP error never is,
+ * apart from the 429 waits inside groqFetchWithRetry.
+ */
 export async function callGroqJson(opts: GroqJsonOptions): Promise<GroqJsonResult> {
+  const body = await retryOnNetworkFailure(() => requestOnce(opts), {
+    label: `Groq call (model ${opts.model})`,
+    delaysMs: GROQ_NETWORK_RETRY_DELAYS_MS,
+    ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+  })
+  const tokens = body.usage?.total_tokens ?? 0
+  const text = body.choices?.[0]?.message?.content
+  if (typeof text !== 'string') return { content: null, tokens }
+  try {
+    return { content: JSON.parse(text) as unknown, tokens }
+  } catch {
+    return { content: null, tokens }
+  }
+}
+
+/** One request and its body. Reading the body is inside, so a connection that breaks mid-reply is retried too. */
+async function requestOnce(opts: GroqJsonOptions): Promise<GroqBody> {
   const res = await groqFetchWithRetry(
     GROQ_URL,
     {
@@ -44,16 +71,5 @@ export async function callGroqJson(opts: GroqJsonOptions): Promise<GroqJsonResul
     GROQ_MAX_WAIT_MS / 1000,
   )
   if (!res.ok) throw new Error(`Groq request failed with status ${res.status}`)
-  const body = (await res.json()) as {
-    choices?: { message?: { content?: string } }[]
-    usage?: { total_tokens?: number }
-  }
-  const tokens = body.usage?.total_tokens ?? 0
-  const text = body.choices?.[0]?.message?.content
-  if (typeof text !== 'string') return { content: null, tokens }
-  try {
-    return { content: JSON.parse(text) as unknown, tokens }
-  } catch {
-    return { content: null, tokens }
-  }
+  return (await res.json()) as GroqBody
 }

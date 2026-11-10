@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { SUPABASE_READ_PAGE_SIZE } from './config.js'
+import { SUPABASE_NETWORK_RETRY_DELAYS_MS, SUPABASE_READ_PAGE_SIZE } from './config.js'
 import { createSupabaseRepository, createSupabaseScreenshotStore } from './supabaseRepository.js'
 
 type Row = Record<string, unknown>
@@ -109,6 +109,54 @@ describe('supabase repository without a database', () => {
 
     expect(inserted[0].passageIdsSent).toEqual(['a', 'b'])
     expect(saved.passageIdsSent).toEqual(['a', 'b'])
+  })
+
+  describe('a network failure while saving a suggestion', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    })
+    const fetchFailed = { data: null, error: { message: 'TypeError: fetch failed', details: '', hint: '', code: '' }, status: 0 }
+    const input = {
+      runId: 'r', projectId: 'p', itemId: 'i', suggestedResult: null, reason: '', confidence: 'low' as const,
+      flags: [], passageIdsSent: [], quotes: [],
+    }
+
+    it('retries the insert with the same id and saves once', async () => {
+      vi.useFakeTimers()
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const inserted: Record<string, unknown>[] = []
+      const admin = {
+        from: () => ({
+          insert: (value: Record<string, unknown>) => {
+            inserted.push(value)
+            const result = inserted.length === 1 ? fetchFailed : { data: { ...value }, error: null, status: 201 }
+            return builder(result, [], 'insert')
+          },
+        }),
+      } as unknown as SupabaseClient
+      const p = createSupabaseRepository(admin).addSuggestion(input)
+      await vi.advanceTimersByTimeAsync(SUPABASE_NETWORK_RETRY_DELAYS_MS[0])
+      const saved = await p
+      expect(inserted).toHaveLength(2)
+      expect(typeof inserted[0].id).toBe('string')
+      expect(inserted[1].id).toBe(inserted[0].id)
+      expect(saved.id).toBe(inserted[0].id)
+    })
+
+    it('does not retry an error Postgres returned', async () => {
+      let tries = 0
+      const admin = {
+        from: () => ({
+          insert: () => {
+            tries++
+            return builder({ data: null, error: { message: 'violates check constraint', code: '23514' }, status: 400 }, [], 'insert')
+          },
+        }),
+      } as unknown as SupabaseClient
+      await expect(createSupabaseRepository(admin).addSuggestion(input)).rejects.toThrow(/addSuggestion: violates check constraint/)
+      expect(tries).toBe(1)
+    })
   })
 
   describe('an id that is not a uuid', () => {

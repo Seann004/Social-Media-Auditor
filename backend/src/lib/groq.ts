@@ -12,7 +12,7 @@ export class GroqLimitError extends Error {
 const DEFAULT_RETRY_AFTER_SECONDS = 15
 
 /** Waits, and gives up at once with the signal's reason when it aborts. */
-function wait(ms: number, signal: AbortSignal | null | undefined): Promise<void> {
+export function wait(ms: number, signal: AbortSignal | null | undefined): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason)
     const onAbort = () => {

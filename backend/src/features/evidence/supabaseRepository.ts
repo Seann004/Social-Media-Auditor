@@ -22,6 +22,7 @@ import type {
   Suggestion,
   SuggestionQuote,
 } from './types.js'
+import { dbCall, dbInsert } from './supabaseRetry.js'
 
 const BUCKET = 'evidence-screenshots'
 const ACTIVE = ['queued', 'capturing', 'assessing']
@@ -192,31 +193,32 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
 
     async createRun(input: NewRun) {
       const id = randomUUID()
+      const run = {
+        id,
+        projectId: input.projectId,
+        startedBy: input.startedBy,
+        scope: input.scope,
+        capturedInRunId: input.capturedInRunId ?? id,
+        categoriesTotal: input.categoriesTotal ?? 0,
+        pagesTotal: input.pagesTotal ?? 0,
+        promptVersion: input.promptVersion ?? PROMPT_VERSION,
+        source: input.source ?? 'pages',
+        checkedItemIds: input.checkedItemIds ?? [],
+      }
       const row = required(
         'createRun',
-        await admin
-          .from('Evidence_Run')
-          .insert({
-            id,
-            projectId: input.projectId,
-            startedBy: input.startedBy,
-            scope: input.scope,
-            capturedInRunId: input.capturedInRunId ?? id,
-            categoriesTotal: input.categoriesTotal ?? 0,
-            pagesTotal: input.pagesTotal ?? 0,
-            promptVersion: input.promptVersion ?? PROMPT_VERSION,
-            source: input.source ?? 'pages',
-            checkedItemIds: input.checkedItemIds ?? [],
-          })
-          .select('*')
-          .single(),
+        await dbInsert(
+          'createRun',
+          () => admin.from('Evidence_Run').insert(run).select('*').single(),
+          () => admin.from('Evidence_Run').select('*').eq('id', id).single(),
+        ),
       )
       return toRun(row)
     },
     async updateRun(id, patch: RunPatch) {
       const row = required(
         'updateRun',
-        await admin.from('Evidence_Run').update(patch).eq('id', id).select('*').single(),
+        await dbCall('updateRun', () => admin.from('Evidence_Run').update(patch).eq('id', id).select('*').single()),
       )
       return toRun(row)
     },
@@ -239,19 +241,26 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
     async markInterruptedRuns() {
       const rows = unwrap(
         'markInterruptedRuns',
-        await admin
-          .from('Evidence_Run')
-          .update({ status: 'failed', error: 'server restarted', finishedAt: new Date().toISOString() })
-          .in('status', ACTIVE)
-          .select('id'),
+        await dbCall('markInterruptedRuns', () =>
+          admin
+            .from('Evidence_Run')
+            .update({ status: 'failed', error: 'server restarted', finishedAt: new Date().toISOString() })
+            .in('status', ACTIVE)
+            .select('id'),
+        ),
       )
       return rows?.length ?? 0
     },
 
     async addPage(runId, page: NewPage) {
+      const id = randomUUID()
       const row = required(
         'addPage',
-        await admin.from('Evidence_Page').insert({ ...page, runId }).select('*').single(),
+        await dbInsert(
+          'addPage',
+          () => admin.from('Evidence_Page').insert({ ...page, id, runId }).select('*').single(),
+          () => admin.from('Evidence_Page').select('*').eq('id', id).single(),
+        ),
       )
       return row as CapturedPage
     },
@@ -284,12 +293,15 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
 
     async addPassages(pageId, passages: NewPassage[]) {
       if (passages.length === 0) return []
+      const toInsert = passages.map((p) => ({ id: randomUUID(), pageId, position: p.position, kind: p.kind, text: p.text }))
+      const ids = toInsert.map((p) => p.id)
       const rows = required(
         'addPassages',
-        await admin
-          .from('Evidence_Passage')
-          .insert(passages.map((p) => ({ pageId, position: p.position, kind: p.kind, text: p.text })))
-          .select('id, pageId, position, kind, text'),
+        await dbInsert(
+          'addPassages',
+          () => admin.from('Evidence_Passage').insert(toInsert).select('id, pageId, position, kind, text'),
+          () => admin.from('Evidence_Passage').select('id, pageId, position, kind, text').in('id', ids),
+        ),
       )
       return rows.map(toPassage).sort((a, b) => a.position - b.position)
     },
@@ -317,45 +329,54 @@ export function createSupabaseRepository(admin: SupabaseClient): EvidenceReposit
     async searchPassages(capturedInRunId, query, limit) {
       const rows = unwrap(
         'searchPassages',
-        await admin.rpc('search_evidence_passages', {
-          p_run_id: capturedInRunId,
-          p_query: query,
-          p_limit: limit,
-        }),
+        await dbCall('searchPassages', () =>
+          admin.rpc('search_evidence_passages', {
+            p_run_id: capturedInRunId,
+            p_query: query,
+            p_limit: limit,
+          }),
+        ),
       )
       return ((rows ?? []) as Row[]).map(toPassage)
     },
 
     async addSuggestion(input: NewSuggestion) {
+      const id = randomUUID()
+      const suggestion = {
+        id,
+        runId: input.runId,
+        projectId: input.projectId,
+        itemId: input.itemId,
+        suggestedResult: input.suggestedResult,
+        reason: input.reason,
+        confidence: input.confidence,
+        flags: input.flags,
+        passageIdsSent: input.passageIdsSent,
+        originSuggestionId: input.originSuggestionId ?? null,
+        source: input.source ?? 'pages',
+      }
+      // Ids chosen here, so a retry after a lost reply cannot save the suggestion or its quotes twice.
       const suggestionRow: Row = required(
         'addSuggestion',
-        await admin
-          .from('AI_Suggestion')
-          .insert({
-            runId: input.runId,
-            projectId: input.projectId,
-            itemId: input.itemId,
-            suggestedResult: input.suggestedResult,
-            reason: input.reason,
-            confidence: input.confidence,
-            flags: input.flags,
-            passageIdsSent: input.passageIdsSent,
-            originSuggestionId: input.originSuggestionId ?? null,
-            source: input.source ?? 'pages',
-          })
-          .select('*')
-          .single(),
+        await dbInsert(
+          'addSuggestion',
+          () => admin.from('AI_Suggestion').insert(suggestion).select('*').single(),
+          () => admin.from('AI_Suggestion').select('*').eq('id', id).single(),
+        ),
       )
       if (input.quotes.length === 0) return toSuggestion(suggestionRow, [])
 
-      const quoteRes = await admin
-        .from('AI_Suggestion_Quote')
-        .insert(input.quotes.map((q) => ({ ...q, suggestionId: suggestionRow.id })))
-        .select('*')
+      const quotes = input.quotes.map((q) => ({ ...q, id: randomUUID(), suggestionId: suggestionRow.id }))
+      const quoteIds = quotes.map((q) => q.id)
+      const quoteRes = await dbInsert(
+        'addSuggestion quotes',
+        () => admin.from('AI_Suggestion_Quote').insert(quotes).select('*'),
+        () => admin.from('AI_Suggestion_Quote').select('*').in('id', quoteIds),
+      )
       if (quoteRes.error || !quoteRes.data) {
         const message = quoteRes.error?.message ?? 'no rows returned'
         // No transaction in the client: remove the half-written suggestion before failing.
-        const cleanup = await admin.from('AI_Suggestion').delete().eq('id', suggestionRow.id)
+        const cleanup = await dbCall('addSuggestion cleanup', () => admin.from('AI_Suggestion').delete().eq('id', suggestionRow.id))
         if (cleanup.error) {
           console.error(`addSuggestion: could not remove suggestion ${suggestionRow.id}: ${cleanup.error.message}`)
         }
@@ -436,9 +457,10 @@ export function createSupabaseScreenshotStore(admin: SupabaseClient): Screenshot
 
   return {
     async upload(path, jpeg) {
-      const { error } = await admin.storage
-        .from(BUCKET)
-        .upload(path, jpeg, { contentType: 'image/jpeg', upsert: true })
+      // upsert: sending it twice writes the same file.
+      const { error } = await dbCall(`upload ${path}`, () =>
+        admin.storage.from(BUCKET).upload(path, jpeg, { contentType: 'image/jpeg', upsert: true }),
+      )
       if (error) throw new Error(`upload ${path}: ${error.message}`)
     },
     async signedUrl(path, seconds) {

@@ -25,6 +25,8 @@ export const MAX_TOKENS_PER_RUN = 80_000
 export const MAX_ITEMS_PER_CALL = 10
 export const GROQ_MAX_WAIT_MS = 60_000
 export const AI_TEMPERATURE = 0.1
+/** Waits before each extra try at a Groq call that failed on the network (no HTTP status at all). */
+export const GROQ_NETWORK_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000]
 
 // Passages and highlights
 export const MAX_WORDS_PER_PASSAGE = 250
@@ -48,6 +50,8 @@ export const SESSION_HOURS = 12
 // Reading from Supabase
 /** Rows asked for at a time by reads with no natural limit. Below PostgREST's default cap of 1 000, so a short page always means the end. */
 export const SUPABASE_READ_PAGE_SIZE = 500
+/** Waits before each extra try at a Supabase call that failed on the network. Errors Postgres returned are never retried. */
+export const SUPABASE_NETWORK_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000]
 
 // Keeping a run's status true: waits between tries at an update that failed (about a minute in all)
 export const RUN_UPDATE_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000, 20_000, 25_000]
