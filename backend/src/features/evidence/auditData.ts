@@ -41,7 +41,7 @@ export interface ApplyAnswerInput {
   typedFindings?: string
   /** Accept only: used when no auditor has written findings on the item. */
   findingsIfEmpty?: string
-  /** Accept only: added after the photos already on the item. */
+  /** Accept only: added after the deciding auditor's own photos, on their row only, unless a row of the item already has them. */
   addImages?: EvidenceImage[]
 }
 
@@ -112,19 +112,14 @@ function mergeFindings(rows: ResultRow[], fallback: string | undefined): string 
   return fallback?.trim() ? fallback : null
 }
 
-/** Existing photos first (once each, by link), then new ones that are not already there (by name). */
-function mergeImages(rows: ResultRow[], added: EvidenceImage[]): EvidenceImage[] {
-  const merged: EvidenceImage[] = []
-  for (const image of rows.flatMap((r) => r.evidenceImages ?? [])) {
-    if (!merged.some((m) => m.url === image.url)) merged.push(image)
-  }
-  const existingNames = new Set(merged.map((m) => m.name))
-  for (const image of added) {
-    if (existingNames.has(image.name)) continue
-    existingNames.add(image.name)
-    merged.push(image)
-  }
-  return merged
+/**
+ * The deciding auditor's photos after an accept: their own first, then the new ones that no row of the
+ * item already has (by name). Photos are shown per auditor, so no photo is ever copied between rows.
+ */
+function ownImagesWith(rows: ResultRow[], own: ResultRow | undefined, added: EvidenceImage[]): EvidenceImage[] {
+  const existingNames = new Set(rows.flatMap((r) => r.evidenceImages ?? []).map((m) => m.name))
+  const fresh = added.filter((image, i) => !existingNames.has(image.name) && added.findIndex((a) => a.name === image.name) === i)
+  return [...(own?.evidenceImages ?? []), ...fresh]
 }
 
 /** Postgres: invalid text representation, as for an id that is not a uuid. Such an id matches no project. */
@@ -245,30 +240,27 @@ export function createAuditData(opts: AuditDataOptions = {}): AuditData {
         return { itemId, status: result, findings: typed, evidenceImages: own?.evidenceImages ?? [] }
       }
 
+      const ownImages = own?.evidenceImages ?? []
       if (!accepting) {
         // An empty row of the auditor's own (new, or left empty by a failed earlier try) would otherwise
-        // show empty findings next to a real finding on another row.
-        const merged = { findings: mergeFindings(rows, undefined), evidenceImages: mergeImages(rows, []) }
-        const ownEmpty = !own?.findings?.trim() && (own?.evidenceImages ?? []).length === 0
-        const hasContent = merged.findings !== null || merged.evidenceImages.length > 0
-        if (!ownEmpty || !hasContent) {
-          fail((await itemRows()).error)
-          return { itemId, status: result, findings: own?.findings ?? null, evidenceImages: own?.evidenceImages ?? [] }
-        }
+        // show empty findings next to a real finding on another row. Only findings are copied, never photos.
+        const findings = mergeFindings(rows, undefined)
+        const ownEmpty = !own?.findings?.trim() && ownImages.length === 0
         fail((await itemRows()).error)
-        const mine = await client.from('Audit_Result').update(merged).eq('projectId', projectId).eq('itemId', itemId).eq('userId', userId)
+        if (!ownEmpty || findings === null) return { itemId, status: result, findings: own?.findings ?? null, evidenceImages: ownImages }
+        const mine = await client.from('Audit_Result').update({ findings }).eq('projectId', projectId).eq('itemId', itemId).eq('userId', userId)
         fail(mine.error)
-        return { itemId, status: result, ...merged }
+        return { itemId, status: result, findings, evidenceImages: ownImages }
       }
 
       const findings = mergeFindings(rows, input.findingsIfEmpty)
-      const evidenceImages = mergeImages(rows, input.addImages ?? [])
-      const write = await client
-        .from('Audit_Result')
-        .update({ result, findings, evidenceImages })
-        .eq('projectId', projectId)
-        .eq('itemId', itemId)
+      const evidenceImages = ownImagesWith(rows, own, input.addImages ?? [])
+      const write = await client.from('Audit_Result').update({ result, findings }).eq('projectId', projectId).eq('itemId', itemId)
       fail(write.error)
+      if (evidenceImages.length > ownImages.length) {
+        const mine = await client.from('Audit_Result').update({ evidenceImages }).eq('projectId', projectId).eq('itemId', itemId).eq('userId', userId)
+        fail(mine.error)
+      }
       return { itemId, status: result, findings, evidenceImages }
     },
   }

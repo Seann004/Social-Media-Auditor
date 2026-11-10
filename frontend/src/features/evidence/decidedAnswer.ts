@@ -3,7 +3,7 @@ import type { AppliedAnswer, EvidenceImage } from './types'
 export interface PageUpdate {
   /** New text for the findings box, or undefined to leave it. */
   findings?: string
-  /** New photo list for the item, or undefined to leave it. */
+  /** The deciding auditor's photos after the decision (the page reloads every auditor's photos), or undefined to leave them. */
   images?: EvidenceImage[]
 }
 

@@ -136,12 +136,27 @@ describe('applyAnswer', () => {
     expect(w.rows.map((r) => r.notes)).toEqual(['notes of u1', 'notes of u2'])
   })
 
-  it('accept adds new photos after the existing ones, on every row', async () => {
+  // Photos are shown per auditor: a decision never adds or copies photos between rows.
+  it('accept adds new photos after the deciding auditor own ones, on their row only', async () => {
     const own: Img = { url: 'data:image/png;base64,AAA', name: 'mine.png' }
     w.rows[0].evidenceImages = [own]
     const out = await w.audit.applyAnswer({ ...base, addImages: [ai(1), ai(2)] })
-    expect(w.rows.map((r) => r.evidenceImages)).toEqual([[own, ai(1), ai(2)], [own, ai(1), ai(2)]])
+    expect(w.rows.map((r) => r.evidenceImages)).toEqual([[own, ai(1), ai(2)], []])
     expect(out.evidenceImages).toEqual([own, ai(1), ai(2)])
+  })
+
+  it('accept never writes photos to every row of the item', async () => {
+    await w.audit.applyAnswer({ ...base, findingsIfEmpty: 'AI', addImages: [ai(1)] })
+    const itemWide = w.updates.filter((patch) => 'result' in patch)
+    expect(itemWide.length).toBeGreaterThan(0)
+    expect(itemWide.every((patch) => !('evidenceImages' in patch))).toBe(true)
+  })
+
+  it('accept does not add an AI picture that another auditor row already has', async () => {
+    w.rows[1].evidenceImages = [ai(1)]
+    const out = await w.audit.applyAnswer({ ...base, addImages: [ai(1, 'https://signed/1?t=9'), ai(2)] })
+    expect(w.rows.map((r) => r.evidenceImages)).toEqual([[ai(2)], [ai(1)]])
+    expect(out.evidenceImages).toEqual([ai(2)])
   })
 
   it('accepting twice does not add a picture again, though its link differs', async () => {
@@ -151,19 +166,19 @@ describe('applyAnswer', () => {
     expect(w.rows[0].findings).toBe('AI')
   })
 
-  it('a photo only on another auditor\'s row survives and is shown on every row', async () => {
+  it('a photo only on another auditor\'s row stays on that row only', async () => {
     const theirs: Img = { url: 'data:image/png;base64,BBB', name: 'theirs.png' }
     w.rows[1].evidenceImages = [theirs]
     await w.audit.applyAnswer({ ...base, addImages: [ai(1)] })
-    expect(w.rows.map((r) => r.evidenceImages)).toEqual([[theirs, ai(1)], [theirs, ai(1)]])
+    expect(w.rows.map((r) => r.evidenceImages)).toEqual([[ai(1)], [theirs]])
   })
 
-  it('the same existing photo on two rows is kept once', async () => {
+  it('the same existing photo on two rows stays once on each', async () => {
     const shared: Img = { url: 'data:image/png;base64,CCC', name: 'shared.png' }
     w.rows[0].evidenceImages = [shared]
     w.rows[1].evidenceImages = [shared]
     await w.audit.applyAnswer({ ...base, addImages: [] })
-    expect(w.rows[0].evidenceImages).toEqual([shared])
+    expect(w.rows.map((r) => r.evidenceImages)).toEqual([[shared], [shared]])
   })
 
   it('override changes only the result: each row keeps its own findings and photos', async () => {
@@ -253,13 +268,13 @@ describe('applyAnswer', () => {
     expect(w2.rows[0].findings).toBe('F2')
   })
 
-  it('same-named photos with different links on two rows are both kept', async () => {
+  it('same-named photos with different links on two rows each stay on their own row', async () => {
     const a: Img = { url: 'data:image/png;base64,AAA', name: 'photo.png' }
     const b: Img = { url: 'data:image/png;base64,BBB', name: 'photo.png' }
     w.rows[0].evidenceImages = [a]
     w.rows[1].evidenceImages = [b]
     await w.audit.applyAnswer({ ...base, addImages: [] })
-    expect(w.rows[0].evidenceImages).toEqual([a, b])
+    expect(w.rows.map((r) => r.evidenceImages)).toEqual([[a], [b]])
   })
 
   it('handles rows whose photos are null, and treats whitespace-only findings as empty', async () => {
@@ -302,20 +317,27 @@ describe('applyAnswer', () => {
     })
     await w2.audit.applyAnswer({ ...base, findingsIfEmpty: 'AI', addImages: [ai(1)] })
     expect(w2.rows.map((r) => r.findings)).toEqual(['Saved during the upsert', 'Saved during the upsert'])
-    expect(w2.rows.map((r) => r.evidenceImages)).toEqual([[late, ai(1)], [late, ai(1)]])
+    expect(w2.rows.map((r) => r.evidenceImages)).toEqual([[ai(1)], [late]])
   })
 
   describe('override by an auditor with no row of their own', () => {
     const photo: Img = { url: 'data:p', name: 'p.png' }
 
-    it('gives the new row the findings and photos, and leaves other rows alone', async () => {
+    it('gives the new row the findings but no copied photos, and leaves other rows alone', async () => {
       const w2 = world([row('u2', { findings: 'F2', evidenceImages: [photo] }), row('u3', { findings: 'F3' })])
       const out = await w2.audit.applyAnswer({ ...base, result: 'partially' })
       const byUser = Object.fromEntries(w2.rows.map((r) => [r.userId, r]))
-      expect(byUser.u1).toMatchObject({ result: 'partially', findings: 'F2\n\nF3', evidenceImages: [photo] })
+      expect(byUser.u1).toMatchObject({ result: 'partially', findings: 'F2\n\nF3', evidenceImages: [] })
       expect(byUser.u2).toMatchObject({ result: 'partially', findings: 'F2', evidenceImages: [photo] })
       expect(byUser.u3).toMatchObject({ result: 'partially', findings: 'F3', evidenceImages: [] })
-      expect(out).toMatchObject({ status: 'partially', findings: 'F2\n\nF3', evidenceImages: [photo] })
+      expect(out).toMatchObject({ status: 'partially', findings: 'F2\n\nF3', evidenceImages: [] })
+    })
+
+    it('copies nothing when the other rows hold only photos', async () => {
+      const w2 = world([row('u2', { evidenceImages: [photo] })])
+      const out = await w2.audit.applyAnswer({ ...base, result: 'partially' })
+      expect(w2.rows.find((r) => r.userId === 'u1')).toMatchObject({ result: 'partially', findings: null, evidenceImages: [] })
+      expect(out.evidenceImages).toEqual([])
     })
 
     it('uses what is on the rows after the upsert, not before it', async () => {
@@ -330,7 +352,7 @@ describe('applyAnswer', () => {
       expect(w2.rows.find((r) => r.userId === 'u1')?.findings).toBeNull()
       await w2.audit.applyAnswer({ ...base, result: 'partially' })
       const mine = w2.rows.find((r) => r.userId === 'u1')
-      expect(mine).toMatchObject({ result: 'partially', findings: 'F2', evidenceImages: [photo] })
+      expect(mine).toMatchObject({ result: 'partially', findings: 'F2', evidenceImages: [] })
       expect(w2.rows.find((r) => r.userId === 'u2')).toMatchObject({ findings: 'F2', evidenceImages: [photo] })
     })
 

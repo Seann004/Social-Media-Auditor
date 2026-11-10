@@ -133,6 +133,7 @@ export interface AppliedAnswer {
   itemId: string
   status: AnswerStatus
   findings: string | null
+  /** The deciding auditor's own photos. A decision never copies photos between auditors' rows. */
   evidenceImages: EvidenceImage[]
 }
 
