@@ -4,6 +4,7 @@ import { ArrowsClockwiseIcon as ArrowsClockwise, PlayIcon as Play, RobotIcon as 
 import { useStore } from '../../../store/useStore'
 import { EvidenceApiError, getSources, reassess, saveSources, setPermission, startRun } from '../api'
 import { toPickItems } from '../appState'
+import { PUBLIC_PAGES_ENABLED_IN_BUILD } from '../config'
 import type { EvidencePermission, RunScope, RunSource } from '../types'
 import type { UseEvidenceResult } from '../useEvidence'
 import { isRunActive } from '../useItemRun'
@@ -24,6 +25,8 @@ interface Props {
   locked: boolean
   /** The project's checklist, for the App item picker and item names. */
   checklistItems?: ChecklistItem[]
+  /** Offer the Public pages source. Defaults to the switch in config.ts; tests override it. */
+  publicPagesEnabled?: boolean
 }
 
 const SIGN_IN_AGAIN = 'AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.'
@@ -54,7 +57,7 @@ export default function EvidencePanel(props: Props) {
   )
 }
 
-function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props) {
+function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPagesEnabled = PUBLIC_PAGES_ENABLED_IN_BUILD }: Props) {
   const [text, setText] = useState('')
   const [savedLinks, setSavedLinks] = useState<string[]>([])
   const [permission, setPermissionState] = useState<EvidencePermission | null>(null)
@@ -68,7 +71,10 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
   const { run, pages, resultRun, suggestionsByItem, refresh } = evidence
   const authToken = useStore((s) => s.authToken)
   const [chosenSource, setChosenSource] = useState<RunSource | null>(null)
-  const source: RunSource = chosenSource ?? resultRun?.source ?? 'pages'
+  // With Public pages off, the screen never shows the page-links flow, even over an old pages run:
+  // that run's summary and cards still render below, and Re-assess still works on it.
+  const wanted: RunSource = chosenSource ?? resultRun?.source ?? (publicPagesEnabled ? 'pages' : 'app')
+  const source: RunSource = wanted === 'pages' && !publicPagesEnabled ? 'app' : wanted
   const appSetup = useAppSetup(projectId, { enabled: source === 'app' })
   const pickItems = useMemo(() => toPickItems(checklistItems ?? []), [checklistItems])
 
@@ -202,7 +208,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
         Suggestions only. Nothing changes your answers or the score until you accept or override it.
       </p>
 
-      <SourceChoice value={source} onChange={setChosenSource} />
+      <SourceChoice value={source} onChange={setChosenSource} publicPagesEnabled={publicPagesEnabled} />
 
       {source === 'repo' ? (
         <RepoRunSection projectId={projectId} items={pickItems} evidence={evidence} locked={locked} onStarted={refresh} />

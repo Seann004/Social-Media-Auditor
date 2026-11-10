@@ -28,6 +28,8 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
+      // The pages-flow specs need the Public pages source, which the product build hides.
+      VITE_E2E_PUBLIC_PAGES: 'true',
       VITE_API_URL: `${API_PLACEHOLDER}/api`,
       VITE_SUPABASE_URL: `${API_PLACEHOLDER}/supabase`,
       VITE_SUPABASE_ANON_KEY: 'e2e-placeholder-key',

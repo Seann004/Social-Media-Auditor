@@ -36,7 +36,7 @@ const m = {
 
 function Harness({ role = 'auditor', locked = false, projectId = 'p1' }: { role?: UserRole; locked?: boolean; projectId?: string }) {
   const evidence = useEvidence(projectId, { enabled: role !== 'admin' })
-  return <EvidencePanel projectId={projectId} role={role} evidence={evidence} locked={locked} />
+  return <EvidencePanel projectId={projectId} role={role} evidence={evidence} locked={locked} publicPagesEnabled />
 }
 
 const sources = (urls: string[] = ['https://a.example/'], granted = false): SourcesResponse => ({

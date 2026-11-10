@@ -48,7 +48,7 @@ const repo = { repoUrl: 'https://github.com/o/n', branch: null, updatedAt: '2026
 
 function Harness() {
   const evidence = useEvidence('p1', { enabled: true })
-  return <EvidencePanel projectId="p1" role="auditor" evidence={evidence} locked={false} checklistItems={items} />
+  return <EvidencePanel projectId="p1" role="auditor" evidence={evidence} locked={false} checklistItems={items} publicPagesEnabled />
 }
 
 beforeEach(() => {

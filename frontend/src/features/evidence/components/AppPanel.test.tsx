@@ -57,7 +57,7 @@ const manyItems = [...Array.from({ length: 8 }, (_, i) => item(i + 1)), ...Array
 
 function Harness({ role = 'auditor', locked = false, items = manyItems }: { role?: UserRole; locked?: boolean; items?: ChecklistItem[] }) {
   const evidence = useEvidence('p1', { enabled: role !== 'admin' })
-  return <EvidencePanel projectId="p1" role={role} evidence={evidence} locked={locked} checklistItems={items} />
+  return <EvidencePanel projectId="p1" role={role} evidence={evidence} locked={locked} checklistItems={items} publicPagesEnabled />
 }
 
 const account = (over: Partial<TestAccountView> = {}): TestAccountView => ({

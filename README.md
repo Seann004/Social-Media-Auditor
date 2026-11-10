@@ -197,6 +197,8 @@ Color thresholds: **≥ 80%** emerald · **≥ 60%** amber · **< 60%** rose
 
 An auditor gives the project one or more public website links. The server opens those pages in a headless browser, reads what a visitor could see, takes screenshots, and asks an AI model (Groq) to suggest an answer for each checklist item, with a short reason and quotes from the pages. The auditor then reviews every suggestion.
 
+The screen offers two sources: **App (test accounts)** (the default) and **Code repository**. Reading public pages is built, but it is switched off in the UI by `PUBLIC_PAGES_ENABLED` in `frontend/src/features/evidence/config.ts`. Set it to `true` to bring back the **Public pages** option, its links form and the Head Auditor permission control exactly as before. The backend routes and old pages runs are unaffected: a run made earlier from public pages still shows its summary, cards and Re-assess. The pages-flow end-to-end specs turn it on through `VITE_E2E_PUBLIC_PAGES` in `frontend/playwright.config.ts`.
+
 ### What it does and does not do
 
 - **A suggestion never changes an answer or the compliance score.** Only an auditor pressing **Accept** or **Override** does. Accepting writes the AI's answer, uses its reason as the findings when the auditor has written none, and adds the captured screenshot to the photos. Nothing the auditor already wrote or attached is replaced. Overriding asks for a reason and takes the auditor's own answer. The Head Auditor sees on each item, and in Reports, whether an answer was accepted from the AI, overridden, or entered by hand.

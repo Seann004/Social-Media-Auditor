@@ -1,3 +1,4 @@
+import { PUBLIC_PAGES_ENABLED_IN_BUILD } from '../config'
 import type { RunSource } from '../types'
 
 const OPTIONS: { value: RunSource; label: string }[] = [
@@ -9,14 +10,17 @@ const OPTIONS: { value: RunSource; label: string }[] = [
 interface Props {
   value: RunSource
   onChange(value: RunSource): void
+  /** Offer Public pages. Defaults to the switch in config.ts; tests override it. */
+  publicPagesEnabled?: boolean
 }
 
 /** Where the next run looks for evidence. The choice is per run and is not saved. */
-export default function SourceChoice({ value, onChange }: Props) {
+export default function SourceChoice({ value, onChange, publicPagesEnabled = PUBLIC_PAGES_ENABLED_IN_BUILD }: Props) {
+  const options = OPTIONS.filter((option) => publicPagesEnabled || option.value !== 'pages')
   return (
     <fieldset className="flex flex-wrap gap-2">
       <legend className="mb-1 text-xs font-medium text-slate-700">Check</legend>
-      {OPTIONS.map((option) => (
+      {options.map((option) => (
         <label
           key={option.value}
           className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm focus-within:ring-2 focus-within:ring-blue-500 ${
