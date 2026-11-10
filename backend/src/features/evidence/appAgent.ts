@@ -42,11 +42,11 @@ const SYSTEM_PROMPT = `You check one checklist item inside a social media platfo
 Reply with exactly one action per turn, as JSON only: {"action":{...},"note":"short reason"}
 Action shapes:
 {"type":"open_link","ref":"e3"} or {"type":"open_link","url":"https://..."}
-{"type":"click","ref":"e3","target":"<account label>"}
+{"type":"click","ref":"e3"} or, only as rule 2 says, {"type":"click","ref":"e3","target":"<other account label>"}
 {"type":"type","ref":"e3","text":"..."}
 {"type":"fill_credential","ref":"e3","account":"<account label>","field":"login|password"}
 {"type":"select","ref":"e3","option":"..."}
-{"type":"toggle","ref":"e3","target":"<account label>"}
+{"type":"toggle","ref":"e3"} or, only as rule 2 says, {"type":"toggle","ref":"e3","target":"<other account label>"}
 {"type":"back"}
 {"type":"switch_account","account":"<account label>"}
 {"type":"finish","observations":"what the steps show","evidenceSteps":[1,2]}
@@ -54,7 +54,7 @@ Action shapes:
 
 Rules you MUST follow:
 1. To sign in, use fill_credential. You never know or type a password.
-2. For any action that reaches a person (a message, a follow, a friend request, a comment, a report), name a "target" that is one of the listed test accounts. Never act on anyone else.
+2. "target" is ONLY for an action that reaches another person (a message, a follow, a comment, a tag, an invite, a friend request, a report). Such an action needs it, and it names the OTHER test account, never the one in use ("currentAccount"). Leave "target" out for ordinary clicks, navigation, settings and sign-in. Never act on anyone outside the test accounts.
 3. Never publish anything to other people. Never delete or deactivate an account, pay for anything, or change a password, email address or phone number.
 4. Stay inside the app. Do not leave it.
 5. Before finishing, open the page where the relevant setting or feature lives, such as settings, privacy or messaging. The page you land on after signing in is rarely enough.
@@ -180,6 +180,21 @@ export const appActionSchema = z.discriminatedUnion('type', [
 
 const replySchema = z.object({ action: appActionSchema, note: z.string().default('') })
 
+const sameLabel = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase()
+
+/**
+ * A click or toggle whose "target" is the account in use loses the target: the AI often names itself on
+ * plain controls such as "Sign in" or "Settings". This weakens nothing. The safety rule refuses the account
+ * in use as a target anyway, and a control that reaches a person with no target is still refused for
+ * naming none (checkOwnAccounts in appSafety). Returns a new action; the given one is left as it was.
+ */
+export function dropOwnTarget(action: AppAction, currentAccount: string | null): AppAction {
+  if (action.type !== 'click' && action.type !== 'toggle') return action
+  if (currentAccount === null || action.target === undefined || !sameLabel(action.target, currentAccount)) return action
+  const { target: _ownTarget, ...rest } = action
+  return rest
+}
+
 export type DecideStep = (input: {
   prompt: StepPrompt
   apiKey: string
@@ -216,7 +231,9 @@ export const decideStep: DecideStep = async ({ prompt, apiKey, model, signal }) 
     }
     tokensUsed += result.tokens
     const parsed = replySchema.safeParse(result.content)
-    if (parsed.success) return { action: parsed.data.action, note: parsed.data.note, tokensUsed }
+    if (parsed.success) {
+      return { action: dropOwnTarget(parsed.data.action, prompt.currentAccount), note: parsed.data.note, tokensUsed }
+    }
   }
   throw new StepDecisionError('The AI did not return a usable next step twice', tokensUsed)
 }
