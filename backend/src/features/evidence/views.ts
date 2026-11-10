@@ -1,5 +1,6 @@
 import type { EvidenceRepository } from './repository.js'
 import { latestDecisionPerItem } from './decisions.js'
+import type { RepoSuggestionInfo } from './repoSuggestionInfo.js'
 import { categoryNameOf } from './runnerShared.js'
 import type { AccessStatus, AnswerStatus, Decision, EvidenceRun, PageSummary, Suggestion, SuggestedResult, SuggestionSummary } from './types.js'
 
@@ -26,9 +27,17 @@ export interface QuoteView {
   pageUrl: string | null
   pageTitle: string | null
   hasHighlight: boolean
+  /** Whether the quote's page has a screenshot: a code piece never has one, so no picture is asked for. */
+  pageHasScreenshot: boolean
 }
 
-export type SuggestionView = Omit<Suggestion, 'quotes' | 'passageIdsSent' | 'originSuggestionId'> & { quotes: QuoteView[] }
+export type SuggestionView = Omit<Suggestion, 'quotes' | 'passageIdsSent' | 'originSuggestionId'> & {
+  quotes: QuoteView[]
+  /** For a repo suggestion: the commit its code was read at. Null when unknown or for other sources. */
+  commitSha: string | null
+  /** For a repo suggestion: whether code pieces were kept or passages sent for it. False for other sources. */
+  hasCode: boolean
+}
 
 export interface DecisionView {
   id: string
@@ -62,10 +71,12 @@ export function toPageView(page: PageSummary): PageView {
   }
 }
 
-export function toSuggestionView(suggestion: Suggestion, pages: Map<string, PageSummary>): SuggestionView {
+export function toSuggestionView(suggestion: Suggestion, pages: Map<string, PageSummary>, repoInfo?: RepoSuggestionInfo): SuggestionView {
   const { quotes, passageIdsSent: _sent, originSuggestionId: _origin, ...rest } = suggestion
   return {
     ...rest,
+    commitSha: repoInfo?.commitSha ?? null,
+    hasCode: repoInfo?.hasCode ?? false,
     quotes: quotes.map((q) => {
       const page = q.pageId ? pages.get(q.pageId) : undefined
       return {
@@ -76,6 +87,7 @@ export function toSuggestionView(suggestion: Suggestion, pages: Map<string, Page
         pageUrl: page ? (page.finalUrl ?? page.url) : null,
         pageTitle: page?.title ?? null,
         hasHighlight: q.highlightScreenshotPath !== null,
+        pageHasScreenshot: page !== undefined && page.screenshotPath !== null,
       }
     }),
   }

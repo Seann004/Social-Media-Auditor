@@ -75,6 +75,8 @@ export interface QuoteView {
   pageUrl: string | null
   pageTitle: string | null
   hasHighlight: boolean
+  /** Whether the quote's page has a screenshot: a code piece never has one. */
+  pageHasScreenshot: boolean
 }
 
 // Mirrors SuggestionView in backend/src/features/evidence/views.ts (Suggestion without passageIdsSent)
@@ -89,6 +91,10 @@ export interface SuggestionView {
   confidence: Confidence
   flags: ReviewFlag[]
   quotes: QuoteView[]
+  /** For a repo suggestion: the commit its code was read at. Null when unknown or not a repo suggestion. */
+  commitSha: string | null
+  /** For a repo suggestion: whether any code was kept or sent for it. False for other sources. */
+  hasCode: boolean
 }
 
 // Mirrors DecisionView in backend/src/features/evidence/views.ts

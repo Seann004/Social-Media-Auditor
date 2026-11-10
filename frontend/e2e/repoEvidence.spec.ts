@@ -34,6 +34,8 @@ test.describe('AI evidence from a code repository', () => {
     await expect(answeredCount(page)).toHaveText('0/3')
     await expect(row(page, 0).getByRole('region', { name: 'AI suggestion' })).toContainText('No')
     await expect(row(page, 0).getByText('Based on the code at commit abc1234, not on the live app.')).toBeVisible()
+    // The commit comes with the listing: the code is read only when "Code found" is opened.
+    expect(stub.codeReads).toBe(0)
     expect(stub.decisions).toHaveLength(0)
 
     await row(page, 0).getByRole('button', { name: 'Code found' }).click()

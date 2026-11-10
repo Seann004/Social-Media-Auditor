@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { RobotIcon as Robot } from '@phosphor-icons/react'
 import type { ChecklistItemStatus } from '../../../types'
-import { getCode } from '../api'
 import { isHttpUrl } from '../safeUrl'
 import { suggestionState, toAnswerStatus, type CardState } from '../state'
-import { FLAG_LABEL, type DecisionView, type QuoteView, type SuggestionView } from '../types'
+import { FLAG_LABEL, type DecisionView, type QuoteView, type FlagType, type SuggestionView } from '../types'
 import CodeFound from './CodeFound'
 import { RESULT_LABEL } from './OverrideDialog'
 import QuoteThumbnail from './QuoteThumbnail'
@@ -30,8 +29,14 @@ const STATE_NOTE: Partial<Record<CardState, string>> = {
   new_differs: 'New suggestion differs from current answer',
 }
 
-function QuoteItem({ quote }: { quote: QuoteView }) {
+/** A picture exists for a verified quote of a page with a highlight or a screenshot. A code piece never has one. */
+function hasPicture(quote: QuoteView, isRepo: boolean): boolean {
+  return !isRepo && quote.pageId !== null && quote.verified && (quote.hasHighlight || quote.pageHasScreenshot)
+}
+
+function QuoteItem({ quote, isRepo }: { quote: QuoteView; isRepo: boolean }) {
   const label = quote.pageTitle?.trim() || quote.pageUrl || 'Page'
+  const picture = hasPicture(quote, isRepo)
   return (
     <li className="space-y-1.5 py-2">
       <blockquote className="border-l-2 border-slate-200 pl-3 text-sm italic text-slate-600">&ldquo;{quote.quoteText}&rdquo;</blockquote>
@@ -50,33 +55,34 @@ function QuoteItem({ quote }: { quote: QuoteView }) {
           ) : (
             <span className="break-all text-slate-500">{label}</span>
           ))}
-        {quote.pageId && quote.verified && !quote.hasHighlight && <span className="text-slate-400">Full page</span>}
+        {picture && !quote.hasHighlight && <span className="text-slate-400">Full page</span>}
       </div>
-      {quote.pageId && quote.verified && <QuoteThumbnail quoteId={quote.id} />}
+      {picture && <QuoteThumbnail quoteId={quote.id} />}
     </li>
   )
 }
 
-/** The commit the code was read at, once the server has said so. Until then (or if it fails) the note stays general. */
-function useCommitNote(suggestionId: string, enabled: boolean): string {
-  const [sha, setSha] = useState<string | null>(null)
-  useEffect(() => {
-    // A new suggestion must not show the commit of the one before it while its own code loads.
-    setSha(null)
-    if (!enabled) return
-    let alive = true
-    getCode(suggestionId)
-      .then((code) => {
-        if (alive) setSha(code.commitSha)
-      })
-      .catch(() => {
-        if (alive) setSha(null)
-      })
-    return () => {
-      alive = false
-    }
-  }, [suggestionId, enabled])
-  return sha ? `Based on the code at commit ${sha.slice(0, 7)}, not on the live app.` : 'Based on code, not on the live app.'
+/** The commit comes with the suggestion listing; without it the note stays general. */
+function commitNote(commitSha: string | null): string {
+  return commitSha ? `Based on the code at commit ${commitSha.slice(0, 7)}, not on the live app.` : 'Based on code, not on the live app.'
+}
+
+interface ListedFlag {
+  type: FlagType
+  reason: string | null
+}
+
+/**
+ * The flags worth listing: a flag whose reason only repeats the card's reason (a missing_evidence flag
+ * carries the AI's own reason) keeps its label and drops the repeated words; one with neither is left out.
+ */
+function flagsToList(suggestion: SuggestionView): ListedFlag[] {
+  const reason = suggestion.reason.trim()
+  return suggestion.flags.flatMap((flag): ListedFlag[] => {
+    const repeats = flag.reason.trim() === reason
+    if (!repeats) return [{ type: flag.type, reason: flag.reason }]
+    return FLAG_LABEL[flag.type] ? [{ type: flag.type, reason: null }] : []
+  })
 }
 
 function DecisionNote({ decision }: { decision: DecisionView }) {
@@ -93,7 +99,7 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
   const [replaying, setReplaying] = useState(false)
   const [showCode, setShowCode] = useState(false)
   const isRepo = suggestion.source === 'repo'
-  const codeNote = useCommitNote(suggestion.id, isRepo)
+  const flags = flagsToList(suggestion)
   const state = suggestionState({ suggestion, decision, currentStatus })
   const suggested = suggestion.suggestedResult
   const decided = state === 'accepted' || state === 'overridden'
@@ -123,9 +129,9 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
 
       <p className="text-sm text-slate-600">{suggestion.reason}</p>
 
-      {suggestion.flags.length > 0 && (
+      {flags.length > 0 && (
         <ul className="list-disc space-y-0.5 pl-5 text-xs text-blue-700">
-          {suggestion.flags.map((flag, i) => (
+          {flags.map((flag, i) => (
             <li key={`${flag.type}-${i}`}>
               {FLAG_LABEL[flag.type] ? <span className="mr-1.5 rounded bg-blue-100 px-1.5 py-0.5 font-medium">{FLAG_LABEL[flag.type]}</span> : null}
               {flag.reason}
@@ -137,7 +143,7 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
       {suggestion.quotes.length > 0 && (
         <ul className="divide-y divide-slate-100">
           {suggestion.quotes.map((quote) => (
-            <QuoteItem key={quote.id} quote={quote} />
+            <QuoteItem key={quote.id} quote={quote} isRepo={isRepo} />
           ))}
         </ul>
       )}
@@ -150,7 +156,7 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
         </p>
       )}
 
-      {isRepo && <p className="text-xs text-slate-500">{codeNote}</p>}
+      {isRepo && <p className="text-xs text-slate-500">{commitNote(suggestion.commitSha)}</p>}
 
       {suggestion.source === 'app' && (
         <div>
@@ -159,7 +165,7 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
           </button>
         </div>
       )}
-      {isRepo && (
+      {isRepo && suggestion.hasCode && (
         <div>
           <button
             type="button"
@@ -171,7 +177,7 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
           </button>
         </div>
       )}
-      {isRepo && showCode && <CodeFound suggestionId={suggestion.id} />}
+      {isRepo && suggestion.hasCode && showCode && <CodeFound suggestionId={suggestion.id} />}
       {replaying && <ReplaySteps suggestionId={suggestion.id} onClose={() => setReplaying(false)} />}
 
       {showActions && (

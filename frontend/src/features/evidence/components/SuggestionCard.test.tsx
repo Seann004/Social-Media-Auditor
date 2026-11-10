@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import { makeDecision, makeSuggestion } from '../testFixtures'
-import type { QuoteView } from '../types'
+import type { QuoteView, SuggestionView } from '../types'
 import OverrideDialog from './OverrideDialog'
 import SuggestionCard from './SuggestionCard'
 
@@ -20,6 +20,7 @@ const quote = (over: Partial<QuoteView> = {}): QuoteView => ({
   pageUrl: 'https://example.com/privacy',
   pageTitle: 'Privacy',
   hasHighlight: true,
+  pageHasScreenshot: true,
   ...over,
 })
 
@@ -385,15 +386,21 @@ describe('SuggestionCard replay', () => {
 })
 
 describe('SuggestionCard for a code repository suggestion', () => {
-  const repoCard = () => makeSuggestion({ source: 'repo', flags: [{ type: 'comments_only', reason: 'Only comments or documentation support this.' }] })
+  const repoCard = (over: Partial<SuggestionView> = {}) =>
+    makeSuggestion({ source: 'repo', commitSha: 'abc1234def5678', hasCode: true, flags: [{ type: 'comments_only', reason: 'Only comments or documentation support this.' }], ...over })
 
-  it('shows the short commit note once the code is known, and the comments_only label with its reason', async () => {
-    getCode.mockResolvedValue({ commitSha: 'abc1234def5678', repoUrl: 'https://github.com/acme/app', pieces: [] })
+  it('shows the short commit note at once, from the listing, without asking for the code', () => {
     renderCard({ suggestion: repoCard() })
-    expect(screen.getByText('Based on code, not on the live app.')).toBeInTheDocument()
-    expect(await screen.findByText('Based on the code at commit abc1234, not on the live app.')).toBeInTheDocument()
+    expect(screen.getByText('Based on the code at commit abc1234, not on the live app.')).toBeInTheDocument()
     expect(screen.getByText('Comments only')).toBeInTheDocument()
     expect(screen.getByText('Only comments or documentation support this.')).toBeInTheDocument()
+    expect(getCode).not.toHaveBeenCalled()
+  })
+
+  it('keeps the generic note when the commit is not known', () => {
+    renderCard({ suggestion: repoCard({ commitSha: null }) })
+    expect(screen.getByText('Based on code, not on the live app.')).toBeInTheDocument()
+    expect(getCode).not.toHaveBeenCalled()
   })
 
   it('offers Code found instead of Replay steps and loads the code on open', async () => {
@@ -401,27 +408,52 @@ describe('SuggestionCard for a code repository suggestion', () => {
     getCode.mockResolvedValue({ commitSha: 'abc1234def', repoUrl: null, pieces: [] })
     renderCard({ suggestion: repoCard() })
     expect(screen.queryByRole('button', { name: 'Replay steps' })).toBeNull()
+    expect(getCode).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: 'Code found' }))
     expect(await screen.findByText('No code was kept for this suggestion.')).toBeInTheDocument()
   })
 
-  it("drops the earlier suggestion's commit while the next one's code is loading", async () => {
-    getCode.mockResolvedValueOnce({ commitSha: 'abc1234def5678', repoUrl: null, pieces: [] })
-    getCode.mockReturnValueOnce(new Promise(() => {}))
-    const props: CardProps = {
-      suggestion: { ...repoCard(), id: 'sug-a' }, decision: null, currentStatus: undefined, canDecide: true,
-      onAccept: vi.fn(), onOverride: vi.fn(), onKeepMine: vi.fn(),
-    }
-    const { rerender } = render(<SuggestionCard {...props} />)
-    expect(await screen.findByText('Based on the code at commit abc1234, not on the live app.')).toBeInTheDocument()
-    rerender(<SuggestionCard {...props} suggestion={{ ...repoCard(), id: 'sug-b' }} />)
-    expect(screen.getByText('Based on code, not on the live app.')).toBeInTheDocument()
-    expect(screen.queryByText(/commit abc1234/)).toBeNull()
+  it('offers no Code found when no code matched', () => {
+    renderCard({ suggestion: repoCard({ hasCode: false }) })
+    expect(screen.queryByRole('button', { name: 'Code found' })).toBeNull()
   })
 
-  it('keeps the generic note when the code cannot be loaded', async () => {
-    renderCard({ suggestion: repoCard() })
+  it('shows no page thumbnail for a code quote, and never asks for one', async () => {
+    renderCard({ suggestion: repoCard({ quotes: [quote({ id: 'q-code', hasHighlight: false, pageHasScreenshot: false, pageUrl: 'https://github.com/acme/app/blob/abc/x.ts#L1-L9' })] }) })
+    expect(screen.getByText(/We verify age at sign-up\./)).toBeInTheDocument()
+    expect(screen.queryByText('Full page')).toBeNull()
     await new Promise((r) => setTimeout(r, 20))
-    expect(screen.getByText('Based on code, not on the live app.')).toBeInTheDocument()
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(getScreenshotUrl).not.toHaveBeenCalled()
+  })
+})
+
+describe('SuggestionCard: thumbnails only where a picture exists', () => {
+  it('an app quote whose page has no screenshot and no highlight asks for no picture', async () => {
+    renderCard({ suggestion: makeSuggestion({ source: 'app', quotes: [quote({ hasHighlight: false, pageHasScreenshot: false })] }) })
+    expect(screen.queryByText('Full page')).toBeNull()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(getScreenshotUrl).not.toHaveBeenCalled()
+  })
+})
+
+describe('SuggestionCard: the reason is shown once', () => {
+  const reason = 'The pages do not say whether teen accounts are private.'
+
+  it('leaves out a flag reason that repeats the card reason, but keeps its label', () => {
+    renderCard({ suggestion: makeSuggestion({ suggestedResult: null, reason, flags: [{ type: 'missing_evidence', reason }] }) })
+    expect(screen.getAllByText(reason)).toHaveLength(1)
+    expect(screen.getByText('Needs human review')).toBeInTheDocument()
+  })
+
+  it('compares without surrounding space', () => {
+    renderCard({ suggestion: makeSuggestion({ suggestedResult: null, reason, flags: [{ type: 'low_confidence', reason: `  ${reason} ` }] }) })
+    expect(screen.getAllByText(reason)).toHaveLength(1)
+  })
+
+  it('keeps a flag that adds something', () => {
+    renderCard({ suggestion: makeSuggestion({ reason, flags: [{ type: 'missing_evidence', reason }, { type: 'conflicting', reason: 'Help centre says otherwise.' }] }) })
+    expect(screen.getAllByText(reason)).toHaveLength(1)
+    expect(screen.getByText('Help centre says otherwise.')).toBeInTheDocument()
   })
 })

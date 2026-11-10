@@ -17,6 +17,7 @@ import {
 import { DecisionError, recordDecision } from './decisions.js'
 import type { RunQueue } from './queue.js'
 import type { RepoRepository } from './repoRepository.js'
+import { repoSuggestionInfo } from './repoSuggestionInfo.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import { createProjectLock, jsonErrorHandler, projectGate, route, sessionOf, userLimiter, validParams } from './routeSupport.js'
 import { startReassess, startRun, sweepStaleRuns, type RunStartDeps, type StartOutcome } from './runStart.js'
@@ -200,8 +201,8 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
       const pageIds = [...new Set(found.flatMap((s) => s.quotes.map((q) => q.pageId)).filter((id): id is string => id !== null))]
       const summaries = pageIds.length > 0 ? await repo.getPageSummaries(pageIds) : []
       const pages = new Map<string, PageSummary>(summaries.map((p) => [p.id, p]))
-      const decisions = await latestDecisionViews(repo, req.params.id, found)
-      res.json({ run: toRunView(run), suggestions: found.map((s) => toSuggestionView(s, pages)), decisions })
+      const [decisions, repoInfo] = await Promise.all([latestDecisionViews(repo, req.params.id, found), repoSuggestionInfo(repo, deps.repoRepo, found)])
+      res.json({ run: toRunView(run), suggestions: found.map((s) => toSuggestionView(s, pages, repoInfo.get(s.id))), decisions })
     }),
   )
 

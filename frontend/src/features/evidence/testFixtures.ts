@@ -57,6 +57,8 @@ export function makeSuggestion(overrides: Partial<SuggestionView> = {}): Suggest
     confidence: 'high',
     flags: [],
     quotes: [],
+    commitSha: null,
+    hasCode: false,
     ...overrides,
   }
 }

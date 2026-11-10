@@ -64,6 +64,8 @@ export interface Stub {
   appRunItems: string[][]
   /** Item ids sent to start a code repository run. */
   repoRunItems: string[][]
+  /** How many times the code of a suggestion was read. */
+  codeReads: number
   /** Repository addresses saved. */
   repoBodies: { repoUrl: string; branch: string | null }[]
 }
@@ -104,6 +106,7 @@ const quote = (id: string, text: string) => ({
   pageUrl: 'https://example.test/safety',
   pageTitle: 'Safety centre',
   hasHighlight: true,
+  pageHasScreenshot: true,
 })
 
 const SUGGESTIONS = [
@@ -118,6 +121,8 @@ const SUGGESTIONS = [
     confidence: 'high',
     flags: [],
     quotes: [quote('q1', 'Create your account in one step')],
+    commitSha: null,
+    hasCode: false,
   },
   {
     id: 's2',
@@ -130,6 +135,8 @@ const SUGGESTIONS = [
     confidence: 'medium',
     flags: [],
     quotes: [quote('q2', 'Guardians can turn on parental controls')],
+    commitSha: null,
+    hasCode: false,
   },
   {
     id: 's3',
@@ -142,6 +149,8 @@ const SUGGESTIONS = [
     confidence: 'low',
     flags: [{ type: 'low_confidence', reason: 'The pages that mention reporting are vague.' }],
     quotes: [],
+    commitSha: null,
+    hasCode: false,
   },
 ]
 
@@ -160,6 +169,8 @@ const appSuggestions = (itemIds: string[]) =>
     confidence: 'medium',
     flags: [],
     quotes: [],
+    commitSha: null,
+    hasCode: false,
   }))
 
 const COMMIT_SHA = 'abc1234def5678abc1234def5678abc1234def56'
@@ -178,6 +189,8 @@ const repoSuggestions = (itemIds: string[]) =>
     confidence: 'medium',
     flags: [],
     quotes: [],
+    commitSha: COMMIT_SHA,
+    hasCode: true,
   }))
 
 /** The code the AI looked at: one quoted piece, one extra piece. */
@@ -232,7 +245,7 @@ const SOURCE_BASE = { id: 'src-1', projectId: PROJECT_ID, createdBy: AUDITOR.use
 
 /** Installs every stub for one page. State lives in the closure, so a decision changes what the next GET returns. */
 export async function installStub(page: Page, options: StubOptions): Promise<Stub> {
-  const stub: Stub = { violations: [], decisions: [], savedAnswers: [], accountBodies: [], appRunItems: [], repoRunItems: [], repoBodies: [] }
+  const stub: Stub = { violations: [], decisions: [], savedAnswers: [], accountBodies: [], appRunItems: [], repoRunItems: [], repoBodies: [], codeReads: 0 }
   const answers = new Map<string, StoredAnswer>()
   const decisions = new Map<string, Json>()
   let runState: 'none' | 'capturing' | 'completed' = options.withRun ? 'completed' : 'none'
@@ -436,7 +449,10 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
       latestReads = 0
       return json(route, { run: run('capturing', 0, 'repo', repoRunItems) }, 202)
     }
-    if (/^\/suggestions\/[^/]+\/code$/.test(path)) return json(route, CODE)
+    if (/^\/suggestions\/[^/]+\/code$/.test(path)) {
+      stub.codeReads += 1
+      return json(route, CODE)
+    }
     if (path.endsWith('/app-changes')) return json(route, { changes: runSource === 'app' && runState === 'completed' ? CHANGES : [] })
     if (/^\/suggestions\/[^/]+\/steps$/.test(path)) return json(route, { steps: STEPS, changes: CHANGES })
     if (path.endsWith('/evidence-runs') && method === 'POST') {
