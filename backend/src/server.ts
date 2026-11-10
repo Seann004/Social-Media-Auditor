@@ -472,7 +472,7 @@ You MUST return your output in JSON format matching this EXACT schema:
 {
   "items": [
     {
-      "id": "A unique string ID based on reference, e.g. ci_1_24_1",
+      "id": "A unique string ID based on reference",
       "category": "Category Name",
       "text": "Detailed check question...",
       "severity": "critical|major|minor",
