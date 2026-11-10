@@ -26,14 +26,24 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false, 
   const [appUrl, setAppUrl] = useState(setup.app?.appUrl ?? '')
   const [domains, setDomains] = useState((setup.app?.loginDomains ?? []).join('\n'))
   const [sourceError, setSourceError] = useState<string | null>(null)
+  /** The address the server saved, shown until either field is edited. */
+  const [savedUrl, setSavedUrl] = useState<string | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [editing, setEditing] = useState<Editing>(null)
+
+  /** Any edit to the address or the domains clears the "Saved" note: it no longer describes the form. */
+  function edit(set: (value: string) => void, value: string): void {
+    set(value)
+    setSavedUrl(null)
+  }
 
   async function saveSource(e: React.FormEvent): Promise<void> {
     e.preventDefault()
     setSourceError(null)
+    setSavedUrl(null)
     try {
-      await saveAppSource(projectId, appUrl.trim(), lines(domains))
+      const { app } = await saveAppSource(projectId, appUrl.trim(), lines(domains))
+      setSavedUrl(app.appUrl)
       await onSaved()
     } catch (err) {
       setSourceError(sentence(err))
@@ -67,11 +77,11 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false, 
       <form onSubmit={(e) => void saveSource(e)} className="space-y-2">
         <div>
           <label htmlFor="app-url" className="mb-1 block text-xs font-medium text-slate-700">App address</label>
-          <input id="app-url" value={appUrl} onChange={(e) => setAppUrl(e.target.value)} disabled={disabled} spellCheck={false} className={FIELD} />
+          <input id="app-url" value={appUrl} onChange={(e) => edit(setAppUrl, e.target.value)} disabled={disabled} spellCheck={false} className={FIELD} />
         </div>
         <div>
           <label htmlFor="app-login-domains" className="mb-1 block text-xs font-medium text-slate-700">Login domains (one per line)</label>
-          <textarea id="app-login-domains" rows={2} value={domains} onChange={(e) => setDomains(e.target.value)} disabled={disabled} spellCheck={false} className={`${FIELD} font-mono text-xs`} />
+          <textarea id="app-login-domains" rows={2} value={domains} onChange={(e) => edit(setDomains, e.target.value)} disabled={disabled} spellCheck={false} className={`${FIELD} font-mono text-xs`} />
         </div>
         {sourceError ? <p role="alert" className="text-xs text-rose-600">{sourceError}</p> : null}
         <button
@@ -81,6 +91,11 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false, 
         >
           Save app address
         </button>
+        {savedUrl !== null ? (
+          <p role="status" className="text-xs text-slate-700">
+            Saved: <span className="break-all font-medium">{savedUrl}</span>
+          </p>
+        ) : null}
       </form>
 
       <div className="space-y-2">

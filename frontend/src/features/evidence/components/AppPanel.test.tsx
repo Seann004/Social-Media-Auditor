@@ -145,6 +145,37 @@ describe('App source in the evidence panel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('That address points at a private network.')
   })
 
+  it('confirms a saved app address near the button, and clears it when either field is edited', async () => {
+    const user = userEvent.setup()
+    m.saveAppSource.mockResolvedValue({ app: { appUrl: 'https://new.example', loginDomains: [], updatedAt: '2026-11-11T09:00:00.000Z' } })
+    render(<Harness />)
+    await openApp(user)
+    const address = screen.getByLabelText(/app address/i)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    await user.clear(address)
+    await user.type(address, 'https://new.example')
+    await user.click(screen.getByRole('button', { name: /save app address/i }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved: https://new.example')
+
+    await user.type(address, '/x')
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /save app address/i }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved:')
+    await user.type(screen.getByLabelText(/login domains/i), 'a.example')
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('shows no confirmation when the save fails', async () => {
+    const user = userEvent.setup()
+    m.saveAppSource.mockRejectedValueOnce(new EvidenceApiError(400, 'That address points at a private network.'))
+    render(<Harness />)
+    await openApp(user)
+    await user.click(screen.getByRole('button', { name: /save app address/i }))
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
   it('adds a test account; the password field is type password and is cleared after saving', async () => {
     const user = userEvent.setup()
     m.addTestAccount.mockResolvedValue({ account: account({ id: 'a2', label: 'Adult' }) })
