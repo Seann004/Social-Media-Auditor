@@ -181,6 +181,30 @@ describe('judgeRepoItem', () => {
     expect(new Set(s?.passageIdsSent)).toEqual(new Set(passages.map((p) => p.id)))
   })
 
+  it('round 2 keeps the round-1 avoid list when the AI gives none, and sends it to the AI as data', async () => {
+    const nothing: Answer = () => ({ results: [NULL_RESULT], missingItemIds: [], tokensUsed: 70 })
+    const kit = await createKit([nothing], { words: ['minAge'], paths: [] })
+    const files: RepoFile[] = [
+      ...FILES.slice(0, 1),
+      { path: 'app/admin/age_rules.ts', lines: ['minAge', 'minAge', 'minAge', 'minAge'] },
+      { path: 'app/models/age.ts', lines: ['export const minAge = 13'] },
+    ]
+    await judgeRepoItem(kit.ctx, {
+      item: ITEM,
+      platform: 'Social',
+      files,
+      snapshot: kit.snapshot,
+      terms: { ...WORDS('isPrivate'), avoidPaths: ['admin'] },
+      repoRepo: kit.repoRepo,
+      meter: meterOf(),
+    })
+    const body = JSON.parse((kit.fetch.mock.calls[0][1] as RequestInit).body as string)
+    const user = body.messages[1].content as string
+    expect(JSON.parse(user.slice(user.indexOf('{'))).avoidPaths).toEqual(['admin'])
+    const round2 = (await kit.repoRepo.listPieces(kit.ctx.run.id, ITEM.id)).filter((p) => p.round === 2)
+    expect(round2.map((p) => p.path)).toEqual(['app/models/age.ts', 'app/admin/age_rules.ts'])
+  })
+
   it('stores a second null answer as null, with no third call', async () => {
     const nothing: Answer = () => ({ results: [NULL_RESULT], missingItemIds: [], tokensUsed: 70 })
     const kit = await createKit([nothing])

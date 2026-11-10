@@ -193,3 +193,18 @@ describe('the search-terms prompts', () => {
     expect(system).toMatch(/leave "avoidPaths" empty when the item is about/i)
   })
 })
+
+describe('avoidPaths guard in the replies', () => {
+  it('askSearchTerms drops avoid words that are layers, path hints or search words', async () => {
+    stubFetch({ items: [{ itemId: 'i1', words: ['report', 'flag'], pathHints: ['settings'], avoidPaths: ['admin', 'api', 'controllers', 'settings', 'flag', 'staff'] }] })
+    const out = await askSearchTerms({ items: [ITEM], platform: 'P', paths: [], apiKey: 'K', model: 'm' })
+    expect(out.terms.get('i1')?.avoidPaths).toEqual(['admin', 'staff'])
+  })
+
+  it('askMoreTerms drops avoid words that are its own words or layers, and sends the round-1 avoid list as data', async () => {
+    const f = stubFetch({ words: ['moderation'], paths: [], avoidPaths: ['moderation', 'services', 'staff'] })
+    const out = await askMoreTerms({ item: ITEM, platform: 'P', seenPaths: [], paths: ['a.ts'], apiKey: 'K', model: 'm', avoidPaths: ['admin'] })
+    expect(out.terms.avoidPaths).toEqual(['staff'])
+    expect(sentUser(f).avoidPaths).toEqual(['admin'])
+  })
+})

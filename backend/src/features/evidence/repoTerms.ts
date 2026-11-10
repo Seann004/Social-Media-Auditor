@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { callGroqJson } from './aiCall.js'
 import type { AssessItem } from './assess.js'
 import { REPO_MAX_AVOID_PATHS, REPO_MAX_MORE_TERMS, REPO_MAX_PATH_HINTS, REPO_MAX_SEARCH_WORDS, REPO_MIN_SEARCH_WORDS, REPO_PROMPT_PATHS_CHARS } from './config.js'
+import { usableAvoidWords } from './repoSearch.js'
 import type { SearchTerms } from './repoTypes.js'
 
 /** Room for a short list of words for each of up to REPO_MAX_ITEMS_PER_RUN items. */
@@ -17,6 +18,8 @@ const MIN_ENTRY_CHARS = 2
 const MAX_ENTRY_CHARS = 40
 const ENTRY = /^[\p{L}\p{N}_.\-]+$/u
 const FALLBACK_MIN_CHARS = 3
+/** Avoid entries read from a reply before the unusable ones are dropped and the rest capped at REPO_MAX_AVOID_PATHS. */
+const AVOID_ENTRIES_READ = 16
 const FALLBACK_WORD = /[\p{L}\p{N}_]+/gu
 
 /** Words too common to find anything useful in code. */
@@ -96,8 +99,14 @@ function itemData(item: AssessItem): Record<string, unknown> {
   return { itemId: item.id, name: item.name, text: item.text, helpText: item.helpText }
 }
 
-/** `avoidPaths` only when there is one, so terms without it keep their shape. */
-const withAvoid = (avoidPaths: string[]): Pick<SearchTerms, 'avoidPaths'> => (avoidPaths.length > 0 ? { avoidPaths } : {})
+/**
+ * The terms with their usable avoid words (no layer names, none the terms also seek), and `avoidPaths`
+ * only when there is one, so that terms without it keep their shape.
+ */
+function withAvoid(terms: SearchTerms, avoidPaths: string[]): SearchTerms {
+  const usable = usableAvoidWords({ ...terms, avoidPaths }).slice(0, REPO_MAX_AVOID_PATHS)
+  return usable.length > 0 ? { ...terms, avoidPaths: usable } : terms
+}
 
 /** The item's own words, used when the AI gave none for it: a search, not an answer. */
 export function fallbackTerms(item: AssessItem): SearchTerms {
@@ -121,8 +130,8 @@ function readTerms(content: unknown, wanted: ReadonlySet<string>): Map<string, S
     if (!parsed.success || !wanted.has(parsed.data.itemId) || terms.has(parsed.data.itemId)) continue
     const words = goodEntries(parsed.data.words, REPO_MAX_SEARCH_WORDS)
     if (words.length === 0) continue
-    const avoidPaths = goodEntries(parsed.data.avoidPaths, REPO_MAX_AVOID_PATHS)
-    terms.set(parsed.data.itemId, { words, pathHints: goodEntries(parsed.data.pathHints, REPO_MAX_PATH_HINTS), paths: [], ...withAvoid(avoidPaths) })
+    const avoidPaths = goodEntries(parsed.data.avoidPaths, AVOID_ENTRIES_READ)
+    terms.set(parsed.data.itemId, withAvoid({ words, pathHints: goodEntries(parsed.data.pathHints, REPO_MAX_PATH_HINTS), paths: [] }, avoidPaths))
   }
   return terms
 }
@@ -163,6 +172,8 @@ export interface MoreTermsInput {
   seenPaths: string[]
   /** Every kept file of the repository: a path the AI names must be one of these. */
   paths: string[]
+  /** Round 1's avoid words, sent as data so that round 2 can keep or change them. */
+  avoidPaths?: string[]
   apiKey: string
   model: string
   /** Ends the call when the run aborts. */
@@ -175,7 +186,7 @@ export interface MoreTermsInput {
  */
 export async function askMoreTerms(input: MoreTermsInput): Promise<{ terms: SearchTerms; tokensUsed: number }> {
   const seen = [...new Set(input.seenPaths)]
-  const data = { platform: input.platform, item: itemData(input.item), seenPaths: seen, paths: promptPaths(input.paths) }
+  const data = { platform: input.platform, item: itemData(input.item), seenPaths: seen, avoidPaths: input.avoidPaths ?? [], paths: promptPaths(input.paths) }
   const { content, tokens } = await callGroqJson({
     apiKey: input.apiKey,
     model: input.model,
@@ -192,6 +203,6 @@ export async function askMoreTerms(input: MoreTermsInput): Promise<{ terms: Sear
     if (typeof path === 'string' && known.has(path) && !paths.includes(path)) paths.push(path)
     if (paths.length >= REPO_MAX_MORE_TERMS) break
   }
-  const avoidPaths = goodEntries(reply.data.avoidPaths, REPO_MAX_AVOID_PATHS)
-  return { terms: { words: goodEntries(reply.data.words, REPO_MAX_MORE_TERMS), pathHints: [], paths, ...withAvoid(avoidPaths) }, tokensUsed: tokens }
+  const avoidPaths = goodEntries(reply.data.avoidPaths, AVOID_ENTRIES_READ)
+  return { terms: withAvoid({ words: goodEntries(reply.data.words, REPO_MAX_MORE_TERMS), pathHints: [], paths }, avoidPaths), tokensUsed: tokens }
 }

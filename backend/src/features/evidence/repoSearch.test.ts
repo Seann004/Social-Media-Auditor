@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findPieces, pieceKey, isCommentLine, isDocsOrTestPath, isLocalePath } from './repoSearch.js'
+import { findPieces, pieceKey, isCommentLine, isDocsOrTestPath, isLocalePath, usableAvoidWords } from './repoSearch.js'
 import { MAX_CHARS_PER_PASSAGE } from './config.js'
 import type { RepoFile, SearchTerms } from './repoTypes.js'
 
@@ -267,5 +267,36 @@ describe('findPieces: paths the AI asked to rank lower (avoidPaths)', () => {
     const strong = file('app/admin/moderation/staff/reports.rb', filler(12, 'report report_note abuse'))
     const out = findPieces([strong, weak], terms({ words: ['report', 'abuse'], avoidPaths: ['admin', 'moderation', 'staff'] }), { max: 1 })
     expect(out[0]?.path).toBe(strong.path)
+  })
+})
+
+describe('findPieces: avoid words that would hide what the item needs', () => {
+  // Scores before any penalty: admin 3 + 2 (report in its path), user 4 + 2.
+  const admin = file('app/controllers/admin/reports_controller.rb', filler(3, 'report'))
+  const user = file('app/controllers/api/v1/reports_controller.rb', filler(4, 'report'))
+  const first = (t: Partial<SearchTerms>) => findPieces([admin, user], terms({ words: ['report'], ...t }), { max: 1 })[0]?.path
+
+  it('drops an avoid word that is also one of the path hints or search words', () => {
+    expect(first({ avoidPaths: ['admin'] })).toBe(user.path)
+    expect(first({ avoidPaths: ['admin'], pathHints: ['admin'] })).toBe(admin.path)
+    expect(first({ words: ['report', 'Admin'], avoidPaths: ['admin'] })).toBe(admin.path)
+  })
+
+  it('drops layer names, which would rank the user-facing code lower too', () => {
+    const apiHeavy = file('app/controllers/api/v1/admin_reports.rb', filler(12, 'report'))
+    const plain = file('app/models/report.rb', ['report', 'report'])
+    for (const layer of ['api', 'controllers', 'models', 'services', 'views', 'app', 'src', 'lib']) {
+      expect(findPieces([apiHeavy, plain], terms({ words: ['report'], avoidPaths: [layer] }), { max: 1 })[0]?.path).toBe(apiHeavy.path)
+    }
+  })
+})
+
+describe('usableAvoidWords', () => {
+  it('keeps only avoid words that are not layers, hints or search words, lower case and once each', () => {
+    expect(usableAvoidWords(terms({ words: ['report'], pathHints: ['settings'], avoidPaths: ['Admin', 'admin', 'api', 'Settings', 'REPORT', 'staff'] }))).toEqual([
+      'admin',
+      'staff',
+    ])
+    expect(usableAvoidWords(terms({ words: ['x'] }))).toEqual([])
   })
 })

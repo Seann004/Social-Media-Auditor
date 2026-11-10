@@ -220,6 +220,7 @@ async function secondRound(ctx: RunCtx, input: RepoJudgeInput, first: StoredPiec
       platform,
       seenPaths: first.map((s) => s.piece.path),
       paths: files.map((f) => f.path),
+      avoidPaths: input.terms.avoidPaths,
       apiKey: ctx.deps.apiKey,
       model: ctx.deps.model,
       signal: ctx.signal,
@@ -228,7 +229,9 @@ async function secondRound(ctx: RunCtx, input: RepoJudgeInput, first: StoredPiec
   )
   meter.add(more.tokensUsed)
   const exclude = new Set(first.map((s) => pieceKey(s.piece)))
-  const drafts = fitDrafts(findPieces(files, more.terms, { exclude, max: REPO_MAX_PIECES_PER_ITEM }))
+  // Round 1's avoid words carry on when the AI names none in round 2.
+  const terms = { ...more.terms, avoidPaths: more.terms.avoidPaths ?? input.terms.avoidPaths }
+  const drafts = fitDrafts(findPieces(files, terms, { exclude, max: REPO_MAX_PIECES_PER_ITEM }))
   if (drafts.length === 0) return []
   return storePieces(ctx, input.repoRepo, input.snapshot, item.id, drafts, 2)
 }

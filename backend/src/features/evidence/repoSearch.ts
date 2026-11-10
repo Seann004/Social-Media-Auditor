@@ -22,6 +22,8 @@ const MAX_AVOID_PENALTY = 8
 /** Splits a path into its words: folders, then file-name parts at "_", ".", "-" and camelCase humps. */
 const PATH_WORD_BREAK = /[/_.\-\s]+/
 const CAMEL_HUMP = /([a-z0-9])([A-Z])/g
+/** Layer names an avoid word may never be: ranking them lower would hide the user-facing code too. */
+const LAYER_WORDS: ReadonlySet<string> = new Set(['api', 'controllers', 'models', 'services', 'views', 'app', 'src', 'lib'])
 
 export function pieceKey(d: Pick<PieceDraft, 'path' | 'startLine' | 'endLine'>): string {
   return `${d.path}:${d.startLine}-${d.endLine}`
@@ -169,6 +171,15 @@ function avoidPenalty(path: string, avoid: string[]): number {
   return Math.min(hits * POINTS_PER_AVOIDED_SEGMENT, MAX_AVOID_PENALTY)
 }
 
+/**
+ * The avoid words findPieces uses: lower case, once each, without layer names and without any word
+ * that is also one of the same terms' path hints or search words (the AI cannot both seek and avoid it).
+ */
+export function usableAvoidWords(terms: SearchTerms): string[] {
+  const sought = new Set([...cleanList(terms.words), ...cleanList(terms.pathHints)])
+  return [...new Set(cleanList(terms.avoidPaths ?? []))].filter((word) => !LAYER_WORDS.has(word) && !sought.has(word))
+}
+
 function scoreFile(file: RepoFile, linesPerWord: number[], words: string[], hints: string[]): number {
   const path = file.path.toLowerCase()
   let score = 0
@@ -233,7 +244,7 @@ export function findPieces(
   const exclude = opts.exclude ?? new Set<string>()
   const words = cleanList(terms.words)
   const hints = cleanList(terms.pathHints)
-  const avoid = cleanList(terms.avoidPaths ?? [])
+  const avoid = usableAvoidWords(terms)
   const named = new Set(terms.paths)
 
   const matched = files.map((f) => toHit(f, words, hints, avoid, named)).filter((h): h is FileHit => h !== null)

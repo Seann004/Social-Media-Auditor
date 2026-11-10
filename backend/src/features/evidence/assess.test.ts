@@ -137,6 +137,7 @@ describe('buildPrompt: the account and step of each app passage', () => {
     expect(system).toMatch(/attribute what a page shows only to the account named for that page's step/i)
     expect(system).toMatch(/if pages from different accounts differ, say which account each came from/i)
     expect(system).toMatch(/if the evidence for the account the item is about is not there, say so instead of using another account's page/i)
+    expect(system).toMatch(/a null account means the account is not known/i)
     for (const kind of ['pages', 'repo'] as const) {
       expect(buildPrompt([item('i1')], [passage('x')], 'TikTok', kind).system).not.toMatch(/account named for that page's step/)
     }
