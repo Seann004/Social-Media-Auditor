@@ -70,6 +70,28 @@ async function requestOnce(opts: GroqJsonOptions): Promise<GroqBody> {
     3,
     GROQ_MAX_WAIT_MS / 1000,
   )
+  if (res.status === BAD_REQUEST) return badRequest(res, opts.model)
   if (!res.ok) throw new Error(`Groq request failed with status ${res.status}`)
   return (await res.json()) as GroqBody
+}
+
+const BAD_REQUEST = 400
+/** Groq's 400 code when JSON mode is on and the model's output is not valid JSON. */
+const JSON_VALIDATE_FAILED = 'json_validate_failed'
+
+/**
+ * A 400 whose code is json_validate_failed is the model writing bad JSON, the same as an unreadable
+ * reply: it comes back with no choices (content null, tokens from usage or 0), so the callers' try-once-more
+ * applies. Any other 400 throws as before, with the status only. Only the error code is logged.
+ */
+async function badRequest(res: Response, model: string): Promise<GroqBody> {
+  type ErrorBody = { error?: { code?: unknown }; usage?: GroqBody['usage'] }
+  const body = (await res.json().catch(() => null)) as ErrorBody | null
+  const code = typeof body?.error?.code === 'string' ? body.error.code : 'none'
+  if (code === JSON_VALIDATE_FAILED) {
+    console.error(`[evidence] Groq call (model ${model}): 400 ${code}; treated as an unreadable reply`)
+    return { usage: { total_tokens: body?.usage?.total_tokens ?? 0 } }
+  }
+  console.error(`[evidence] Groq call (model ${model}): 400 with error code ${code}`)
+  throw new Error(`Groq request failed with status ${res.status}`)
 }

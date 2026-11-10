@@ -171,6 +171,23 @@ describe('assessBatch', () => {
     vi.stubGlobal('fetch', f)
     expect((await run()).results).toHaveLength(1)
   })
+  it('tries once more after a json_validate_failed 400, then uses the normal answer', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const invalid = new Response(JSON.stringify({ error: { code: 'json_validate_failed', message: 'Failed to validate JSON' } }), { status: 400 })
+    const f = vi.fn().mockResolvedValueOnce(invalid).mockResolvedValueOnce(groqResponse({ results: [goodResult('i1')] }, 50))
+    vi.stubGlobal('fetch', f)
+    const out = await run()
+    expect(f).toHaveBeenCalledTimes(2)
+    expect(out.results).toHaveLength(1)
+    expect(out.tokensUsed).toBe(50)
+  })
+  it('still throws any other 400', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const f = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { code: 'context_length_exceeded' } }), { status: 400 }))
+    vi.stubGlobal('fetch', f)
+    await expect(run()).rejects.toThrow('400')
+    expect(f).toHaveBeenCalledTimes(1)
+  })
   it('reports tokensUsed from usage.total_tokens', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(groqResponse({ results: [goodResult('i1')] }, 777)))
     expect((await run()).tokensUsed).toBe(777)

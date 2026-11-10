@@ -58,6 +58,36 @@ describe('callGroqJson', () => {
     expect(err.message).toContain('500')
     expect(err.message).not.toContain('KEY')
   })
+  it('returns a json_validate_failed 400 as an unreadable reply, counting its tokens, and logs the code', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const body = { error: { message: 'Failed to validate JSON', type: 'invalid_request_error', code: 'json_validate_failed' }, usage: { total_tokens: 44 } }
+    const f = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 400 }))
+    vi.stubGlobal('fetch', f)
+    expect(await callGroqJson({ apiKey: 'sk-secret-key', model: 'm', system: 's', user: 'u', maxTokens: 5 })).toEqual({ content: null, tokens: 44 })
+    expect(f).toHaveBeenCalledTimes(1)
+    const logged = JSON.stringify(log.mock.calls)
+    expect(logged).toContain('json_validate_failed')
+    expect(logged).not.toContain('sk-secret-key')
+  })
+  it('counts 0 tokens for a json_validate_failed 400 with no usage', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const body = { error: { code: 'json_validate_failed' } }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 400 })))
+    expect(await call()).toEqual({ content: null, tokens: 0 })
+  })
+  it('still throws any other 400 with the status only, and logs its code', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const body = { error: { message: 'model not found SECRET-DETAIL', code: 'model_not_found' } }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 400 })))
+    const err = await call().catch((e) => e as Error)
+    expect(err.message).toBe('Groq request failed with status 400')
+    expect(JSON.stringify(log.mock.calls)).toContain('model_not_found')
+  })
+  it('still throws a 400 whose body is not JSON', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>bad</html>', { status: 400 })))
+    await expect(call()).rejects.toThrow('Groq request failed with status 400')
+  })
   it('passes the given signal to fetch', async () => {
     const f = vi.fn().mockResolvedValue(reply({ a: 1 }))
     vi.stubGlobal('fetch', f)

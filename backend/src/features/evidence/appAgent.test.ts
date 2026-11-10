@@ -252,6 +252,14 @@ describe('decideStep', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(reply('not json', 30)).mockResolvedValueOnce(new Response('{}', { status: 500 })))
     expect((await decide().catch((e) => e)).tokensUsed).toBe(30)
   })
+  it('treats a json_validate_failed 400 as an unreadable reply and asks once more', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const invalid = new Response(JSON.stringify({ error: { code: 'json_validate_failed' }, usage: { total_tokens: 12 } }), { status: 400 })
+    const f = vi.fn().mockResolvedValueOnce(invalid).mockResolvedValueOnce(reply(good, 20))
+    vi.stubGlobal('fetch', f)
+    expect(await decide()).toEqual({ action: { type: 'click', ref: 'e1' }, note: 'open it', tokensUsed: 32 })
+    expect(f).toHaveBeenCalledTimes(2)
+  })
   it('sends max_tokens APP_STEP_OUTPUT_TOKENS', async () => {
     const f = vi.fn().mockResolvedValue(reply(good))
     vi.stubGlobal('fetch', f)
