@@ -12,7 +12,6 @@ export interface AnswerRow {
   result: ChecklistItemStatus
   notes: string | null
   findings: string | null
-  evidenceImages: EvidenceImage[]
 }
 
 export interface AppliedAnswer {
@@ -168,7 +167,6 @@ export function createAuditData(opts: AuditDataOptions = {}): AuditData {
         result: r.result,
         notes: r.notes,
         findings: r.findings,
-        evidenceImages: r.evidenceImages ?? [],
       }))
     },
 

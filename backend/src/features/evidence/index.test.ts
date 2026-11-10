@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import express from 'express'
 import request from 'supertest'
+import jwt from 'jsonwebtoken'
 import { createSessions } from '../auth/session.js'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { createEvidenceModule, NOT_CONFIGURED_MESSAGE } from './index.js'
@@ -11,7 +12,7 @@ import { makeAudit } from './routesTestKit.js'
 
 const SECRET_KEY = Buffer.alloc(32, 5)
 const CONFIGURED = {
-  SESSION_SECRET: 'a-test-secret-that-is-at-least-32-chars-long',
+  JWT_SECRET: 'a-test-secret-that-is-at-least-32-chars-long',
   SUPABASE_SERVICE_ROLE_KEY: 'k',
   GROQ_API_KEY: 'gsk_x',
   EVIDENCE_SECRET_KEY: SECRET_KEY.toString('base64'),
@@ -30,15 +31,38 @@ function moduleWith(repo = createMemoryRepository(), env: Record<string, string 
 }
 
 describe('createEvidenceModule', () => {
-  it.each([
-    ['SESSION_SECRET', { SUPABASE_SERVICE_ROLE_KEY: 'k' }],
-    ['SUPABASE_SERVICE_ROLE_KEY', { SESSION_SECRET: CONFIGURED.SESSION_SECRET }],
-    ['both', {}],
-  ])('logs one startup error and returns one router when %s is missing', (_name, env) => {
-    const m = createEvidenceModule(env, { admin })
+  it('logs one startup error and returns one router when SUPABASE_SERVICE_ROLE_KEY is missing', () => {
+    const m = createEvidenceModule({ JWT_SECRET: CONFIGURED.JWT_SECRET }, { admin })
     expect(m.routers).toHaveLength(1)
     expect(errors).toHaveBeenCalledTimes(1)
     expect(String(errors.mock.calls[0][0])).toContain(NOT_CONFIGURED_MESSAGE)
+  })
+
+  it.each([
+    ['missing', { SUPABASE_SERVICE_ROLE_KEY: 'k' }],
+    ['empty', { SUPABASE_SERVICE_ROLE_KEY: 'k', JWT_SECRET: '' }],
+    ['short', { SUPABASE_SERVICE_ROLE_KEY: 'k', JWT_SECRET: 'short' }],
+    ['31 characters', { SUPABASE_SERVICE_ROLE_KEY: 'k', JWT_SECRET: 'x'.repeat(31) }],
+    ['missing, with no service key either', {}],
+  ])('turns evidence off without throwing, naming JWT_SECRET, when JWT_SECRET is %s', (_name, env) => {
+    let m: ReturnType<typeof createEvidenceModule> | null = null
+    expect(() => {
+      m = createEvidenceModule(env, { admin })
+    }).not.toThrow()
+    expect(m!.routers).toHaveLength(1)
+    const lines = errors.mock.calls.map((c) => String(c[0]))
+    expect(lines.some((l) => l.includes('JWT_SECRET'))).toBe(true)
+    expect(lines.some((l) => l.includes(NOT_CONFIGURED_MESSAGE))).toBe(true)
+  })
+
+  it('a short JWT_SECRET leaves the evidence routes answering 503, and never mounts a login route', async () => {
+    const m = createEvidenceModule({ ...CONFIGURED, JWT_SECRET: 'short' }, { admin })
+    const app = express()
+    app.use('/api', ...m.routers)
+    const res = await request(app).get('/api/projects/p-1/ai-suggestions')
+    expect(res.status).toBe(503)
+    expect(res.body.error).toBe(NOT_CONFIGURED_MESSAGE)
+    expect((await request(app).post('/api/auth/login').send({})).status).toBe(404)
   })
 
   it('is off when the service client cannot be built', () => {
@@ -53,32 +77,32 @@ describe('createEvidenceModule', () => {
     await expect(m.removeProjectScreenshots('p-1')).resolves.toBeUndefined()
   })
 
-  it('throws for a secret that is set but too short', () => {
-    expect(() => createEvidenceModule({ ...CONFIGURED, SESSION_SECRET: 'short' }, { admin })).toThrow(/at least 32/)
-  })
-
-  it('returns the login, evidence, app and repo routers when configured', () => {
-    expect(moduleWith().routers).toHaveLength(4)
+  it('returns the evidence, app and repo routers when configured, and no login router', async () => {
+    const m = moduleWith()
+    expect(m.routers).toHaveLength(3)
+    const app = express()
+    app.use('/api', ...m.routers)
+    expect((await request(app).post('/api/auth/login').send({})).status).toBe(404)
     expect(errors).not.toHaveBeenCalled()
   })
 
   it('warns once, and still starts, without a Groq key', () => {
     const m = moduleWith(undefined, { ...CONFIGURED, GROQ_API_KEY: undefined })
-    expect(m.routers).toHaveLength(4)
+    expect(m.routers).toHaveLength(3)
     expect(errors).toHaveBeenCalledTimes(1)
     expect(String(errors.mock.calls[0][0])).toContain('GROQ_API_KEY')
   })
 
   it('logs one startup line, and still starts, without EVIDENCE_SECRET_KEY', () => {
     const m = moduleWith(undefined, { ...CONFIGURED, EVIDENCE_SECRET_KEY: undefined })
-    expect(m.routers).toHaveLength(4)
+    expect(m.routers).toHaveLength(3)
     expect(errors).toHaveBeenCalledTimes(1)
     expect(errors.mock.calls[0]).toEqual([KEY_MISSING_LINE])
   })
 
   it.each(['not base64!', Buffer.alloc(16, 1).toString('base64')])('a malformed EVIDENCE_SECRET_KEY throws at module creation (%j)', (key) => {
     expect(() => moduleWith(undefined, { ...CONFIGURED, EVIDENCE_SECRET_KEY: key })).toThrow(/EVIDENCE_SECRET_KEY must be 32 random bytes/)
-    // Like a short SESSION_SECRET: a mistake to fix whatever else is missing, and the error names no key.
+    // A mistake to fix whatever else is missing, and the error names no key.
     expect(() => createEvidenceModule({ EVIDENCE_SECRET_KEY: key }, { admin })).toThrow(/EVIDENCE_SECRET_KEY/)
     let thrown: unknown = null
     try {
@@ -126,7 +150,7 @@ describe('createEvidenceModule', () => {
 })
 
 describe('how the module is wired', () => {
-  const sessions = createSessions(CONFIGURED.SESSION_SECRET)
+  const sessions = createSessions(CONFIGURED.JWT_SECRET)
   const head = { Authorization: `Bearer ${sessions.sign({ userId: 'u-aud', role: 'auditor' })}` }
 
   function build(env: Record<string, string | undefined>, runJob = vi.fn(async () => undefined), audit = makeAudit()) {
@@ -155,7 +179,7 @@ describe('how the module is wired', () => {
   }
 
   it('starts a run on the queue with the key, the model and a guard built from the allow-list', async () => {
-    const env = { ...CONFIGURED, GROQ_MODEL: 'my-model', EVIDENCE_ALLOWED_PRIVATE_HOSTS: ' localhost:8080 , other.test:9 ' }
+    const env = { ...CONFIGURED, EVIDENCE_GROQ_MODEL: 'my-model', GROQ_MODEL: 'llama-3.1-8b-instant', EVIDENCE_ALLOWED_PRIVATE_HOSTS: ' localhost:8080 , other.test:9 ' }
     const { app, repo, runJob } = build(env)
     await repo.saveSource('p-1', ['https://example.com/'], 'u-aud')
     const res = await request(app).post('/api/projects/p-1/evidence-runs').set(head)
@@ -190,8 +214,8 @@ describe('how the module is wired', () => {
     expect(res.body.error).toBe('Nothing is unfinished.')
   })
 
-  it('defaults the model to openai/gpt-oss-120b when GROQ_MODEL is unset', async () => {
-    const { app, repo, runJob } = build({ ...CONFIGURED, GROQ_MODEL: undefined })
+  it('defaults the model to openai/gpt-oss-120b when EVIDENCE_GROQ_MODEL is unset, ignoring GROQ_MODEL', async () => {
+    const { app, repo, runJob } = build({ ...CONFIGURED, GROQ_MODEL: 'llama-3.1-8b-instant' })
     await repo.saveSource('p-1', ['https://example.com/'], 'u-aud')
     await request(app).post('/api/projects/p-1/evidence-runs').set(head)
     await vi.waitFor(() => expect(runJob).toHaveBeenCalled())
@@ -259,7 +283,17 @@ describe('how the module is wired', () => {
     expect((await request(open.app).post('/api/projects/p-1/evidence-sources').set(head).send(body)).status).toBe(200)
   })
 
-  it('throws for a short secret even when the service key is also missing', () => {
-    expect(() => createEvidenceModule({ SESSION_SECRET: 'short' }, { admin })).toThrow(/at least 32/)
+  it('accepts a token from the app login: { userId, userName, role } signed with JWT_SECRET', async () => {
+    const { app } = build(CONFIGURED)
+    const token = jwt.sign({ userId: 'u-aud', userName: 'Ada', role: 'auditor' }, CONFIGURED.JWT_SECRET, { expiresIn: '12h' })
+    const res = await request(app).get('/api/projects/p-1/ai-suggestions').set({ Authorization: `Bearer ${token}` })
+    expect(res.status).toBe(200)
+  })
+
+  it('rejects an app-login-shaped token signed with another secret', async () => {
+    const { app } = build(CONFIGURED)
+    const token = jwt.sign({ userId: 'u-aud', userName: 'Ada', role: 'auditor' }, 'b'.repeat(48), { expiresIn: '12h' })
+    const res = await request(app).get('/api/projects/p-1/ai-suggestions').set({ Authorization: `Bearer ${token}` })
+    expect(res.status).toBe(401)
   })
 })

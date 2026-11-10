@@ -1,4 +1,4 @@
-import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
   ShieldCheckIcon as ShieldCheck,
@@ -6,10 +6,14 @@ import {
   FolderOpenIcon as FolderOpen,
   ListChecksIcon as ListChecks,
   ChartBarIcon as ChartBar,
-  SignOutIcon as SignOut,
   XIcon,
   MagicWandIcon as Wand,
+  CaretRightIcon as CaretRight,
+  CaretDoubleLeftIcon as CaretDoubleLeft,
+  CaretDoubleRightIcon as CaretDoubleRight,
+  ClockIcon as Clock,
 } from '@phosphor-icons/react'
+import type { Icon } from '@phosphor-icons/react'
 import { useStore } from '../store/useStore'
 
 const container = {
@@ -21,11 +25,23 @@ const navItem = {
   show: { opacity: 1, x: 0, transition: { type: 'spring', stiffness: 100, damping: 20 } },
 }
 
-export default function Sidebar({ onClose }: { onClose?: () => void }) {
-  const { users, currentUserId, projects, logout } = useStore()
+interface NavEntry {
+  to: string
+  label: string
+  icon: Icon
+  exact: boolean
+}
+
+interface Props {
+  collapsed: boolean
+  onToggle?: () => void
+  onClose?: () => void
+}
+
+export default function Sidebar({ collapsed, onToggle, onClose }: Props) {
+  const { users, currentUserId, projects } = useStore()
   const user = users.find((u) => u.id === currentUserId)
   const location = useLocation()
-  const navigate = useNavigate()
 
   const isAdmin = user?.role === 'admin'
   const isAuditor = user?.role === 'auditor'
@@ -33,133 +49,146 @@ export default function Sidebar({ onClose }: { onClose?: () => void }) {
   const nextDue = [...projects]
     .filter((p) => (p.status === 'in_progress' || p.status === 'under_review') && p.dueDate)
     .sort((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0]
+  const nextDueLabel = nextDue
+    ? new Date(`${nextDue.dueDate!.slice(0, 10)}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+    : ''
 
-  const NAV = isAdmin
-    ? [
-        { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
-        { to: '/generator', label: 'Generator', icon: Wand, exact: false },
-      ]
+  const dashboard: NavEntry = { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true }
+  const audits: NavEntry = { to: '/projects', label: 'Audits', icon: FolderOpen, exact: false }
+  const reports: NavEntry = { to: '/reports', label: 'Reports', icon: ChartBar, exact: false }
+  const guidelines: NavEntry = { to: '/guidelines', label: 'Guidelines', icon: ListChecks, exact: false }
+  const generator: NavEntry = { to: '/generator', label: 'Generator', icon: Wand, exact: false }
+
+  const groups: { title: string; items: NavEntry[] }[] = isAdmin
+    ? [{ title: 'Workspace', items: [dashboard] }, { title: 'Frameworks', items: [generator] }]
     : isAuditor
-    ? [
-        { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
-        { to: '/projects', label: 'Audits', icon: FolderOpen, exact: false },
-        { to: '/reports', label: 'Reports', icon: ChartBar, exact: false },
-      ]
-    : [
-        { to: '/dashboard', label: 'Dashboard', icon: SquaresFour, exact: true },
-        { to: '/projects', label: 'Audits', icon: FolderOpen, exact: false },
-        { to: '/guidelines', label: 'Guidelines', icon: ListChecks, exact: false },
-        { to: '/reports', label: 'Reports', icon: ChartBar, exact: false },
-      ]
-
-  function handleLogout() {
-    logout()
-    navigate('/', { replace: true })
-  }
+    ? [{ title: 'Workspace', items: [dashboard, audits, reports] }]
+    : [{ title: 'Workspace', items: [dashboard, audits, reports] }, { title: 'Frameworks', items: [guidelines] }]
 
   return (
-    <aside className="w-72 shrink-0 h-screen bg-sidebar-bg flex flex-col overflow-y-auto">
-      {/* Logo */}
-      <div className="px-6 pt-7 pb-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[rgba(255,255,255,0.22)] flex items-center justify-center shrink-0">
-              <ShieldCheck size={18} weight="bold" className="text-on-dark" />
-            </div>
-            <span className="text-on-dark font-bold tracking-tight text-lg">SafetyAudit</span>
+    <aside
+      className={[
+        'h-full shrink-0 bg-sidebar-bg flex flex-col overflow-y-auto overflow-x-hidden overscroll-none',
+        'transition-[width] duration-200 ease-out motion-reduce:transition-none',
+        collapsed ? 'w-[76px]' : 'w-64',
+      ].join(' ')}
+    >
+      <div className={`flex items-center h-16 shrink-0 ${collapsed ? 'justify-center' : 'justify-between px-5'}`}>
+        <NavLink
+          to="/dashboard"
+          onClick={onClose}
+          aria-label="SafetyAudit home"
+          className="flex items-center gap-3 rounded-xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+        >
+          <div className="w-9 h-9 rounded-xl bg-[rgba(255,255,255,0.22)] flex items-center justify-center shrink-0">
+            <ShieldCheck size={18} weight="bold" className="text-on-dark" />
           </div>
-          {/* Close button — mobile only */}
-          {onClose && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="lg:hidden p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-            >
-              <XIcon size={18} weight="bold" />
-            </button>
-          )}
-        </div>
-        <p className="text-sidebar-muted text-xs mt-2 font-mono tracking-[0.1em] uppercase">
-          Child Safety Platform
-        </p>
+          {!collapsed && <span className="text-on-dark font-bold tracking-tight text-lg">SafetyAudit</span>}
+        </NavLink>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close menu"
+            className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+          >
+            <XIcon size={18} weight="bold" />
+          </button>
+        )}
       </div>
 
-      <div className="mx-5 border-t border-sidebar-border" />
+      <div className="mx-4 border-t border-sidebar-border" />
 
-      {/* Nav */}
-      <nav className="flex-1 px-4 py-5">
-        <motion.ul variants={container} initial="hidden" animate="show" className="space-y-1 list-none m-0 p-0">
-          {NAV.map(({ to, label, icon: Icon, exact }) => {
-            const active = exact
-              ? location.pathname === to
-              : location.pathname.startsWith(to)
-            return (
-              <motion.li key={to} variants={navItem}>
-                <NavLink
-                  to={to}
-                  onClick={onClose}
-                  className={[
-                    'flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all duration-150',
-                    'focus-visible:outline-2 focus-visible:outline-primary-muted focus-visible:outline-offset-1',
-                    active
-                      ? 'bg-sidebar-item-active text-on-dark'
-                      : 'text-sidebar-text hover:text-sidebar-text-hover hover:bg-[var(--color-sidebar-item-hover)]',
-                  ].join(' ')}
-                >
-                  <Icon
-                    size={20}
-                    weight={active ? 'fill' : 'regular'}
-                    className={active ? 'text-on-dark' : ''}
-                  />
-                  <span>{label}</span>
-                </NavLink>
-              </motion.li>
-            )
-          })}
-        </motion.ul>
+      <nav className={`flex-1 py-5 ${collapsed ? 'px-3' : 'px-4'}`} aria-label="Main">
+        {groups.map((group, gIdx) => (
+          <div key={group.title} className={gIdx > 0 ? 'mt-6' : ''}>
+            {collapsed ? (
+              gIdx > 0 && <div className="mx-2 mb-4 border-t border-sidebar-border" />
+            ) : (
+              <p className="px-3 mb-2 text-2xs text-sidebar-muted font-mono tracking-widest uppercase">{group.title}</p>
+            )}
+            <motion.ul variants={container} initial="hidden" animate="show" className="space-y-1 list-none m-0 p-0">
+              {group.items.map(({ to, label, icon: Icon, exact }) => {
+                const active = exact ? location.pathname === to : location.pathname.startsWith(to)
+                return (
+                  <motion.li key={to} variants={navItem}>
+                    <NavLink
+                      to={to}
+                      onClick={onClose}
+                      title={collapsed ? label : undefined}
+                      aria-label={collapsed ? label : undefined}
+                      className={[
+                        'flex items-center gap-3 rounded-xl text-sm font-medium transition-colors duration-150',
+                        'focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-1',
+                        collapsed ? 'justify-center h-11' : 'px-3 py-2.5',
+                        active
+                          ? 'bg-white text-primary shadow-sm'
+                          : 'text-sidebar-text hover:text-sidebar-text-hover hover:bg-[var(--color-sidebar-item-hover)]',
+                      ].join(' ')}
+                    >
+                      <Icon size={20} weight={active ? 'fill' : 'regular'} className="shrink-0" />
+                      {!collapsed && (
+                        <>
+                          <span className="flex-1">{label}</span>
+                          <CaretRight size={12} weight="bold" className={active ? 'text-primary/60' : 'opacity-40'} />
+                        </>
+                      )}
+                    </NavLink>
+                  </motion.li>
+                )
+              })}
+            </motion.ul>
+          </div>
+        ))}
 
         {!isAdmin && nextDue && (
           <div className="mt-7">
-            <p className="px-4 text-xs text-sidebar-muted font-mono tracking-widest uppercase mb-2">
-              Next deadline
-            </p>
-            <NavLink
-              to={`/projects/${nextDue.id}`}
-              className="block px-4 py-3 rounded-xl bg-[var(--color-sidebar-item-hover)] hover:bg-sidebar-item-active transition-colors"
-            >
-              <p className="text-sidebar-text-hover text-sm font-semibold truncate">{nextDue.name}</p>
-              <p className="text-sidebar-muted text-xs mt-0.5">
-                Due {new Date(nextDue.dueDate!).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-              </p>
-            </NavLink>
+            {collapsed ? (
+              <NavLink
+                to={`/projects/${nextDue.id}`}
+                title={`Next deadline: ${nextDue.name}, due ${nextDueLabel}`}
+                aria-label={`Next deadline: ${nextDue.name}, due ${nextDueLabel}`}
+                className="flex items-center justify-center h-11 rounded-xl bg-[var(--color-sidebar-item-hover)] text-sidebar-text-hover hover:bg-sidebar-item-active transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+              >
+                <Clock size={20} />
+              </NavLink>
+            ) : (
+              <NavLink
+                to={`/projects/${nextDue.id}`}
+                onClick={onClose}
+                className="block rounded-2xl bg-[var(--color-sidebar-item-hover)] hover:bg-sidebar-item-active px-4 py-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+              >
+                <div className="flex items-center gap-2 text-sidebar-muted">
+                  <Clock size={14} weight="bold" />
+                  <p className="text-2xs font-mono tracking-widest uppercase">Next deadline</p>
+                </div>
+                <p className="text-sidebar-text-hover text-sm font-semibold truncate mt-2">{nextDue.name}</p>
+                <p className="text-sidebar-muted text-xs mt-0.5">Due {nextDueLabel}</p>
+              </NavLink>
+            )}
           </div>
         )}
       </nav>
 
-      {/* User profile */}
-      <div className="px-4 pb-5 pt-3 border-t border-sidebar-border">
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-[var(--color-sidebar-item-hover)] transition-colors group focus-visible:outline-2 focus-visible:outline-[rgba(255,255,255,0.5)] focus-visible:outline-offset-1"
-        >
-          <div
-            className={`w-9 h-9 rounded-full ${user?.color ?? 'bg-slate-700'} flex items-center justify-center shrink-0`}
+      {onToggle && (
+        <div className={`py-4 border-t border-sidebar-border ${collapsed ? 'px-3' : 'px-4'}`}>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed}
+            title={`${collapsed ? 'Expand' : 'Collapse'} sidebar (Ctrl+B)`}
+            className={[
+              'w-full flex items-center gap-3 rounded-xl text-sm font-medium text-sidebar-text hover:text-sidebar-text-hover hover:bg-[var(--color-sidebar-item-hover)] transition-colors',
+              'focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-1',
+              collapsed ? 'justify-center h-11' : 'px-3 py-2.5',
+            ].join(' ')}
           >
-            <span className="text-on-dark text-xs font-bold">{user?.initials}</span>
-          </div>
-          <div className="flex-1 min-w-0 text-left">
-            <p className="text-sidebar-text-hover text-sm font-semibold truncate">{user?.name}</p>
-            <p className="text-sidebar-muted text-xs capitalize">
-              {user?.role.replace('_', ' ')}
-            </p>
-          </div>
-          <SignOut
-            size={16}
-            className="text-sidebar-muted group-hover:text-sidebar-text transition-colors shrink-0"
-          />
-        </button>
-      </div>
+            {collapsed ? <CaretDoubleRight size={18} /> : <CaretDoubleLeft size={18} />}
+            {!collapsed && <span>Collapse</span>}
+          </button>
+        </div>
+      )}
     </aside>
   )
 }

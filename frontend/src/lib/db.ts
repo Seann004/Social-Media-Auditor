@@ -1,8 +1,7 @@
 import type { AuditStatus, ChecklistItemStatus, Platform, Severity, SubmissionStatus, UserRole } from '../types'
+import { useStore } from '../store/useStore'
 
 export const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
-
-// ─── DB row types ─────────────────────────────────────────────────────────────
 
 export interface DbProject {
   projectId: string
@@ -57,8 +56,18 @@ export interface DbAuditResult {
   result: ChecklistItemStatus
   notes: string | null
   findings: string | null
-  evidenceImages: { url: string; name: string }[] | null
   timeSubmitted: string
+}
+
+export interface ItemEvidence {
+  itemId: string
+  userId: string
+  images: { url: string; name: string }[]
+}
+
+export async function fetchEvidenceForItems(projectId: string, itemIds: string[]): Promise<ItemEvidence[]> {
+  if (itemIds.length === 0) return []
+  return request<ItemEvidence[]>(`/projects/${projectId}/evidence?itemIds=${itemIds.map(encodeURIComponent).join(',')}`)
 }
 
 export interface DbComplianceScore {
@@ -71,6 +80,7 @@ export interface DbComplianceScore {
   compliantItems: number
   nonCompliantItems: number
   notApplicableItems: number
+  weightedCompliant: number
   scorePercentage: number
   timeCalculated: string
 }
@@ -98,39 +108,46 @@ export interface DbUser {
   role: UserRole
 }
 
-// Helper for HTTP requests
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = useStore.getState().authToken
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options?.headers,
     },
   })
   if (!res.ok) {
     const errText = await res.text()
-    throw new Error(errText || res.statusText)
+    if (res.status === 401 && useStore.getState().isAuthenticated && path !== '/auth/login') {
+      useStore.getState().logout()
+    }
+    let message = errText || res.statusText
+    try {
+      const parsed = JSON.parse(errText)
+      if (parsed?.error) message = parsed.error
+    } catch {
+    }
+    throw new Error(message)
   }
   return res.json()
 }
 
-/**
- * Asks the backend for a session token. `hashedPassword` is the same SHA-256 value the login RPC receives.
- * Rejects on any failure, so callers decide what a missing token means.
- */
-export async function createSession(email: string, hashedPassword: string): Promise<string> {
-  const res = await request<{ token?: unknown }>('/auth/login', {
+export async function login(email: string, hashedPassword: string): Promise<{
+  token: string
+  user: { userId: string; userName: string; role: UserRole }
+}> {
+  return request('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password: hashedPassword }),
   })
-  if (typeof res.token !== 'string' || res.token === '') throw new Error('The server did not return a session token')
-  return res.token
 }
 
 // ─── Projects ─────────────────────────────────────────────────────────────────
 
-export async function fetchUserProjects(userId: string): Promise<DbProject[]> {
-  return request<DbProject[]>(`/projects?userId=${encodeURIComponent(userId)}`)
+export async function fetchUserProjects(_userId: string): Promise<DbProject[]> {
+  return request<DbProject[]>('/projects')
 }
 
 export async function fetchProjectDetails(projectId: string) {
@@ -170,12 +187,55 @@ export async function updateProject(projectId: string, updates: {
   })
 }
 
-// Returns average scorePercentage per projectId across all its guidelines
+export async function activateProject(projectId: string): Promise<void> {
+  await request(`/projects/${projectId}/activate`, { method: 'POST' })
+}
+
+export interface ProjectComplianceSummary {
+  percentage: number
+  answered: number
+  total: number
+}
+
 export async function fetchProjectComplianceSummary(
   projectIds: string[]
-): Promise<Record<string, number>> {
+): Promise<Record<string, ProjectComplianceSummary>> {
   if (projectIds.length === 0) return {}
-  return request<Record<string, number>>(`/projects/compliance-summary?ids=${projectIds.join(',')}`)
+  return request<Record<string, ProjectComplianceSummary>>(`/projects/compliance-summary?ids=${projectIds.join(',')}`)
+}
+
+export interface ProjectReliability {
+  kappa: number | null
+  sharedItems: number
+  raterPair: [string, string] | null
+}
+
+export async function fetchProjectReliability(projectId: string): Promise<ProjectReliability> {
+  return request<ProjectReliability>(`/projects/${projectId}/reliability`)
+}
+
+export interface DbResolution {
+  itemId: string
+  resolvedBy: string
+  resolvedStatus: ChecklistItemStatus
+  notes: string | null
+  resolvedAt: string
+}
+
+export async function fetchResolutions(projectId: string): Promise<DbResolution[]> {
+  return request<DbResolution[]>(`/projects/${projectId}/resolutions`)
+}
+
+export async function resolveDisagreement(
+  projectId: string,
+  itemId: string,
+  status: ChecklistItemStatus,
+  notes: string = ''
+): Promise<void> {
+  await request(`/projects/${projectId}/results/${itemId}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ status, notes }),
+  })
 }
 
 export async function deleteProject(projectId: string): Promise<void> {
@@ -183,8 +243,6 @@ export async function deleteProject(projectId: string): Promise<void> {
     method: 'DELETE',
   })
 }
-
-// ─── Project Members ─────────────────────────────────────────────────
 
 export async function addProjectMember(projectId: string, userId: string): Promise<void> {
   await request(`/projects/${projectId}/members/add`, {
@@ -206,8 +264,6 @@ export async function syncProjectMembers(projectId: string, userIds: string[]): 
   })
 }
 
-// ─── Project Guidelines ────────────────────────────────────────────────
-
 export async function syncProjectGuidelines(projectId: string, guidelineIds: string[]): Promise<void> {
   await request(`/projects/${projectId}/guidelines`, {
     method: 'POST',
@@ -215,16 +271,12 @@ export async function syncProjectGuidelines(projectId: string, guidelineIds: str
   })
 }
 
-// ─── Project Scope / Features ─────────────────────────────────────────
-
 export async function syncProjectScope(projectId: string, features: string[]): Promise<void> {
   await request(`/projects/${projectId}/scope`, {
     method: 'POST',
     body: JSON.stringify({ features }),
   })
 }
-
-// ─── Guidelines ───────────────────────────────────────────────────────────────
 
 export async function fetchGuidelines(): Promise<DbGuideline[]> {
   return request<DbGuideline[]>('/guidelines')
@@ -266,8 +318,6 @@ export async function deleteGuideline(guidelineId: string): Promise<void> {
 export async function fetchGuidelineItems(guidelineId: string): Promise<DbChecklistItem[]> {
   return request<DbChecklistItem[]>(`/guidelines/${guidelineId}/items`)
 }
-
-// ─── Checklist Items ──────────────────────────────────────────────────────────
 
 export async function fetchProjectChecklistItems(projectId: string): Promise<DbChecklistItem[]> {
   return request<DbChecklistItem[]>(`/projects/${projectId}/checklist`)
@@ -334,8 +384,6 @@ export async function toggleProjectChecklistCategory(projectId: string, input: {
   })
 }
 
-// ─── Audit Results ───────────────────────────────────────────────────
-
 export async function fetchAuditResults(projectId: string): Promise<DbAuditResult[]> {
   return request<DbAuditResult[]>(`/projects/${projectId}/results`)
 }
@@ -347,17 +395,12 @@ export async function upsertAuditResult(
   guidelineId: string,
   result: ChecklistItemStatus,
   notes: string = ''
-): Promise<{ answered: number; compliant: number; nonCompliant: number; notApplicable: number; percentage: number; total: number }> {
-  return request<{ answered: number; compliant: number; nonCompliant: number; notApplicable: number; percentage: number; total: number }>(
-    `/projects/${projectId}/results`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ itemId, userId, guidelineId, result, notes }),
-    }
-  )
+): Promise<void> {
+  await request(`/projects/${projectId}/results`, {
+    method: 'POST',
+    body: JSON.stringify({ itemId, userId, guidelineId, result, notes }),
+  })
 }
-
-// ─── Submission Workflow ──────────────────────────────────────
 
 export async function submitForReview(projectId: string): Promise<void> {
   await request(`/projects/${projectId}/submit`, {
@@ -372,16 +415,12 @@ export async function reviewSubmission(projectId: string, approved: boolean, rem
   })
 }
 
-// ─── Compliance Scores ──────────────────────────────────────
-
 export async function fetchComplianceScores(projectId: string): Promise<DbComplianceScore[]> {
   return request<DbComplianceScore[]>(`/projects/${projectId}/compliance-scores`)
 }
 
-// ─── Audit Reports ────────────────────────────────────────────
-
 export async function fetchAuditReports(
-  userId: string,
+  _userId: string,
   filters?: {
     projectStatusFilter?: AuditStatus
     search?: string
@@ -389,23 +428,21 @@ export async function fetchAuditReports(
     dateTo?: string
   }
 ): Promise<DbAuditReport[]> {
-  let query = `userId=${encodeURIComponent(userId)}`
+  let query = ''
   if (filters?.projectStatusFilter) query += `&projectStatusFilter=${filters.projectStatusFilter}`
   if (filters?.search) query += `&search=${encodeURIComponent(filters.search)}`
-  if (filters?.dateFrom) query += `&dateFrom=${filters.dateFrom}`
-  if (filters?.dateTo) query += `&dateTo=${filters.dateTo}`
-  return request<DbAuditReport[]>(`/reports?${query}`)
+  if (filters?.dateFrom) query += `&dateFrom=${encodeURIComponent(filters.dateFrom)}`
+  if (filters?.dateTo) query += `&dateTo=${encodeURIComponent(filters.dateTo)}`
+  return request<DbAuditReport[]>(`/reports?${query.replace(/^&/, '')}`)
 }
 
-export async function createAuditReport(projectId: string, userId: string): Promise<string> {
+export async function createAuditReport(projectId: string): Promise<string> {
   const res = await request<{ reportId: string }>('/reports', {
     method: 'POST',
-    body: JSON.stringify({ projectId, userId }),
+    body: JSON.stringify({ projectId }),
   })
   return res.reportId
 }
-
-// ─── Users ────────────────────────────────────────────────────────────────────
 
 export async function fetchAllUsers(): Promise<DbUser[]> {
   return request<DbUser[]>('/users')
@@ -417,14 +454,12 @@ export async function createUser(user: {
   userEmail: string
   role: UserRole
   userPassword?: string
-}): Promise<void> {
-  await request('/users', {
+}): Promise<{ success: boolean; token: string }> {
+  return request('/users', {
     method: 'POST',
     body: JSON.stringify(user),
   })
 }
-
-// ─── Groq Llama Integration ──────────────────────────────────────────
 
 export async function processTextChunk(textChunk: string, platform: string): Promise<{
   items: any[]
@@ -448,5 +483,101 @@ export async function mergeChecklistItems(items: any[], platform: string): Promi
   return request<any>('/generator/merge-items', {
     method: 'POST',
     body: JSON.stringify({ items, platform }),
+  })
+}
+
+export type MappingRelation = 'equivalent' | 'partial'
+export type MappingStatus = 'suggested' | 'confirmed' | 'rejected'
+
+export interface MappedItem {
+  itemId: string
+  guidelineId: string
+  guidelineName: string
+  category: string
+  itemCode: string | null
+  text: string
+  reference: string | null
+  clause: string | null
+}
+
+export interface ItemMapping {
+  mappingId: string
+  relation: MappingRelation
+  confidence: number | null
+  rationale: string | null
+  status: MappingStatus
+  createdAt: string
+  reviewedAt: string | null
+  itemA: MappedItem
+  itemB: MappedItem
+}
+
+export interface MappingCoverage {
+  guidelines: { guidelineId: string; name: string; totalItems: number; linkedItems: number }[]
+  pairs: { guidelineA: string; guidelineB: string; count: number }[]
+  mappings: Record<MappingStatus, number>
+  decisions: { accepted: number; dismissed: number }
+}
+
+export interface AnswerSuggestion {
+  itemId: string
+  guidelineId: string
+  suggestedStatus: ChecklistItemStatus
+  relation: MappingRelation
+  sourceProjectId: string
+  sourceProjectTitle: string
+  sourceGuideline: string
+  sourceItemId: string
+  sourceItemCode: string | null
+  findings: string | null
+  evidenceCount: number
+  answeredAt: string
+  otherSources: number
+}
+
+export async function generateMappings(guidelineId: string): Promise<{ checked: number; suggested: number; failedBatches: number }> {
+  return request(`/guidelines/${guidelineId}/mappings/generate`, { method: 'POST' })
+}
+
+export async function fetchMappings(guidelineId?: string): Promise<ItemMapping[]> {
+  const query = guidelineId ? `?guidelineId=${encodeURIComponent(guidelineId)}` : ''
+  return request<ItemMapping[]>(`/mappings${query}`)
+}
+
+export async function reviewMapping(mappingId: string, status: MappingStatus, relation?: MappingRelation): Promise<void> {
+  await request(`/mappings/${mappingId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status, relation }),
+  })
+}
+
+export async function fetchMappingCoverage(): Promise<MappingCoverage> {
+  return request<MappingCoverage>('/mappings/coverage')
+}
+
+export async function fetchAnswerSuggestions(projectId: string): Promise<AnswerSuggestion[]> {
+  return request<AnswerSuggestion[]>(`/projects/${projectId}/suggestions`)
+}
+
+export interface AcceptedAnswer {
+  itemId: string
+  result: ChecklistItemStatus
+  notes: string | null
+  findings: string | null
+  timeSubmitted: string
+}
+
+export async function acceptAnswerSuggestions(projectId: string, itemIds: string[]): Promise<AcceptedAnswer[]> {
+  const res = await request<{ accepted: AcceptedAnswer[] }>(`/projects/${projectId}/suggestions/accept`, {
+    method: 'POST',
+    body: JSON.stringify({ itemIds }),
+  })
+  return res.accepted
+}
+
+export async function dismissAnswerSuggestion(projectId: string, itemId: string, sourceItemId: string): Promise<void> {
+  await request(`/projects/${projectId}/suggestions/dismiss`, {
+    method: 'POST',
+    body: JSON.stringify({ itemId, sourceItemId }),
   })
 }

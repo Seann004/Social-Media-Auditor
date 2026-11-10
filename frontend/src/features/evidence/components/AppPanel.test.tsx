@@ -91,7 +91,7 @@ const change = (over: Partial<AppChangeView> = {}): AppChangeView => ({
 })
 
 beforeEach(() => {
-  useStore.setState({ sessionToken: null })
+  useStore.setState({ authToken: null })
   Object.values(m).forEach((fn) => fn.mockReset())
   m.getSources.mockResolvedValue({ source: null, permission: null })
   m.getLatestRun.mockResolvedValue({ run: null, pages: [] })
@@ -173,7 +173,7 @@ describe('App source in the evidence panel', () => {
     const user = userEvent.setup()
     const real = await vi.importActual<typeof import('../api')>('../api')
     m.updateTestAccount.mockImplementation(real.updateTestAccount)
-    useStore.setState({ sessionToken: 'tok' })
+    useStore.setState({ authToken: 'tok' })
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ account: account() }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     render(<Harness />)

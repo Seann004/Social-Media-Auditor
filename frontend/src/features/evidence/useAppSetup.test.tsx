@@ -20,9 +20,9 @@ const setup = (n: number): AppSetupResponse => ({
 
 beforeEach(() => {
   getAppSetup.mockReset()
-  useStore.setState({ sessionToken: 'tok' })
+  useStore.setState({ authToken: 'tok' })
 })
-afterEach(() => useStore.setState({ sessionToken: null }))
+afterEach(() => useStore.setState({ authToken: null }))
 
 describe('useAppSetup', () => {
   it('loads, then reloads on demand', async () => {

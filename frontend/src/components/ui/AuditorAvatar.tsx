@@ -7,9 +7,9 @@ interface Props {
 }
 
 const SIZES = {
-  xs: 'w-5 h-5 text-[8px]',
-  sm: 'w-6 h-6 text-[9px]',
-  md: 'w-8 h-8 text-[11px]',
+  xs: 'w-6 h-6 text-2xs',
+  sm: 'w-7 h-7 text-2xs',
+  md: 'w-9 h-9 text-2xs',
 }
 
 export default function AuditorAvatar({ user, size = 'sm', showName = false }: Props) {

@@ -128,7 +128,7 @@ describe('starting a run', () => {
     const re = await post(world, `${START}/${seed.run.id}/reassess`, {})
     expect(re.status).toBe(503)
     expect(world.enqueued).toEqual([])
-    const read = await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.auditor))
+    const read = await request(world.app).get(`/api/projects/${P1}/ai-suggestions`).set(world.auth(USERS.auditor))
     expect(read.status).toBe(200)
     expect(read.body.suggestions).toHaveLength(1)
   })

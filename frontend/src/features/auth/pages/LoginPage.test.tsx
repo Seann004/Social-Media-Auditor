@@ -1,29 +1,18 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { rpc, createSession } = vi.hoisted(() => ({ rpc: vi.fn(), createSession: vi.fn() }))
+const { login } = vi.hoisted(() => ({ login: vi.fn() }))
 
-vi.mock('../../../lib/supabase', () => ({ supabase: { rpc } }))
 vi.mock('../../../lib/crypto', () => ({ hashPassword: vi.fn(async () => 'hashed-password') }))
 vi.mock('../../../lib/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../lib/db')>()),
-  createSession,
+  login,
 }))
 
 import { useStore } from '../../../store/useStore'
 import LoginPage from './LoginPage'
-
-function deferred<T>() {
-  let resolve!: (v: T) => void
-  let reject!: (e: unknown) => void
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res
-    reject = rej
-  })
-  return { promise, resolve, reject }
-}
 
 async function signIn() {
   render(
@@ -42,84 +31,43 @@ async function signIn() {
 
 beforeEach(() => {
   localStorage.clear()
-  rpc.mockReset()
-  createSession.mockReset()
-  rpc.mockResolvedValue({ data: [{ userId: 'u1', userName: 'Alice A', role: 'auditor' }], error: null })
+  login.mockReset()
+  login.mockResolvedValue({ token: 'tok-1', user: { userId: 'u1', userName: 'Alice A', role: 'auditor' } })
   useStore.setState({
     isAuthenticated: false,
     currentUserId: '',
-    sessionToken: null,
+    authToken: null,
     users: [],
     initFromDb: vi.fn().mockResolvedValue(undefined),
   })
 })
 
-describe('LoginPage session token', () => {
-  it('asks for a session with the same email and hash the RPC received, then stores the token', async () => {
-    createSession.mockResolvedValue('tok-1')
+describe('LoginPage', () => {
+  it('signs in through the backend login with the normalised email and hash, and stores its one token', async () => {
     await signIn()
     await screen.findByText('Dashboard page')
-    expect(rpc).toHaveBeenCalledWith('verify_user_login', { p_email: 'alice@example.com', p_password: 'hashed-password' })
-    expect(createSession).toHaveBeenCalledWith('alice@example.com', 'hashed-password')
-    await waitFor(() => expect(useStore.getState().sessionToken).toBe('tok-1'))
+    expect(login).toHaveBeenCalledTimes(1)
+    expect(login).toHaveBeenCalledWith('alice@example.com', 'hashed-password')
+    const state = useStore.getState()
+    expect(state.isAuthenticated).toBe(true)
+    expect(state.currentUserId).toBe('u1')
+    // The same token serves the app API and the evidence API: there is no second session.
+    expect(state.authToken).toBe('tok-1')
+    expect('sessionToken' in state).toBe(false)
   })
 
-  it('navigates without waiting for createSession', async () => {
-    const pending = deferred<string>()
-    createSession.mockReturnValue(pending.promise)
-    await signIn()
-    await screen.findByText('Dashboard page')
-    expect(useStore.getState().sessionToken).toBeNull()
-    await act(async () => pending.resolve('late'))
-    expect(useStore.getState().sessionToken).toBe('late')
-  })
-
-  it('a rejected createSession does not stop login or navigation and leaves the token null', async () => {
-    createSession.mockRejectedValue(new Error('503'))
-    await signIn()
-    await screen.findByText('Dashboard page')
-    expect(useStore.getState().isAuthenticated).toBe(true)
-    expect(useStore.getState().sessionToken).toBeNull()
-  })
-
-  it('a createSession that throws at once does not stop login either', async () => {
-    createSession.mockImplementation(() => {
-      throw new Error('boom')
-    })
-    await signIn()
-    await screen.findByText('Dashboard page')
-    expect(useStore.getState().sessionToken).toBeNull()
-  })
-
-  it('discards a token that arrives after logout', async () => {
-    const pending = deferred<string>()
-    createSession.mockReturnValue(pending.promise)
-    await signIn()
-    await screen.findByText('Dashboard page')
-    act(() => useStore.getState().logout())
-    await act(async () => pending.resolve('late'))
-    expect(useStore.getState().sessionToken).toBeNull()
-    expect(useStore.getState().isAuthenticated).toBe(false)
-  })
-
-  it('discards a token that arrives after another user logged in', async () => {
-    const pending = deferred<string>()
-    createSession.mockReturnValue(pending.promise)
-    await signIn()
-    await screen.findByText('Dashboard page')
-    act(() => {
-      useStore.getState().logout()
-      useStore.getState().login('u2', 'Bob B', 'auditor')
-    })
-    await act(async () => pending.resolve('alice-late'))
-    expect(useStore.getState().sessionToken).toBeNull()
-    expect(useStore.getState().currentUserId).toBe('u2')
-  })
-
-  it('does not ask for a session when the login fails', async () => {
-    rpc.mockResolvedValue({ data: [], error: null })
+  it('shows one message and stays signed out when the login fails', async () => {
+    login.mockRejectedValue(new Error('Incorrect email or password.'))
     await signIn()
     await screen.findByText('Incorrect email or password.')
-    expect(createSession).not.toHaveBeenCalled()
+    expect(useStore.getState().isAuthenticated).toBe(false)
+    expect(useStore.getState().authToken).toBeNull()
+  })
+
+  it('logout clears the token', async () => {
+    await signIn()
+    await screen.findByText('Dashboard page')
+    useStore.getState().logout()
+    expect(useStore.getState().authToken).toBeNull()
   })
 })

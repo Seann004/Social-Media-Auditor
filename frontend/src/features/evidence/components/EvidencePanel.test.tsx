@@ -58,7 +58,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
-  useStore.setState({ sessionToken: null })
+  useStore.setState({ authToken: null })
   Object.values(m).forEach((fn) => fn.mockReset())
   m.getSources.mockResolvedValue(sources())
   m.getLatestRun.mockResolvedValue(latest(null))
@@ -291,7 +291,7 @@ describe('EvidencePanel', () => {
     expect(screen.queryByRole('button', { name: /^run/i })).toBeNull()
   })
 
-  it('recovers by itself when the session token arrives after the panel opened', async () => {
+  it('recovers by itself when the auth token arrives after the panel opened', async () => {
     const noToken = new EvidenceApiError(401, 'x')
     m.getLatestRun.mockRejectedValue(noToken)
     m.getSuggestions.mockRejectedValue(noToken)
@@ -302,7 +302,7 @@ describe('EvidencePanel', () => {
     m.getSuggestions.mockResolvedValue(results())
     m.getSources.mockResolvedValue(sources())
 
-    act(() => useStore.getState().setSessionToken('tok'))
+    act(() => useStore.setState({ authToken: 'tok' }))
 
     expect(await screen.findByLabelText(/website links/i)).toBeInTheDocument()
     expect(screen.queryByText('AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.')).toBeNull()

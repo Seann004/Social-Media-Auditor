@@ -1,12 +1,13 @@
-import { useEffect, useState, useCallback } from 'react'
-import { useStore } from '../store/useStore'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { useStore, reconcileResponse, type ResolutionInfo } from '../store/useStore'
 import * as db from '../lib/db'
 import type { AuditResponse, ChecklistItem } from '../types'
 
 interface ProjectData {
   checklistItems: ChecklistItem[]
   responses: Record<string, AuditResponse>
-  evidenceMap: Record<string, { url: string; name: string }[]>
+  allResponses: Record<string, AuditResponse[]>
+  resolutions: Record<string, ResolutionInfo>
   loading: boolean
   error: string | null
   reload: () => void
@@ -18,18 +19,35 @@ export function useProjectData(projectId: string | undefined): ProjectData {
   const [error, setError] = useState<string | null>(null)
   const [items, setItems] = useState<ChecklistItem[]>([])
   const [responses, setResponses] = useState<Record<string, AuditResponse>>({})
-  const [evidenceMap, setEvidenceMap] = useState<Record<string, { url: string; name: string }[]>>({})
+  const [allResponses, setAllResponses] = useState<Record<string, AuditResponse[]>>({})
+  const [resolutions, setResolutions] = useState<Record<string, ResolutionInfo>>({})
+  const loadGen = useRef(0)
 
   const load = useCallback(async () => {
+    const myGen = ++loadGen.current
     if (!projectId || !currentUserId) return
     setLoading(true)
     setError(null)
     try {
-      const [dbItems, dbResults, projectDetails] = await Promise.all([
+      const [dbItems, dbResults, projectDetails, dbResolutions] = await Promise.all([
         db.fetchProjectChecklistItems(projectId),
         db.fetchAuditResults(projectId),
         db.fetchProjectDetails(projectId),
+        db.fetchResolutions(projectId),
       ])
+
+      // A newer load (project id changed, reload, logout) has started; drop this stale response.
+      if (myGen !== loadGen.current) return
+
+      const resolutionMap: Record<string, ResolutionInfo> = {}
+      for (const r of dbResolutions) {
+        resolutionMap[`${projectId}__${r.itemId}`] = {
+          status: r.resolvedStatus,
+          resolvedBy: r.resolvedBy,
+          notes: r.notes ?? undefined,
+          resolvedAt: r.resolvedAt?.split('T')[0] ?? '',
+        }
+      }
 
       const mapped: ChecklistItem[] = dbItems.map((i) => ({
         id: i.itemId,
@@ -46,10 +64,10 @@ export function useProjectData(projectId: string | undefined): ProjectData {
         answerOptions: i.answerOptions ?? undefined,
       }))
 
-      const respMap: Record<string, AuditResponse> = {}
-      const evMap: Record<string, { url: string; name: string }[]> = {}
+      const grouped = new Map<string, AuditResponse[]>()
       for (const r of dbResults) {
-        respMap[`${projectId}__${r.itemId}`] = {
+        const key = `${projectId}__${r.itemId}`
+        const resp: AuditResponse = {
           id: r.resultId,
           projectId: r.projectId,
           checklistItemId: r.itemId,
@@ -59,20 +77,26 @@ export function useProjectData(projectId: string | undefined): ProjectData {
           auditorId: r.userId,
           updatedAt: r.timeSubmitted?.split('T')[0] ?? '',
         }
-        if (r.evidenceImages && r.evidenceImages.length > 0) {
-          evMap[r.itemId] = r.evidenceImages
-        }
+        if (!grouped.has(key)) grouped.set(key, [])
+        grouped.get(key)!.push(resp)
+      }
+
+      const respMap: Record<string, AuditResponse> = {}
+      const allRespMap: Record<string, AuditResponse[]> = {}
+      for (const [key, rows] of grouped) {
+        allRespMap[key] = rows
+        const reconciled = reconcileResponse(rows, resolutionMap[key]?.status)
+        if (reconciled) respMap[key] = reconciled
       }
 
       setItems(mapped)
       setResponses(respMap)
-      setEvidenceMap(evMap)
+      setAllResponses(allRespMap)
+      setResolutions(resolutionMap)
 
-      // Sync into the store so getProjectScore / getCategoryScore work
       useStore.setState((state) => {
         const untouched = state.checklistItems.filter((ci) => !mapped.some((m) => m.id === ci.id))
         
-        // Map project guidelines
         const mappedGuidelines = (projectDetails?.guidelines || []).map((g: any) => ({
           id: g.guidelineId,
           name: g.guidelineName,
@@ -88,10 +112,8 @@ export function useProjectData(projectId: string | undefined): ProjectData {
           originalGuidelineId: g.originalGuidelineId || null
         }))
 
-        // Merge guidelines
         const otherGuidelines = state.guidelines.filter(g => !mappedGuidelines.some(mg => mg.id === g.id))
 
-        // Update project in projects list
         const updatedProjects = state.projects.map((p) => {
           if (p.id === projectId) {
             return {
@@ -107,18 +129,21 @@ export function useProjectData(projectId: string | undefined): ProjectData {
         return {
           checklistItems: [...untouched, ...mapped],
           responses: { ...state.responses, ...respMap },
+          allResponses: { ...state.allResponses, ...allRespMap },
+          resolutions: { ...state.resolutions, ...resolutionMap },
           guidelines: [...otherGuidelines, ...mappedGuidelines],
           projects: updatedProjects,
         }
       })
     } catch (err) {
-      setError(String(err))
+      if (myGen !== loadGen.current) return
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setLoading(false)
+      if (myGen === loadGen.current) setLoading(false)
     }
   }, [projectId, currentUserId])
 
   useEffect(() => { load() }, [load])
 
-  return { checklistItems: items, responses, evidenceMap, loading, error, reload: load }
+  return { checklistItems: items, responses, allResponses, resolutions, loading, error, reload: load }
 }

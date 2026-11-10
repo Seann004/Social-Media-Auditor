@@ -4,9 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 const ITEMS = [
-  { id: 'i1', guidelineId: 'g1', category: 'Alpha', text: 'Item one', severity: 'high' },
-  { id: 'i2', guidelineId: 'g1', category: 'Alpha', text: 'Item two', severity: 'high' },
-  { id: 'i3', guidelineId: 'g1', category: 'Beta', text: 'Item three', severity: 'high' },
+  { id: 'i1', guidelineId: 'g1', category: 'Alpha', text: 'Item one', severity: 'major', itemCode: 'C1' },
+  { id: 'i2', guidelineId: 'g1', category: 'Alpha', text: 'Item two', severity: 'major', itemCode: 'C2' },
+  { id: 'i3', guidelineId: 'g1', category: 'Beta', text: 'Item three', severity: 'major', itemCode: 'C3' },
 ]
 vi.mock('../../../hooks/useProjectData', () => ({
   useProjectData: () => ({ checklistItems: ITEMS, loading: false, error: null, reload: vi.fn(), evidenceMap: {}, responses: {} }),
@@ -14,10 +14,13 @@ vi.mock('../../../hooks/useProjectData', () => ({
 vi.mock('../../../lib/db', async (orig) => ({
   ...(await orig<typeof import('../../../lib/db')>()),
   fetchProjectComplianceSummary: vi.fn(),
-  updateProject: vi.fn(),
+  activateProject: vi.fn(),
   upsertAuditResult: vi.fn(),
   saveAuditFindings: vi.fn(),
   saveEvidenceImages: vi.fn(),
+  fetchEvidenceForItems: vi.fn(async () => []),
+  fetchAnswerSuggestions: vi.fn(async () => []),
+  fetchProjectReliability: vi.fn(async () => ({ kappa: null, sharedItems: 0, raterPair: null })),
 }))
 vi.mock('../../evidence/api', async (orig) => ({
   ...(await orig<typeof import('../../evidence/api')>()),
@@ -27,10 +30,11 @@ vi.mock('../../evidence/api', async (orig) => ({
   getSources: vi.fn(),
 }))
 
+// The store first: lib/db imports the store, so loading the store first gives it the mocked lib/db.
+import { useStore } from '../../../store/useStore'
 import * as db from '../../../lib/db'
 import * as api from '../../evidence/api'
 import { makeDecision, makeRun, makeSuggestion } from '../../evidence/testFixtures'
-import { useStore } from '../../../store/useStore'
 import AuditPage from './AuditPage'
 
 const sugg = vi.mocked(api.getSuggestions)
@@ -38,12 +42,16 @@ const FLAG = { type: 'missing_evidence', reason: 'No page mentions it' } as cons
 
 function setup(opts: { role?: string; responses?: Record<string, unknown> } = {}) {
   useStore.setState({
-    currentUserId: 'u1', sessionToken: 't', isAuthenticated: true, loading: false,
+    currentUserId: 'u1', authToken: 't', isAuthenticated: true, loading: false,
     users: [{ id: 'u1', name: 'A', email: 'a@x', role: opts.role ?? 'auditor' }],
     projects: [{ id: 'p1', name: 'P', platform: 'X', description: '', status: 'in_progress', submissionStatus: 'not_submitted', guidelineIds: ['g1'], auditorIds: ['u1'], scope: [], createdAt: '2026-01-01', dueDate: '2026-12-01', createdBy: 'u1' }],
     guidelines: [{ id: 'g1', name: 'G', shortName: 'G', version: '1', description: '', source: '', categories: ['Alpha', 'Beta'], itemCount: 3, lastUpdated: '' }],
     checklistItems: ITEMS,
     responses: opts.responses ?? {},
+    // The page reads each auditor's own row from allResponses; these tests have one auditor.
+    allResponses: Object.fromEntries(Object.entries(opts.responses ?? {}).map(([k, v]) => [k, [v]])),
+    resolutions: {},
+    projectItemCounts: {},
     complianceMap: {},
   } as never)
 }
@@ -57,7 +65,7 @@ const toggle = () => screen.findByRole('button', { name: /Flagged by AI only/ })
 
 beforeEach(() => {
   for (const m of [sugg, vi.mocked(api.getLatestRun), vi.mocked(api.getSources), vi.mocked(db.fetchProjectComplianceSummary), vi.mocked(api.postDecision), vi.mocked(db.upsertAuditResult)]) m.mockReset()
-  vi.mocked(db.fetchProjectComplianceSummary).mockResolvedValue({ p1: { total: 3 } } as never)
+  vi.mocked(db.fetchProjectComplianceSummary).mockResolvedValue({ p1: { percentage: 0, answered: 0, total: 3 } } as never)
   vi.mocked(api.getLatestRun).mockResolvedValue({ run: makeRun(), pages: [] } as never)
   vi.mocked(api.getSources).mockResolvedValue({ source: null, permission: null } as never)
   sugg.mockResolvedValue(reply([FLAGGED_I1, PLAIN_I2, FLAGGED_I3]))
@@ -92,7 +100,7 @@ describe('flagged filter, counts and provenance on the audit page', () => {
     setup(); sugg.mockResolvedValue(reply([FLAGGED_I1, PLAIN_I2])); mount()
     await toggle()
     expect(screen.getByRole('option', { name: /Alpha.*1 flagged by AI/ })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: /^Beta/ }).textContent).not.toMatch(/flagged by AI/)
+    expect(screen.getByRole('option', { name: /^\d+\.\d+ Beta/ }).textContent).not.toMatch(/flagged by AI/)
   })
 
   it('says so when the category has nothing flagged, and lets the auditor turn the filter off', async () => {

@@ -13,8 +13,8 @@ import type { UserRole } from '../../../types'
 
 const PASSWORD_RULES = [
   { label: 'At least 8 characters', test: (p: string) => p.length >= 8 },
-  { label: 'One uppercase letter (A–Z)', test: (p: string) => /[A-Z]/.test(p) },
-  { label: 'One number (0–9)', test: (p: string) => /[0-9]/.test(p) },
+  { label: 'One uppercase letter (A to Z)', test: (p: string) => /[A-Z]/.test(p) },
+  { label: 'One number (0 to 9)', test: (p: string) => /[0-9]/.test(p) },
   { label: 'One symbol (e.g. _ ! @)', test: (p: string) => /[^A-Za-z0-9]/.test(p) },
 ]
 
@@ -25,12 +25,11 @@ function passwordValid(p: string) {
 const ROLE_OPTIONS: { value: UserRole; label: string; description: string }[] = [
   { value: 'head_auditor', label: 'Head Auditor', description: 'Manage projects, assign auditors, review submissions' },
   { value: 'auditor', label: 'Auditor', description: 'Conduct audits, record findings, submit for review' },
-  { value: 'admin', label: 'Administrator', description: 'Manage compliance guidelines and generate synthetic check items' },
 ]
 
 export default function RegisterPage() {
   const navigate = useNavigate()
-  const { register, users } = useStore()
+  const { register } = useStore()
 
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -54,12 +53,6 @@ export default function RegisterPage() {
     if (!passwordValid(password)) { setError('Password does not meet the requirements below.'); return }
     if (password !== confirmPassword) { setError('Passwords do not match.'); return }
 
-    const emailLower = email.trim().toLowerCase()
-    if (users.some((u) => (u as any).email?.toLowerCase() === emailLower)) {
-      setError('An account with this email already exists.')
-      return
-    }
-
     setLoading(true)
     register(email, name.trim(), role, password)
       .then(() => {
@@ -70,9 +63,8 @@ export default function RegisterPage() {
       .catch((err) => {
         setLoading(false)
         const rawMsg = err instanceof Error ? err.message : (err as any)?.message || ''
-        // Backend wraps errors as JSON: {"error":"..."} — unwrap for display
         let msg = rawMsg
-        try { msg = (JSON.parse(rawMsg) as { error: string }).error ?? rawMsg } catch { /* not JSON */ }
+        try { msg = (JSON.parse(rawMsg) as { error: string }).error ?? rawMsg } catch {}
         if (msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('already exists')) {
           setError('An account with this email already exists.')
         } else if (msg.toLowerCase().includes('fetch failed') || msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network')) {
@@ -110,7 +102,7 @@ export default function RegisterPage() {
               <div>
                 <p className="text-heading font-bold text-base tracking-tight leading-none">SafetyAudit</p>
                 <p className="text-muted text-xs font-mono tracking-[0.12em] uppercase mt-0.5">
-                  Child Safety Platform
+                  Compliance Audit Platform
                 </p>
               </div>
             </div>
@@ -119,7 +111,6 @@ export default function RegisterPage() {
           </div>
 
           <form onSubmit={handleSubmit} noValidate className="px-9 py-7 space-y-5">
-            {/* Full name */}
             <div>
               <label htmlFor="name" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Full Name
@@ -135,7 +126,6 @@ export default function RegisterPage() {
               />
             </div>
 
-            {/* Email */}
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Email
@@ -151,7 +141,6 @@ export default function RegisterPage() {
               />
             </div>
 
-            {/* Role */}
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">Role</label>
               <div className="space-y-2">
@@ -188,7 +177,6 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            {/* Password */}
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Password
@@ -238,7 +226,6 @@ export default function RegisterPage() {
               </AnimatePresence>
             </div>
 
-            {/* Confirm password */}
             <div>
               <label htmlFor="confirm-password" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Confirm Password

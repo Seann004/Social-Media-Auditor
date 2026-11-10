@@ -1,4 +1,4 @@
-# SafetyAudit — Child Safety Compliance Platform
+# SafetyAudit: Child Safety Compliance Platform
 
 A full-stack web application for conducting structured compliance audits of social media platforms against child safety regulatory frameworks (e.g. eSafety AU, MY PDPA, ONSA Child Protection Code).
 
@@ -15,8 +15,10 @@ A full-stack web application for conducting structured compliance audits of soci
 | Icons | Phosphor Icons |
 | Backend | Node.js + Express (TypeScript) |
 | Database | Supabase (PostgreSQL) |
-| AI Generator | Groq API — Llama 3.3 70B |
-| AI Evidence Assessment | Playwright (Chromium) page capture + Groq API |
+| AI Generator | Groq API (`GROQ_MODEL`, Llama) |
+| AI Evidence Assessment | Playwright (Chromium) page capture + Groq API (`EVIDENCE_GROQ_MODEL`, gpt-oss-120b) |
+| Auth | JWT bearer token from `POST /api/auth/login`, signed with `JWT_SECRET` |
+| Email | Brevo (project assignment notifications) |
 | Tests | Vitest (unit, integration), Playwright Test (browser end-to-end) |
 
 ---
@@ -82,9 +84,23 @@ cd Social-Media-Auditor
 PORT=3000
 SUPABASE_URL=your_supabase_project_url
 SUPABASE_ANON_KEY=your_supabase_anon_key
-GROQ_API_KEY=your_groq_api_key        # Required for AI generator only
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_API_KEY=your_groq_api_key        # Required for the AI features
+GROQ_MODEL=llama-3.1-8b-instant       # Model for the generator and the other general AI features
+BREVO_API_KEY=your_brevo_api_key      # Project assignment emails
+BREVO_SENDER_EMAIL=your_verified_sender_email
+JWT_SECRET=a_long_random_string       # Signs login tokens; at least 32 characters (see below)
 ```
+
+`JWT_SECRET` is required: the server refuses to start without it. Generate one with
+`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`. The AI evidence routes
+accept the same login token; they turn themselves off (and answer 503) if the secret is shorter than
+32 characters. The AI evidence feature has its own optional variables, listed under its setup below.
+
+| Variable | Used by | Default |
+|---|---|---|
+| `GROQ_MODEL` | Generator and the other general AI features | `llama-3.3-70b-versatile` in code; `.env.example` sets `llama-3.1-8b-instant` |
+| `EVIDENCE_GROQ_MODEL` | AI evidence assessment only (needs `reasoning_effort` and JSON mode) | `openai/gpt-oss-120b` |
+| `JWT_SECRET` | Login tokens for every protected route, including the evidence routes | none: required |
 
 **`frontend/.env`**
 ```env
@@ -102,12 +118,12 @@ cd ../frontend && npm install
 
 ### 4. Start both servers
 
-**Terminal 1 — Backend** (http://localhost:3000)
+**Terminal 1: Backend** (http://localhost:3000)
 ```bash
 cd backend && npm run dev
 ```
 
-**Terminal 2 — Frontend** (http://localhost:5173)
+**Terminal 2: Frontend** (http://localhost:5173)
 ```bash
 cd frontend && npm run dev
 ```
@@ -209,15 +225,15 @@ All set in `backend/src/features/evidence/config.ts`:
 
    ```env
    SUPABASE_SERVICE_ROLE_KEY=your_service_role_key   # server only, never in the frontend
-   SESSION_SECRET=a_random_string_of_at_least_32_characters
+   JWT_SECRET=a_random_string_of_at_least_32_characters  # the app's login secret, shared with the evidence routes
    GROQ_API_KEY=your_groq_api_key                    # already used by the generator
-   GROQ_MODEL=openai/gpt-oss-120b                    # optional: this is also the default for evidence runs
+   EVIDENCE_GROQ_MODEL=openai/gpt-oss-120b           # optional: this is the default; GROQ_MODEL is not used here
    EVIDENCE_SECRET_KEY=base64_of_32_random_bytes     # only for checking inside the app (see below)
    BROWSER_WS_ENDPOINT=http://host:9222              # optional: use a browser you run yourself
    EVIDENCE_ALLOWED_PRIVATE_HOSTS=localhost:8080     # optional: comma-separated, for local test sites only
    ```
 
-   Until `SUPABASE_SERVICE_ROLE_KEY` and `SESSION_SECRET` are both set, the evidence routes answer 503 and the panel says the service is unavailable. The rest of the app keeps working. Without `GROQ_API_KEY`, existing suggestions can be read but runs cannot start. A `SESSION_SECRET` shorter than 32 characters stops the server from starting.
+   Until `SUPABASE_SERVICE_ROLE_KEY` is set and `JWT_SECRET` is at least 32 characters, the evidence routes answer 503, the panel says the service is unavailable, and the server logs why at start-up. The rest of the app keeps working. Without `GROQ_API_KEY`, existing suggestions can be read but runs cannot start. The evidence model is `EVIDENCE_GROQ_MODEL` (default `openai/gpt-oss-120b`), separate from `GROQ_MODEL`, because the evidence calls send `reasoning_effort` and use JSON mode.
 
 2. **Apply the database migration.** Open the Supabase SQL editor and run `backend/supabase/migrations/001_evidence_assessment.sql`. Run the pre-check from the comment at the top of that file first: it shows whether `projectId`, `itemId` and `userId` are `uuid` columns, which the migration assumes. The migration creates the evidence tables with row level security and no policies (only the server's service role can reach them), a search function, and a private `evidence-screenshots` storage bucket.
 
@@ -229,7 +245,7 @@ All set in `backend/src/features/evidence/config.ts`:
 
    A browser you run yourself and reach through `BROWSER_WS_ENDPOINT` must be started with the flags in `LOCKED_DOWN_BROWSER_ARGS` (`backend/src/features/evidence/browser.ts`). They take the network away from the browser itself, so a page cannot reach an internal address through it.
 
-4. Sign out and in again once the server is configured. Evidence calls use a session token issued at login by `/api/auth/login`.
+4. Evidence calls use the same bearer token as the rest of the app, issued at login by `POST /api/auth/login`. If the evidence panel reports that you are not signed in (a 401), sign out and in again.
 
 ### Known limits
 
@@ -239,7 +255,7 @@ All set in `backend/src/features/evidence/config.ts`:
 - Hidden text is filtered out by a heuristic (display, visibility, size, opacity and similar). It catches the common tricks, not every possible one.
 - A close-up of a quote is left out when the quote cannot be boxed truthfully on the page. The full-page screenshot is shown instead.
 - DNS rebinding and very large compressed responses are accepted residual risks in this version.
-- The older API routes (projects, results and so on) still trust the user id the browser sends. Only the evidence routes check the session token.
+- The evidence routes check the login token themselves and take the user id and role from it, never from the request.
 - **Page text is sent to Groq**, with the checklist item wording. Do not point the feature at pages you may not share with it.
 
 ---

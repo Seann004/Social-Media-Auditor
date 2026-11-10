@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { AUDITOR, HEAD, ITEMS, PROJECT_ID, installStub, seedSession, switchSession, type Stub, type TestUser } from './stubApi'
+import { AUDITOR, answeredCount, HEAD, ITEMS, PROJECT_ID, installStub, seedSession, switchSession, type Stub, type TestUser } from './stubApi'
 
 const SHOTS = process.env.E2E_SHOTS ?? ''
 
@@ -32,7 +32,7 @@ test.describe('AI evidence assessment', () => {
     await expect(panel.getByText('Pages captured: 1 of 3')).toBeVisible()
     await expect(panel.getByRole('heading', { name: 'Last run' })).toBeVisible({ timeout: 15_000 })
     await expect(panel.getByText('3 pages · 3 suggestions · 1 flagged')).toBeVisible()
-    await expect(page.getByText('0/3 items')).toBeVisible()
+    await expect(answeredCount(page)).toHaveText('0/3')
     await snap(panel, 'panel')
 
     // Nothing was answered by the suggestions alone.
@@ -69,7 +69,7 @@ test.describe('AI evidence assessment', () => {
     await expect(row(page, 0).getByText('Accepted', { exact: true })).toBeVisible()
     await expect(row(page, 0).getByText('1 photo', { exact: true })).toBeVisible()
     await expect(row(page, 0).getByRole('textbox').first()).toHaveValue(/AI evidence: The sign-up page has no link/)
-    await expect(page.getByText('1/3 items')).toBeVisible()
+    await expect(answeredCount(page)).toHaveText('1/3')
     expect(stub.decisions[0]).toMatchObject({ decision: 'accepted', origin: 'card' })
 
     // Override: the dialog will not confirm without a reason.
@@ -85,7 +85,7 @@ test.describe('AI evidence assessment', () => {
     await expect(dialog).toBeHidden()
     await expect(row(page, 1).getByText('Overridden to No')).toBeVisible()
     await expect(row(page, 1).getByText('Reason: The control is hidden behind a paywall.')).toBeVisible()
-    await expect(page.getByText('2/3 items')).toBeVisible()
+    await expect(answeredCount(page)).toHaveText('2/3')
     expect(stub.decisions[1]).toMatchObject({ decision: 'overridden', origin: 'card', finalResult: 'non_compliant', overrideReason: 'The control is hidden behind a paywall.' })
 
     // The Head Auditor sees where each answer came from, on the audit and in the report.
@@ -134,7 +134,7 @@ test.describe('AI evidence assessment', () => {
 
     // The ordinary audit still works: an answer button saves the old way.
     await row(page, 0).getByRole('button', { name: 'Yes' }).click()
-    await expect(page.getByText('1/3 items')).toBeVisible()
+    await expect(answeredCount(page)).toHaveText('1/3')
     expect(stub.savedAnswers).toHaveLength(1)
     expect(stub.savedAnswers[0]).toMatchObject({ itemId: 'i1', result: 'compliant' })
     await snap(page, 'unavailable')

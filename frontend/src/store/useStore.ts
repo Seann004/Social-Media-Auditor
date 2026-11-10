@@ -19,6 +19,13 @@ import { hashPassword } from '../lib/crypto'
 
 type ResponseMap = Record<string, AuditResponse>
 
+export interface ResolutionInfo {
+  status: ChecklistItemStatus
+  resolvedBy: string
+  notes?: string
+  resolvedAt: string
+}
+
 
 const ROLE_COLORS: Record<string, string> = {
   admin: 'bg-blue-600',
@@ -30,11 +37,32 @@ function rkey(projectId: string, itemId: string) {
   return `${projectId}__${itemId}`
 }
 
+const pendingWritesByKey = new Map<string, Promise<unknown>>()
+function serializeByKey<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const prior = pendingWritesByKey.get(key) ?? Promise.resolve()
+  const next = prior.then(work, work)
+  pendingWritesByKey.set(key, next.catch(() => {}))
+  return next
+}
+
+const complianceRequestGen: Record<string, number> = {}
+let initFromDbGen = 0
+
+const guidelineItemsCache = new Map<string, ChecklistItem[]>()
+
+export function reconcileResponse(rows: AuditResponse[], resolvedStatus?: ChecklistItemStatus): AuditResponse | undefined {
+  if (rows.length === 0) return undefined
+  const distinctStatuses = new Set(rows.map((r) => r.status))
+  const status = resolvedStatus ?? (distinctStatuses.size === 1 ? rows[0].status : 'needs_review')
+  const latest = rows.reduce((a, b) => (a.updatedAt >= b.updatedAt ? a : b))
+  return { ...latest, status }
+}
+
 function emptyScore(): ProjectScore {
   return { total: 0, compliant: 0, nonCompliant: 0, notApplicable: 0, answered: 0, applicable: 0, percentage: 0, progress: 0 }
 }
 
-function calcScore(items: ChecklistItem[], responses: ResponseMap, projectId: string): ProjectScore {
+export function calcScore(items: ChecklistItem[], responses: ResponseMap, projectId: string): ProjectScore {
   const total = items.length
   let compliant = 0, nonCompliant = 0, notApplicable = 0, answered = 0, weightedCompliant = 0
   for (const item of items) {
@@ -52,7 +80,6 @@ function calcScore(items: ChecklistItem[], responses: ResponseMap, projectId: st
   return { total, compliant, nonCompliant, notApplicable, answered, applicable, percentage, progress }
 }
 
-// Map DB row → frontend AuditProject
 function mapDbProject(p: db.DbProject): AuditProject {
   return {
     id: p.projectId,
@@ -72,7 +99,6 @@ function mapDbProject(p: db.DbProject): AuditProject {
   }
 }
 
-// Map DB row → frontend Guideline
 function mapDbGuideline(g: db.DbGuideline): Guideline {
   return {
     id: g.guidelineId,
@@ -88,7 +114,6 @@ function mapDbGuideline(g: db.DbGuideline): Guideline {
   }
 }
 
-// Map DB row → frontend ChecklistItem
 function mapDbItem(i: db.DbChecklistItem): ChecklistItem {
   return {
     id: i.itemId,
@@ -108,21 +133,24 @@ function mapDbItem(i: db.DbChecklistItem): ChecklistItem {
 
 interface StoreState {
   isAuthenticated: boolean
-  /** Bearer token for the evidence API. Null until the backend issues one, or when it cannot. */
-  sessionToken: string | null
+  sidebarCollapsed: boolean
+  toggleSidebar: () => void
+  authToken: string | null
   users: User[]
   currentUserId: string
   guidelines: Guideline[]
   checklistItems: ChecklistItem[]
   projects: AuditProject[]
   responses: ResponseMap
-  complianceMap: Record<string, number>  // projectId → avg score % from DB
+  allResponses: Record<string, AuditResponse[]>
+  resolutions: Record<string, ResolutionInfo>
+  complianceMap: Record<string, number>
+  projectItemCounts: Record<string, { answered: number; total: number }>
   loading: boolean
   dbError: string | null
 
-  login: (userId: string, name: string, role: UserRole) => void
+  login: (userId: string, name: string, role: UserRole, token: string) => void
   logout: () => void
-  setSessionToken: (token: string | null) => void
   /** Puts an answer the server applied into `responses`. Null findings keep what is stored. */
   applyServerAnswer: (
     projectId: string,
@@ -134,7 +162,6 @@ interface StoreState {
   register: (email: string, name: string, role: UserRole, password?: string) => Promise<void>
   initFromDb: () => Promise<void>
 
-  // Audit Management
   createProject: (input: {
     name: string; platform: Platform; guidelineIds: string[]
     auditorIds: string[]; dueDate?: string; notes?: string
@@ -142,17 +169,13 @@ interface StoreState {
   updateProject: (projectId: string, updates: Partial<Pick<AuditProject, 'name' | 'platform' | 'status' | 'notes' | 'dueDate' | 'scope'>>) => Promise<void>
   deleteProject: (projectId: string) => Promise<void>
 
-  // Manage Guideline Used
   syncProjectGuidelines: (projectId: string, guidelineIds: string[]) => Promise<void>
 
-  // Manage Audit Feature (scope)
   syncProjectScope: (projectId: string, features: string[]) => Promise<void>
 
-  // Manage Auditors
   addAuditorToProject: (projectId: string, userId: string) => Promise<void>
   removeAuditorFromProject: (projectId: string, userId: string) => Promise<void>
 
-  // Checklist Item management
   updateChecklistItem: (itemId: string, updates: Partial<Pick<ChecklistItem, 'text' | 'severity' | 'category'>>) => Promise<void>
   deleteChecklistItem: (itemId: string) => Promise<void>
   addChecklistItem: (projectId: string, input: {
@@ -173,21 +196,18 @@ interface StoreState {
     guidelineId: string
   }) => Promise<void>
 
-  // Submission workflow
   submitForReview: (projectId: string) => Promise<void>
   reviewSubmission: (projectId: string, approved: boolean, remarks: string) => Promise<void>
 
-  // Guideline management (admin)
   deleteGuideline: (guidelineId: string) => Promise<void>
   addSyntheticGuideline: (guideline: Guideline, items: ChecklistItem[]) => Promise<void>
   addGuidelineFromRealtime: (dbGuideline: db.DbGuideline, dbItems: db.DbChecklistItem[]) => void
 
 
-  // Audit responses
   setResponse: (projectId: string, itemId: string, guidelineId: string, status: ChecklistItemStatus, notes?: string, findings?: string) => Promise<void>
   saveFindings: (projectId: string, itemId: string, findings: string) => Promise<void>
+  resolveDisagreement: (projectId: string, itemId: string, status: ChecklistItemStatus, notes?: string) => Promise<void>
 
-  // Score helpers
   getProjectScore: (projectId: string) => ProjectScore
   getCategoryScore: (projectId: string, category: string) => ProjectScore
 }
@@ -196,68 +216,79 @@ export const useStore = create<StoreState>()(
   persist(
     (set, get) => ({
   isAuthenticated: false,
-  sessionToken: null,
+  sidebarCollapsed: false,
+  toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+  authToken: null,
   users: [],
   currentUserId: '',
   guidelines: [],
   checklistItems: [],
   projects: [],
   responses: {},
+  allResponses: {},
+  resolutions: {},
   complianceMap: {},
+  projectItemCounts: {},
   loading: false,
   dbError: null,
 
-  login: (userId, name, role) => {
+  login: (userId, name, role, token) => {
     const initials = name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
     const color = ROLE_COLORS[role] ?? 'bg-slate-500'
     const loggedInUser: User = { id: userId, name, role, initials, color }
     set((state) => ({
       isAuthenticated: true,
+      authToken: token,
       currentUserId: userId,
-      // A token belongs to the user it was issued for; LoginPage requests a fresh one after this.
-      sessionToken: null,
       users: state.users.some((u) => u.id === userId)
         ? state.users.map((u) => (u.id === userId ? loggedInUser : u))
         : [...state.users, loggedInUser],
     }))
   },
 
-  logout: () =>
-    set({ isAuthenticated: false, sessionToken: null, currentUserId: '', projects: [], responses: {}, checklistItems: [] }),
-
-  setSessionToken: (token) => set({ sessionToken: token }),
+  logout: () => set({ isAuthenticated: false, authToken: null, currentUserId: '', projects: [], responses: {}, allResponses: {}, resolutions: {}, checklistItems: [], complianceMap: {}, projectItemCounts: {}, dbError: null }),
 
   applyServerAnswer: (projectId, itemId, answer) =>
     set((state) => {
       const key = rkey(projectId, itemId)
-      const existing = state.responses[key]
-      const next: AuditResponse = existing
-        ? {
-            ...existing,
-            status: answer.status,
-            findings: answer.findings ?? existing.findings,
-          }
+      const { currentUserId } = state
+      const existingRows = state.allResponses[key] ?? []
+      const mine = existingRows.find((r) => r.auditorId === currentUserId)
+      const shown = state.responses[key]
+      // The server puts the result on every auditor's row of the item; the findings it returns are the deciding auditor's.
+      const base: AuditResponse | undefined = mine ?? (existingRows.length === 0 ? shown : undefined)
+      const myRow: AuditResponse = base
+        ? { ...base, status: answer.status, findings: answer.findings ?? base.findings }
         : {
             id: `r_${Date.now()}`,
             projectId,
             checklistItemId: itemId,
             status: answer.status,
             findings: answer.findings ?? undefined,
-            auditorId: state.currentUserId,
+            auditorId: currentUserId,
             updatedAt: new Date().toISOString().split('T')[0],
           }
-      return { responses: { ...state.responses, [key]: next } }
+      const others = existingRows
+        .filter((r) => r.auditorId !== currentUserId)
+        .map((r) => ({ ...r, status: answer.status }))
+      // Mine first, so that it is the row shown when the dates tie.
+      const rows = [myRow, ...others]
+      const reconciled = reconcileResponse(rows, state.resolutions[key]?.status) ?? myRow
+      return {
+        allResponses: { ...state.allResponses, [key]: rows },
+        responses: { ...state.responses, [key]: reconciled },
+      }
     }),
 
   register: async (email, name, role, password) => {
     const id = window.crypto.randomUUID()
     const initials = name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
     const color = ROLE_COLORS[role] ?? 'bg-slate-500'
-    
+
     set({ loading: true, dbError: null })
     try {
       const hashedPassword = password ? await hashPassword(password) : undefined
-      await db.createUser({
+      const { token } = await db.createUser({
         userId: id,
         userName: name,
         userEmail: email,
@@ -266,12 +297,11 @@ export const useStore = create<StoreState>()(
       })
       set((state) => ({
         isAuthenticated: true,
-        sessionToken: null,
+        authToken: token,
         currentUserId: id,
         users: [...state.users, { id, name, role, initials, color }],
         loading: false
       }))
-      if (hashedPassword) requestSessionToken(email.trim().toLowerCase(), hashedPassword, id)
     } catch (err) {
       console.error('Registration failed:', err)
       set({ loading: false, dbError: err instanceof Error ? err.message : String(err) })
@@ -282,17 +312,25 @@ export const useStore = create<StoreState>()(
   initFromDb: async () => {
     const { currentUserId } = get()
     if (!currentUserId) return
+    // Only the most recent call (for the same signed-in user) may commit, so an
+    // older, slower response can't overwrite fresher data or repopulate after logout.
+    const myGen = ++initFromDbGen
+    const isStale = () => myGen !== initFromDbGen || get().currentUserId !== currentUserId
     set({ loading: true, dbError: null })
     try {
-      // Load users, guidelines, projects in parallel
       const [dbUsers, dbGuidelines, dbProjects] = await Promise.all([
         db.fetchAllUsers(),
         db.fetchGuidelines(),
         db.fetchUserProjects(currentUserId),
       ])
-      // Fetch compliance scores for all projects from DB
       const projectIds = (dbProjects ?? []).map((p) => p.projectId)
-      const complianceMap = await db.fetchProjectComplianceSummary(projectIds)
+      const complianceSummary = await db.fetchProjectComplianceSummary(projectIds)
+      const complianceMap: Record<string, number> = {}
+      const projectItemCounts: Record<string, { answered: number; total: number }> = {}
+      for (const [pid, s] of Object.entries(complianceSummary)) {
+        complianceMap[pid] = s.percentage
+        projectItemCounts[pid] = { answered: s.answered, total: s.total }
+      }
 
       const users: User[] = dbUsers.map((u) => ({
         id: u.userId,
@@ -305,21 +343,36 @@ export const useStore = create<StoreState>()(
       const guidelines = dbGuidelines.map(mapDbGuideline)
       const projects = (dbProjects ?? []).map(mapDbProject)
 
-      // Ensure current user is in users list
       const currentUser = get().users.find((u) => u.id === currentUserId)
       if (currentUser && !users.some((u) => u.id === currentUserId)) {
         users.push(currentUser)
       }
 
-      // Load global checklist items for all guidelines (for admin/guidelines view)
-      const allGuidelineItems = await Promise.all(
-        dbGuidelines.map(g => db.fetchGuidelineItems(g.guidelineId).catch(() => []))
+      const guidelinesNeedingFetch = dbGuidelines.filter((g) => !guidelineItemsCache.has(g.guidelineId))
+      await Promise.all(
+        guidelinesNeedingFetch.map(async (g) => {
+          const items = await db.fetchGuidelineItems(g.guidelineId).catch(() => [])
+          guidelineItemsCache.set(g.guidelineId, items.map(mapDbItem))
+        })
       )
-      const globalChecklistItems = allGuidelineItems.flat().map(mapDbItem)
+      const globalChecklistItems = dbGuidelines.flatMap((g) => guidelineItemsCache.get(g.guidelineId) ?? [])
 
-      set({ users, guidelines, projects, complianceMap, checklistItems: globalChecklistItems, loading: false })
+      if (isStale()) { if (myGen === initFromDbGen) set({ loading: false }); return }
+      set((state) => {
+        const projectSpecificGuidelines = state.guidelines.filter((g) => g.projectId)
+        const projectSpecificItems = state.checklistItems.filter(
+          (ci) => !globalChecklistItems.some((gi) => gi.id === ci.id)
+        )
+        return {
+          users, projects, complianceMap, projectItemCounts,
+          guidelines: [...projectSpecificGuidelines, ...guidelines],
+          checklistItems: [...projectSpecificItems, ...globalChecklistItems],
+          loading: false,
+        }
+      })
     } catch (err) {
-      set({ loading: false, dbError: String(err) })
+      if (isStale()) { if (myGen === initFromDbGen) set({ loading: false }); return }
+      set({ loading: false, dbError: err instanceof Error ? err.message : String(err) })
     }
   },
 
@@ -333,13 +386,11 @@ export const useStore = create<StoreState>()(
       dueDate,
       status: 'in_progress',
     })
-    // Add head auditor as member + selected auditors
     const allMembers = Array.from(new Set([currentUserId, ...auditorIds]))
     await Promise.all([
       db.syncProjectMembers(projectId, allMembers),
       db.syncProjectGuidelines(projectId, guidelineIds),
     ])
-    // Refresh projects
     const dbProjects = await db.fetchUserProjects(currentUserId)
     set({ projects: (dbProjects ?? []).map(mapDbProject) })
     return projectId
@@ -475,6 +526,7 @@ export const useStore = create<StoreState>()(
 
   deleteGuideline: async (guidelineId) => {
     await db.deleteGuideline(guidelineId)
+    guidelineItemsCache.delete(guidelineId)
     set((state) => ({
       guidelines: state.guidelines.filter((g) => g.id !== guidelineId),
       checklistItems: state.checklistItems.filter((ci) => ci.guidelineId !== guidelineId),
@@ -484,6 +536,7 @@ export const useStore = create<StoreState>()(
   addGuidelineFromRealtime: (dbGuideline, dbItems) => {
     const mapped = mapDbGuideline({ ...dbGuideline, itemCount: dbItems.length })
     const mappedItems = dbItems.map(mapDbItem)
+    guidelineItemsCache.set(mapped.id, mappedItems)
     set((state) => {
       if (state.guidelines.some((g) => g.id === mapped.id)) return state
       return {
@@ -521,6 +574,7 @@ export const useStore = create<StoreState>()(
       }))
     })
 
+    guidelineItemsCache.set(guideline.id, items)
     set((state) => ({
       guidelines: [guideline, ...state.guidelines],
       checklistItems: [...items, ...state.checklistItems],
@@ -538,43 +592,91 @@ export const useStore = create<StoreState>()(
     })
   },
 
-  setResponse: async (projectId, itemId, guidelineId, status, notes = '', findings) => {
+  resolveDisagreement: async (projectId, itemId, status, notes = '') => {
     const { currentUserId } = get()
-    // Optimistic update
+    await db.resolveDisagreement(projectId, itemId, status, notes)
     set((state) => {
       const key = rkey(projectId, itemId)
-      const existing = state.responses[key]
+      const resolution: ResolutionInfo = {
+        status, resolvedBy: currentUserId, notes,
+        resolvedAt: new Date().toISOString().split('T')[0],
+      }
+      const rows = state.allResponses[key] ?? []
+      const reconciled = reconcileResponse(rows, status)
       return {
-        responses: {
-          ...state.responses,
-          [key]: {
-            id: existing?.id ?? `r_${Date.now()}`,
-            projectId, checklistItemId: itemId,
-            status, notes,
-            findings: findings ?? existing?.findings,
-            auditorId: currentUserId,
-            updatedAt: new Date().toISOString().split('T')[0],
-          },
-        },
+        resolutions: { ...state.resolutions, [key]: resolution },
+        responses: reconciled ? { ...state.responses, [key]: reconciled } : state.responses,
       }
     })
-    // Persist to DB + auto-transition draft → in_progress + update complianceMap
+    const updated = await db.fetchProjectComplianceSummary([projectId])
+    if (updated[projectId] !== undefined) {
+      set((state) => ({
+        complianceMap: { ...state.complianceMap, [projectId]: updated[projectId].percentage },
+        projectItemCounts: {
+          ...state.projectItemCounts,
+          [projectId]: { answered: updated[projectId].answered, total: updated[projectId].total },
+        },
+      }))
+    }
+  },
+
+  setResponse: async (projectId, itemId, guidelineId, status, notes = '', findings) => {
+    const { currentUserId } = get()
+    const key = rkey(projectId, itemId)
+    const previousRows = get().allResponses[key]
+    const previousResponse = get().responses[key]
+    set((state) => {
+      const existingRows = state.allResponses[key] ?? []
+      const myExisting = existingRows.find((r) => r.auditorId === currentUserId)
+      const myRow: AuditResponse = {
+        id: myExisting?.id ?? `r_${Date.now()}`,
+        projectId, checklistItemId: itemId,
+        status, notes,
+        findings: findings ?? myExisting?.findings,
+        auditorId: currentUserId,
+        updatedAt: new Date().toISOString().split('T')[0],
+      }
+      const updatedRows = [...existingRows.filter((r) => r.auditorId !== currentUserId), myRow]
+      const reconciled = reconcileResponse(updatedRows, state.resolutions[key]?.status)
+      return {
+        allResponses: { ...state.allResponses, [key]: updatedRows },
+        responses: reconciled ? { ...state.responses, [key]: reconciled } : state.responses,
+      }
+    })
     try {
-      await db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes)
+      await serializeByKey(key, () => db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes))
+    } catch (err) {
+      set((state) => {
+        const allResponses = { ...state.allResponses }
+        const responses = { ...state.responses }
+        if (previousRows) allResponses[key] = previousRows
+        else delete allResponses[key]
+        if (previousResponse) responses[key] = previousResponse
+        else delete responses[key]
+        return { allResponses, responses }
+      })
+      throw err
+    }
+
+    try {
       await get().refreshAfterAnswer(projectId)
     } catch (err) {
-      console.error('[setResponse] Failed to save audit result to DB:', err)
-      throw err
+      console.error('[setResponse] Answer saved, but refreshing the project summary failed:', err)
     }
   },
 
   refreshAfterAnswer: async (projectId) => {
-    // Refresh complianceMap from DB (fetchProjectComplianceSummary reads result values directly
-    // and is not affected by the global-vs-project item ID mismatch in the RPC count query)
+    // Refresh the compliance summary; a newer request for the same project wins over an older one.
+    const myGen = (complianceRequestGen[projectId] ?? 0) + 1
+    complianceRequestGen[projectId] = myGen
     const updated = await db.fetchProjectComplianceSummary([projectId])
-    if (updated[projectId] !== undefined) {
+    if (updated[projectId] !== undefined && complianceRequestGen[projectId] === myGen) {
       set((state) => ({
-        complianceMap: { ...state.complianceMap, [projectId]: updated[projectId] },
+        complianceMap: { ...state.complianceMap, [projectId]: updated[projectId].percentage },
+        projectItemCounts: {
+          ...state.projectItemCounts,
+          [projectId]: { answered: updated[projectId].answered, total: updated[projectId].total },
+        },
       }))
     }
 
@@ -582,7 +684,7 @@ export const useStore = create<StoreState>()(
     const { projects } = get()
     const proj = projects.find((p) => p.id === projectId)
     if (proj?.status === 'draft') {
-      await db.updateProject(projectId, { projectStatus: 'in_progress' })
+      await db.activateProject(projectId)
       set((state) => ({
         projects: state.projects.map((p) =>
           p.id === projectId ? { ...p, status: 'in_progress' as AuditStatus } : p
@@ -611,28 +713,13 @@ export const useStore = create<StoreState>()(
     }),
     {
       name: 'safetyaudit-session',
-      // Only persist auth — all other data is re-fetched from DB on login
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
-        sessionToken: state.sessionToken,
+        sidebarCollapsed: state.sidebarCollapsed,
+        authToken: state.authToken,
         currentUserId: state.currentUserId,
         users: state.users.filter((u) => u.id === state.currentUserId),
       }),
     }
   )
 )
-
-/**
- * Obtains the backend session token without ever delaying or failing the sign-in: the caller does not
- * wait for it, every failure leaves the token null, and a token that arrives after the user logged
- * out (or another user signed in) is discarded.
- */
-export function requestSessionToken(email: string, hashedPassword: string, userId: string): void {
-  Promise.resolve()
-    .then(() => db.createSession(email, hashedPassword))
-    .then((token) => {
-      const { isAuthenticated, currentUserId, setSessionToken } = useStore.getState()
-      if (isAuthenticated && currentUserId === userId) setSessionToken(token)
-    })
-    .catch(() => {})
-}

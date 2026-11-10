@@ -44,12 +44,12 @@ async function failure(call: () => Promise<unknown>): Promise<EvidenceApiError> 
 beforeEach(() => {
   fetchMock.mockReset()
   vi.stubGlobal('fetch', fetchMock)
-  useStore.setState({ sessionToken: 'tok-123' })
+  useStore.setState({ authToken: 'tok-123' })
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  useStore.setState({ sessionToken: null })
+  useStore.setState({ authToken: null })
 })
 
 describe('evidence api client', () => {
@@ -64,8 +64,14 @@ describe('evidence api client', () => {
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer tok-123')
   })
 
+  it('reads AI suggestions from /ai-suggestions, not the earlier-audit /suggestions route', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, JSON.stringify({ run: null, suggestions: [], decisions: [] })))
+    await getSuggestions('p1')
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/projects\/p1\/ai-suggestions$/)
+  })
+
   it('throws a 401 without touching the network when there is no token', async () => {
-    useStore.setState({ sessionToken: null })
+    useStore.setState({ authToken: null })
     const err = await failure(() => getSources('p1'))
     expect(err.status).toBe(401)
     expect(err.message).not.toBe('')

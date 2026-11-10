@@ -32,7 +32,7 @@ export class EvidenceApiError extends Error {
   }
 }
 
-const NO_SESSION_MESSAGE = 'You are not signed in to the evidence service. Sign out and sign in again.'
+const NO_SESSION_MESSAGE = 'You are not signed in. Sign out and sign in again.'
 const NETWORK_MESSAGE = 'Could not reach the server. Check your connection and try again.'
 const BAD_REPLY_MESSAGE = 'The server sent a reply that could not be read.'
 
@@ -68,7 +68,7 @@ async function failureMessage(res: Response): Promise<string> {
 }
 
 async function call<T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'GET', body?: unknown): Promise<T> {
-  const token = useStore.getState().sessionToken
+  const token = useStore.getState().authToken
   if (!token) throw new EvidenceApiError(401, NO_SESSION_MESSAGE)
 
   let res: Response
@@ -120,7 +120,7 @@ export function getLatestRun(projectId: string): Promise<LatestRunResponse> {
 }
 
 export function getSuggestions(projectId: string): Promise<SuggestionsResponse> {
-  return call(`${project(projectId)}/suggestions`)
+  return call(`${project(projectId)}/ai-suggestions`)
 }
 
 export function postDecision(suggestionId: string, decision: DecisionRequest): Promise<DecisionResponse> {

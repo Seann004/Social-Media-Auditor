@@ -54,7 +54,6 @@ const db: AuditDb = {
       result: 'compliant',
       notes: 'n',
       findings: null,
-      evidenceImages: null,
       timeSubmitted: 't',
     },
   ],
@@ -68,7 +67,7 @@ describe('createAuditData', () => {
       { id: 'i1', guidelineId: 'g1', category: 'Privacy', name: 'Private accounts', text: 'Are accounts private?', helpText: 'Check defaults' },
     ])
     expect(await audit.listAnswers('p1')).toEqual([
-      { itemId: 'i1', userId: 'u1', guidelineId: 'g1', result: 'compliant', notes: 'n', findings: null, evidenceImages: [] },
+      { itemId: 'i1', userId: 'u1', guidelineId: 'g1', result: 'compliant', notes: 'n', findings: null },
     ])
   })
 

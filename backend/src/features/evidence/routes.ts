@@ -186,7 +186,7 @@ export function createEvidenceRouter(deps: EvidenceRouterDeps): Router {
   )
 
   router.get(
-    '/projects/:id/suggestions',
+    '/projects/:id/ai-suggestions',
     ...common,
     onProject(BOTH),
     route(async (req, res) => {

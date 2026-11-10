@@ -1,7 +1,7 @@
 /*
-  SafetyAudit — Semantic Color Palette
+  SafetyAudit Semantic Color Palette
   All colors are defined here with descriptive names.
-  Reference these names throughout the codebase — never use raw hex codes.
+  Reference these names throughout the codebase and never use raw hex codes.
 */
 
 :root {
@@ -21,8 +21,8 @@
   --color-success-text:       #065f46;
 
   /* ── Danger / Non-Compliant ─────────────────────── */
-  --color-danger:             #dc2626;
-  --color-danger-hover:       #b91c1c;
+  --color-danger:             #e11d48;
+  --color-danger-hover:       #be123c;
   --color-danger-light:       #fff1f2;
   --color-danger-border:      #fecdd3;
   --color-danger-text:        #9f1239;
@@ -40,7 +40,7 @@
   --color-card-hover:         #f8fafc;
   --color-input-bg:           #f8fafc;
 
-  /* ── Sidebar (blue — same family as login bg and buttons) ── */
+  /* ── Sidebar (blue, same family as login bg and buttons) ── */
   --color-sidebar-bg:          #2563eb;
   --color-sidebar-text:        rgba(255, 255, 255, 0.75);
   --color-sidebar-text-hover:  #ffffff;
@@ -72,7 +72,7 @@
   --color-role-admin:         #2563eb;
 
   /* ── Severity levels ────────────────────────────── */
-  --color-severity-critical:  #dc2626;
+  --color-severity-critical:  #e11d48;
   --color-severity-major:     #d97706;
   --color-severity-minor:     #64748b;
 
@@ -93,7 +93,7 @@
   --color-status-complete:    #10b981;
 
   /* ── Submission status ──────────────────────────── */
-  --color-submission-pending: #d97706;
-  --color-submission-approved:#059669;
-  --color-submission-rejected:#dc2626;
+  --color-submission-pending: #f59e0b;
+  --color-submission-approved:#10b981;
+  --color-submission-rejected:#f43f5e;
 }

@@ -88,7 +88,6 @@ export const answer = (itemId: string, result: AnswerRow['result'], userId = 'u1
   result,
   notes: null,
   findings: null,
-  evidenceImages: [],
 })
 
 /** Quotes the first sentence of the first passage sent, which is verbatim, so it verifies. */

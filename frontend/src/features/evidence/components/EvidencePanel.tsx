@@ -66,7 +66,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const { run, pages, resultRun, suggestionsByItem, refresh } = evidence
-  const sessionToken = useStore((s) => s.sessionToken)
+  const authToken = useStore((s) => s.authToken)
   const [chosenSource, setChosenSource] = useState<RunSource | null>(null)
   const source: RunSource = chosenSource ?? resultRun?.source ?? 'pages'
   const appSetup = useAppSetup(projectId, { enabled: source === 'app' })
@@ -93,8 +93,8 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems }: Props)
     return () => {
       alive = false
     }
-    // Again when the session token arrives: a load made before it got a 401, as useEvidence did.
-  }, [projectId, sourcesTry, sessionToken])
+    // Again when the auth token arrives: a load made before it got a 401, as useEvidence did.
+  }, [projectId, sourcesTry, authToken])
 
   // Any successful load or poll replaces these objects: a blocking action error is over by then.
   useEffect(() => {

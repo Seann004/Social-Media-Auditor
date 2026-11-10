@@ -5,8 +5,8 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 let evidenceMapValue: Record<string, { url: string; name: string }[]> = {}
 const ITEMS = [
-  { id: 'i1', guidelineId: 'g1', category: 'Cat', text: 'Item one', severity: 'high' },
-  { id: 'i2', guidelineId: 'g1', category: 'Cat', text: 'Item two', severity: 'high' },
+  { id: 'i1', guidelineId: 'g1', category: 'Cat', text: 'Item one', severity: 'major', itemCode: 'C1' },
+  { id: 'i2', guidelineId: 'g1', category: 'Cat', text: 'Item two', severity: 'major', itemCode: 'C2' },
 ]
 vi.mock('../../../hooks/useProjectData', () => ({
   useProjectData: () => ({ checklistItems: ITEMS, loading: false, error: null, reload: vi.fn(), evidenceMap: evidenceMapValue, responses: {} }),
@@ -14,10 +14,15 @@ vi.mock('../../../hooks/useProjectData', () => ({
 vi.mock('../../../lib/db', async (orig) => ({
   ...(await orig<typeof import('../../../lib/db')>()),
   fetchProjectComplianceSummary: vi.fn(),
-  updateProject: vi.fn(),
+  activateProject: vi.fn(),
   upsertAuditResult: vi.fn(),
   saveAuditFindings: vi.fn(),
   saveEvidenceImages: vi.fn(),
+  // Photos are loaded per item and per auditor; the test map stands for what the server holds.
+  fetchEvidenceForItems: vi.fn(async (_projectId: string, itemIds: string[]) =>
+    itemIds.filter((itemId) => evidenceMapValue[itemId]).map((itemId) => ({ itemId, userId: 'u1', images: evidenceMapValue[itemId] }))),
+  fetchAnswerSuggestions: vi.fn(async () => []),
+  fetchProjectReliability: vi.fn(async () => ({ kappa: null, sharedItems: 0, raterPair: null })),
 }))
 vi.mock('../../evidence/api', async (orig) => ({
   ...(await orig<typeof import('../../evidence/api')>()),
@@ -28,11 +33,12 @@ vi.mock('../../evidence/api', async (orig) => ({
   getSources: vi.fn(),
 }))
 
+// The store first: lib/db imports the store, so loading the store first gives it the mocked lib/db.
+import { useStore } from '../../../store/useStore'
 import * as db from '../../../lib/db'
 import * as api from '../../evidence/api'
 import { EvidenceApiError } from '../../evidence/api'
 import { makeDecision, makeRun, makeSuggestion } from '../../evidence/testFixtures'
-import { useStore } from '../../../store/useStore'
 import AuditPage from './AuditPage'
 
 const post = vi.mocked(api.postDecision)
@@ -42,12 +48,16 @@ const sugg = vi.mocked(api.getSuggestions)
 
 function setup(opts: { role?: string; submissionStatus?: string; responses?: Record<string, unknown> } = {}) {
   useStore.setState({
-    currentUserId: 'u1', sessionToken: 't', isAuthenticated: true, loading: false,
+    currentUserId: 'u1', authToken: 't', isAuthenticated: true, loading: false,
     users: [{ id: 'u1', name: 'A', email: 'a@x', role: opts.role ?? 'auditor' }],
     projects: [{ id: 'p1', name: 'P', platform: 'X', description: '', status: 'in_progress', submissionStatus: opts.submissionStatus ?? 'not_submitted', guidelineIds: ['g1'], auditorIds: ['u1'], scope: [], createdAt: '2026-01-01', dueDate: '2026-12-01', createdBy: 'u1' }],
     guidelines: [{ id: 'g1', name: 'G', shortName: 'G', version: '1', description: '', source: '', categories: ['Cat'], itemCount: 2, lastUpdated: '' }],
     checklistItems: ITEMS,
     responses: opts.responses ?? {},
+    // The page reads each auditor's own row from allResponses; these tests have one auditor.
+    allResponses: Object.fromEntries(Object.entries(opts.responses ?? {}).map(([k, v]) => [k, [v]])),
+    resolutions: {},
+    projectItemCounts: {},
     complianceMap: {},
   } as never)
 }
@@ -67,7 +77,7 @@ beforeEach(() => {
   upsert.mockResolvedValue(undefined as never)
   saveF.mockResolvedValue(undefined as never)
   vi.mocked(db.saveEvidenceImages).mockResolvedValue(undefined as never)
-  vi.mocked(db.fetchProjectComplianceSummary).mockResolvedValue({ p1: { total: 1 } } as never)
+  vi.mocked(db.fetchProjectComplianceSummary).mockResolvedValue({ p1: { percentage: 0, answered: 0, total: 1 } } as never)
   vi.mocked(api.getLatestRun).mockResolvedValue({ run: makeRun(), pages: [] } as never)
   vi.mocked(api.getSources).mockResolvedValue({ source: null, permission: null } as never)
   sugg.mockResolvedValue(suggestionsReply([S1]))
@@ -86,6 +96,8 @@ describe('page wiring (should hold)', () => {
     await within(rowOf('Item one')).findByRole('button', { name: 'Accept suggestion' })
     const before = sugg.mock.calls.length
     post.mockResolvedValue(reply('compliant', 'AI reason', [{ url: 'https://x/a.jpg', name: 'AI evidence a' }]))
+    // What the server holds once the decision is saved: the page reads the item's photos back from it.
+    evidenceMapValue = { i1: [{ url: 'https://x/a.jpg', name: 'AI evidence a' }] }
     await userEvent.click(within(rowOf('Item one')).getByRole('button', { name: /^Yes$/ }))
     await waitFor(() => expect(post).toHaveBeenCalledWith('s1', { decision: 'accepted', origin: 'answer_button' }))
     await waitFor(() => expect(within(rowOf('Item one')).getByPlaceholderText(/Describe what you observed/)).toHaveValue('AI reason'))
@@ -168,6 +180,7 @@ describe('page wiring (should hold)', () => {
     const r = mount()
     await within(rowOf('Item one')).findByRole('button', { name: 'Accept suggestion' })
     post.mockResolvedValue(reply('compliant', 'AI reason', [{ url: 'https://x/mine.jpg', name: 'mine' }, { url: 'https://x/a.jpg', name: 'AI a' }]))
+    evidenceMapValue = { i1: [{ url: 'https://x/mine.jpg', name: 'mine' }, { url: 'https://x/a.jpg', name: 'AI a' }] }
     await userEvent.click(within(rowOf('Item one')).getByRole('button', { name: 'Accept suggestion' }))
     await within(rowOf('Item one')).findByRole('button', { name: /2 photos/ })
     evidenceMapValue = { i1: [{ url: 'https://x/mine.jpg', name: 'mine' }, { url: 'https://x/a.jpg', name: 'AI a' }], i2: [] }

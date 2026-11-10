@@ -17,9 +17,9 @@ const repo = { repoUrl: 'https://github.com/o/n', branch: null, updatedAt: '2026
 beforeEach(() => {
   getRepoSource.mockReset()
   saveRepoSource.mockReset()
-  useStore.setState({ sessionToken: 'tok' })
+  useStore.setState({ authToken: 'tok' })
 })
-afterEach(() => useStore.setState({ sessionToken: null }))
+afterEach(() => useStore.setState({ authToken: null }))
 
 describe('useRepoSetup', () => {
   it('loads the saved repository', async () => {

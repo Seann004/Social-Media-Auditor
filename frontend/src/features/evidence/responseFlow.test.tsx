@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../lib/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/db')>()),
   fetchProjectComplianceSummary: vi.fn(),
-  updateProject: vi.fn(),
+  activateProject: vi.fn(),
   upsertAuditResult: vi.fn(),
   saveAuditFindings: vi.fn(),
 }))
@@ -15,8 +15,9 @@ vi.mock('./api', async (importOriginal) => ({
   getScreenshotUrl: vi.fn(),
 }))
 
-import * as db from '../../lib/db'
+// The store first: lib/db imports the store, so loading the store first gives it the mocked lib/db.
 import { useStore } from '../../store/useStore'
+import * as db from '../../lib/db'
 import type { ChecklistItemStatus, Project } from '../../types'
 import * as api from './api'
 import { EvidenceApiError } from './api'
@@ -102,14 +103,17 @@ const status = () => screen.getByTestId('status').textContent
 beforeEach(() => {
   postDecision.mockReset()
   vi.mocked(api.getScreenshotUrl).mockReset().mockResolvedValue('https://files.example/s.jpg')
-  vi.mocked(db.fetchProjectComplianceSummary).mockReset().mockResolvedValue({ p1: { total: 1 } } as never)
-  vi.mocked(db.updateProject).mockReset().mockResolvedValue(undefined as never)
+  vi.mocked(db.fetchProjectComplianceSummary).mockReset().mockResolvedValue({ p1: { percentage: 100, answered: 1, total: 1 } } as never)
+  vi.mocked(db.activateProject).mockReset().mockResolvedValue(undefined as never)
   vi.mocked(db.upsertAuditResult).mockReset().mockResolvedValue(undefined as never)
   vi.mocked(db.saveAuditFindings).mockReset().mockResolvedValue(undefined as never)
   useStore.setState({
     currentUserId: 'u1',
     responses: {},
+    allResponses: {},
+    resolutions: {},
     complianceMap: {},
+    projectItemCounts: {},
     projects: [{ id: 'p1', status: 'in_progress' } as unknown as Project],
   })
 })
@@ -257,8 +261,9 @@ describe('after a decision', () => {
     render(<Harness suggestion={makeSuggestion()} />)
     await userEvent.click(screen.getByRole('button', { name: /^accept/i }))
     await waitFor(() => expect(useStore.getState().projects[0].status).toBe('in_progress'))
-    expect(db.updateProject).toHaveBeenCalledWith('p1', { projectStatus: 'in_progress' })
-    expect(useStore.getState().complianceMap['p1']).toEqual({ total: 1 })
+    expect(db.activateProject).toHaveBeenCalledWith('p1')
+    expect(useStore.getState().complianceMap['p1']).toBe(100)
+    expect(useStore.getState().projectItemCounts['p1']).toEqual({ answered: 1, total: 1 })
   })
 
   it('a failed compliance refresh does not undo or hide a decision that was saved', async () => {

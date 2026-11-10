@@ -26,7 +26,7 @@ const sentence = (err: unknown): string => (err instanceof EvidenceApiError ? er
 /** Loads the saved repository of a project once, and saves a new one. */
 export function useRepoSetup(projectId: string, options: { enabled: boolean }): UseRepoSetupResult {
   const { enabled } = options
-  const sessionToken = useStore((s) => s.sessionToken)
+  const authToken = useStore((s) => s.authToken)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
 
   useEffect(() => {
@@ -42,7 +42,7 @@ export function useRepoSetup(projectId: string, options: { enabled: boolean }): 
     return () => {
       alive = false
     }
-  }, [projectId, enabled, sessionToken])
+  }, [projectId, enabled, authToken])
 
   const save = useCallback(
     async (input: RepoInput): Promise<string | null> => {

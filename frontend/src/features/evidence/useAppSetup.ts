@@ -22,7 +22,7 @@ interface Loaded {
 /** Loads the app address, test accounts and key state of a project once, and again on reload(). */
 export function useAppSetup(projectId: string, options: { enabled: boolean }): UseAppSetupResult {
   const { enabled } = options
-  const sessionToken = useStore((s) => s.sessionToken)
+  const authToken = useStore((s) => s.authToken)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const loadRef = useRef<() => Promise<void>>(() => Promise.resolve())
 
@@ -47,7 +47,7 @@ export function useAppSetup(projectId: string, options: { enabled: boolean }): U
       alive = false
       loadRef.current = () => Promise.resolve()
     }
-  }, [projectId, enabled, sessionToken])
+  }, [projectId, enabled, authToken])
 
   const reload = useCallback((): Promise<void> => loadRef.current(), [])
   const current = loaded?.projectId === projectId ? loaded : null

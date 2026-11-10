@@ -1,8 +1,7 @@
 import { Router, type RequestHandler } from 'express'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getSupabaseAdmin } from '../../config/supabaseAdmin.js'
-import { createAuthRouter, verifyLoginWithSupabase } from '../auth/routes.js'
-import { createSessions } from '../auth/session.js'
+import { sessionsFromEnv } from '../auth/session.js'
 import type { AppRepository } from './appRepository.js'
 import { createAppRouter } from './appRoutes.js'
 import { createAuditData, type AuditData } from './auditData.js'
@@ -44,22 +43,24 @@ export interface EvidenceModuleOptions {
 type Env = Record<string, string | undefined>
 
 export const NOT_CONFIGURED_MESSAGE =
-  "AI evidence assessment isn't configured: set SESSION_SECRET and SUPABASE_SERVICE_ROLE_KEY"
+  "AI evidence assessment isn't configured: set JWT_SECRET (at least 32 characters) and SUPABASE_SERVICE_ROLE_KEY"
 
-/** The model the owner's backend .env names: GROQ_MODEL overrides it. */
-const DEFAULT_MODEL = 'openai/gpt-oss-120b'
+/**
+ * The evidence model. EVIDENCE_GROQ_MODEL overrides it; GROQ_MODEL is left to the app's other AI
+ * features, whose model may not support reasoning_effort or JSON mode.
+ */
+export const DEFAULT_EVIDENCE_MODEL = 'openai/gpt-oss-120b'
 
 const SECRET_KEY_MISSING = '[evidence] EVIDENCE_SECRET_KEY is not set: test accounts and app runs are unavailable.'
 
 /** Every path of this module, so that an unconfigured server answers 503 on these and no others. */
 const EVIDENCE_PATHS = [
-  '/auth/login',
   '/projects/:id/evidence-sources',
   '/projects/:id/evidence-permission',
   '/projects/:id/evidence-runs',
   '/projects/:id/evidence-runs/latest',
   '/projects/:id/evidence-runs/:runId/reassess',
-  '/projects/:id/suggestions',
+  '/projects/:id/ai-suggestions',
   '/suggestions/:id/decision',
   '/evidence/screenshots/page/:id',
   '/evidence/screenshots/quote/:id',
@@ -102,18 +103,18 @@ const disabled = (): EvidenceModule => ({
 })
 
 /**
- * Builds the evidence feature: the login and evidence routers, the job queue and the start-up step.
+ * Builds the evidence feature: the evidence, app and repo routers, the job queue and the start-up step.
  * Importing this file opens no connection and starts no browser; that happens when a job runs.
- * Without SESSION_SECRET or the service key the feature is off and the rest of the app is untouched.
- * A SESSION_SECRET that is set but too short throws, and so does an EVIDENCE_SECRET_KEY that is set but
- * not 32 bytes of base64. Without EVIDENCE_SECRET_KEY the rest works, but not test accounts or app runs.
+ * The routes accept the app login token (`POST /api/auth/login`), checked with JWT_SECRET. Without a
+ * JWT_SECRET of at least 32 characters, or without the service key, the feature is off (its routes
+ * answer 503) and the rest of the app is untouched: this never throws for a missing or short secret.
+ * An EVIDENCE_SECRET_KEY that is set but not 32 bytes of base64 throws. Without EVIDENCE_SECRET_KEY
+ * the rest works, but not test accounts or app runs.
  */
 export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = {}): EvidenceModule {
-  const secret = env.SESSION_SECRET
-  // A secret that is set but too short is a mistake to fix, whatever else is missing.
-  const sessions = secret ? createSessions(secret) : null
+  const sessions = sessionsFromEnv(env)
   const secretKey = parseSecretKey(env.EVIDENCE_SECRET_KEY)
-  const admin = secret && env.SUPABASE_SERVICE_ROLE_KEY ? (options.admin ?? getSupabaseAdmin)() : null
+  const admin = sessions && env.SUPABASE_SERVICE_ROLE_KEY ? (options.admin ?? getSupabaseAdmin)() : null
   if (!sessions || !env.SUPABASE_SERVICE_ROLE_KEY || (!admin && !(options.repo && options.screenshots && options.audit))) {
     console.error(`[evidence] ${NOT_CONFIGURED_MESSAGE}. The evidence routes answer 503 until then.`)
     return disabled()
@@ -127,7 +128,7 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
   const hosts = allowedPrivateHosts(env)
   const guard = () => createUrlGuard({ allowedPrivateHosts: hosts })
   const apiKey = env.GROQ_API_KEY ?? ''
-  const model = env.GROQ_MODEL || DEFAULT_MODEL
+  const model = env.EVIDENCE_GROQ_MODEL || DEFAULT_EVIDENCE_MODEL
 
   if (!apiKey) console.error('[evidence] GROQ_API_KEY is not set: suggestions can be read but runs cannot start.')
   if (!secretKey) console.error(SECRET_KEY_MISSING)
@@ -151,7 +152,6 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
 
   return {
     routers: [
-      createAuthRouter({ verifyLogin: verifyLoginWithSupabase, sessions }),
       createEvidenceRouter({
         repo,
         screenshots,

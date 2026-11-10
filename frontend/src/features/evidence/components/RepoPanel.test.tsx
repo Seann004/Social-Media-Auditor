@@ -52,7 +52,7 @@ function Harness() {
 }
 
 beforeEach(() => {
-  useStore.setState({ sessionToken: null })
+  useStore.setState({ authToken: null })
   Object.values(m).forEach((fn) => fn.mockReset())
   m.getSources.mockResolvedValue({ source: null, permission: null })
   m.getLatestRun.mockResolvedValue({ run: null, pages: [] })

@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { createSession } = vi.hoisted(() => ({ createSession: vi.fn() }))
+const { createUser } = vi.hoisted(() => ({ createUser: vi.fn() }))
 
 vi.mock('../lib/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/db')>()),
-  createUser: vi.fn().mockResolvedValue(undefined),
-  createSession,
+  createUser,
 }))
 vi.mock('../lib/crypto', () => ({ hashPassword: vi.fn(async () => 'hashed-password') }))
 
@@ -26,104 +25,51 @@ const entry = (over: Partial<AuditResponse> = {}): AuditResponse => ({
 
 beforeEach(() => {
   localStorage.clear()
-  createSession.mockReset()
-  useStore.setState({ isAuthenticated: false, currentUserId: '', sessionToken: null, responses: {}, users: [] })
+  createUser.mockReset().mockResolvedValue({ token: 'register-token' })
+  useStore.setState({
+    isAuthenticated: false,
+    currentUserId: '',
+    authToken: null,
+    responses: {},
+    allResponses: {},
+    resolutions: {},
+    users: [],
+  })
 })
 
-describe('session token', () => {
-  it('starts null, is set by setSessionToken, and is cleared by logout', () => {
-    expect(useStore.getState().sessionToken).toBeNull()
-    useStore.getState().setSessionToken('tok')
-    expect(useStore.getState().sessionToken).toBe('tok')
+describe('auth token (one token for the app API and the evidence API)', () => {
+  it('starts null, is set by login, and is cleared by logout', () => {
+    expect(useStore.getState().authToken).toBeNull()
+    useStore.getState().login('u1', 'Alice A', 'auditor', 'tok')
+    expect(useStore.getState().authToken).toBe('tok')
     useStore.getState().logout()
-    expect(useStore.getState().sessionToken).toBeNull()
+    expect(useStore.getState().authToken).toBeNull()
   })
 
   it('is persisted with the rest of the session', () => {
-    useStore.getState().setSessionToken('tok')
+    useStore.getState().login('u1', 'Alice A', 'auditor', 'tok')
     const saved = JSON.parse(localStorage.getItem('safetyaudit-session') ?? '{}')
-    expect(saved.state.sessionToken).toBe('tok')
+    expect(saved.state.authToken).toBe('tok')
+    expect(saved.state).not.toHaveProperty('sessionToken')
   })
 
-  it('does not survive a different user logging in', () => {
-    useStore.getState().login('u1', 'Alice A', 'auditor')
-    useStore.getState().setSessionToken('alice-token')
-    useStore.getState().login('u2', 'Bob B', 'auditor')
-    expect(useStore.getState().sessionToken).toBeNull()
+  it('is replaced when a different user logs in', () => {
+    useStore.getState().login('u1', 'Alice A', 'auditor', 'alice-token')
+    useStore.getState().login('u2', 'Bob B', 'auditor', 'bob-token')
+    expect(useStore.getState().authToken).toBe('bob-token')
   })
 
-  it('does not survive a registration that signs in a new user', async () => {
-    useStore.setState({ currentUserId: 'u1', isAuthenticated: true, sessionToken: 'alice-token' })
-    await useStore.getState().register('b@example.com', 'Bob B', 'auditor')
+  it('is the token the backend returns for a registration', async () => {
+    useStore.setState({ currentUserId: 'u1', isAuthenticated: true, authToken: 'alice-token' })
+    await useStore.getState().register('b@example.com', 'Bob B', 'auditor', 'Secret_123')
     expect(useStore.getState().currentUserId).not.toBe('u1')
-    expect(useStore.getState().sessionToken).toBeNull()
-  })
-})
-
-describe('session token after registering', () => {
-  const deferred = () => {
-    let resolve!: (token: string) => void
-    let reject!: (err: Error) => void
-    const promise = new Promise<string>((res, rej) => {
-      resolve = res
-      reject = rej
-    })
-    return { promise, resolve, reject }
-  }
-  const registerBob = () => useStore.getState().register('  Bob@Example.COM ', 'Bob B', 'auditor', 'Secret_123')
-  const flush = () => new Promise((done) => setTimeout(done))
-
-  it('asks for one as a login does, and stores it', async () => {
-    createSession.mockResolvedValue('bob-token')
-    await registerBob()
-    await flush()
-    expect(createSession).toHaveBeenCalledWith('bob@example.com', 'hashed-password')
-    expect(useStore.getState().sessionToken).toBe('bob-token')
+    expect(useStore.getState().authToken).toBe('register-token')
   })
 
-  it('does not wait for it', async () => {
-    const pending = deferred()
-    createSession.mockReturnValue(pending.promise)
-    await registerBob()
-    expect(useStore.getState().isAuthenticated).toBe(true)
-    expect(useStore.getState().sessionToken).toBeNull()
-    pending.resolve('late')
-    await flush()
-    expect(useStore.getState().sessionToken).toBe('late')
-  })
-
-  it('still registers when the request fails', async () => {
-    createSession.mockRejectedValue(new Error('503'))
-    await expect(registerBob()).resolves.toBeUndefined()
-    await flush()
-    expect(useStore.getState().isAuthenticated).toBe(true)
-    expect(useStore.getState().sessionToken).toBeNull()
-  })
-
-  it('discards a token that arrives after logout', async () => {
-    const pending = deferred()
-    createSession.mockReturnValue(pending.promise)
-    await registerBob()
-    useStore.getState().logout()
-    pending.resolve('late')
-    await flush()
-    expect(useStore.getState().sessionToken).toBeNull()
-  })
-
-  it('discards a token that arrives after another user signed in', async () => {
-    const pending = deferred()
-    createSession.mockReturnValue(pending.promise)
-    await registerBob()
-    useStore.getState().login('u2', 'Alice A', 'auditor')
-    pending.resolve('bob-late')
-    await flush()
-    expect(useStore.getState().sessionToken).toBeNull()
-  })
-
-  it('asks for none without a password', async () => {
-    await useStore.getState().register('b@example.com', 'Bob B', 'auditor')
-    await flush()
-    expect(createSession).not.toHaveBeenCalled()
+  it('has no separate session token or session request any more', () => {
+    const state = useStore.getState() as unknown as Record<string, unknown>
+    expect(state.sessionToken).toBeUndefined()
+    expect(state.setSessionToken).toBeUndefined()
   })
 })
 
@@ -157,5 +103,31 @@ describe('applyServerAnswer', () => {
     expect(after).not.toBe(before)
     expect(after['p1__i1']).not.toBe(before.p1__i1)
     expect(after['p1__i2']).toBe(other)
+  })
+
+  it('puts the result on every row of the item, the findings on mine, and shows my row', () => {
+    const mine = entry({ status: 'compliant', findings: 'mine' })
+    const theirs = entry({ id: 'r9', auditorId: 'u2', status: 'non_compliant', findings: 'theirs' })
+    useStore.setState({
+      currentUserId: 'u1',
+      allResponses: { p1__i1: [theirs, mine] },
+      responses: { p1__i1: { ...mine, status: 'needs_review' } },
+    })
+    useStore.getState().applyServerAnswer('p1', 'i1', { status: 'partially', findings: 'decided' })
+    const rows = useStore.getState().allResponses['p1__i1']
+    expect(rows).toHaveLength(2)
+    expect(rows.every((r) => r.status === 'partially')).toBe(true)
+    expect(rows.find((r) => r.auditorId === 'u1')?.findings).toBe('decided')
+    expect(rows.find((r) => r.auditorId === 'u2')?.findings).toBe('theirs')
+    expect(useStore.getState().responses['p1__i1']).toMatchObject({ id: 'r1', status: 'partially', findings: 'decided' })
+  })
+
+  it('adds my row when only other auditors had answered', () => {
+    const theirs = entry({ id: 'r9', auditorId: 'u2', status: 'compliant' })
+    useStore.setState({ currentUserId: 'u1', allResponses: { p1__i1: [theirs] }, responses: { p1__i1: theirs } })
+    useStore.getState().applyServerAnswer('p1', 'i1', { status: 'non_compliant', findings: null })
+    const rows = useStore.getState().allResponses['p1__i1']
+    expect(rows.map((r) => [r.auditorId, r.status])).toEqual([['u1', 'non_compliant'], ['u2', 'non_compliant']])
+    expect(useStore.getState().responses['p1__i1'].status).toBe('non_compliant')
   })
 })

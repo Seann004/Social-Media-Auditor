@@ -9,16 +9,18 @@ vi.mock('../../../lib/db', async (orig) => ({
   fetchComplianceScores: vi.fn(),
   fetchAuditResults: vi.fn(),
   fetchProjectChecklistItems: vi.fn(),
+  fetchResolutions: vi.fn(),
 }))
 vi.mock('../../evidence/api', async (orig) => ({
   ...(await orig<typeof import('../../evidence/api')>()),
   getSuggestions: vi.fn(),
 }))
 
+// The store first: lib/db imports the store, so loading the store first gives it the mocked lib/db.
+import { useStore } from '../../../store/useStore'
 import * as db from '../../../lib/db'
 import * as api from '../../evidence/api'
 import { makeDecision, makeRun } from '../../evidence/testFixtures'
-import { useStore } from '../../../store/useStore'
 import ReportsPage from './ReportsPage'
 
 const getSuggestions = vi.mocked(api.getSuggestions)
@@ -34,7 +36,7 @@ const item = (itemId: string, itemName: string) => ({ itemId, guidelineId: 'g1',
 const reply = (decisions: unknown[]) => ({ run: makeRun(), suggestions: [], decisions }) as never
 
 function setup(role = 'head_auditor') {
-  useStore.setState({ currentUserId: 'u1', sessionToken: 't', users: [{ id: 'u1', name: 'A', email: 'a@x', role }], guidelines: [] } as never)
+  useStore.setState({ currentUserId: 'u1', authToken: 't', users: [{ id: 'u1', name: 'A', email: 'a@x', role }], guidelines: [] } as never)
 }
 /** The on-screen pane; the print view is always in the DOM, so it cannot show what the screen shows. */
 const screenPane = (container: HTMLElement) => within(container.querySelector('.print\\:hidden') as HTMLElement)
@@ -50,6 +52,7 @@ beforeEach(() => {
   vi.mocked(db.fetchComplianceScores).mockReset().mockResolvedValue([])
   vi.mocked(db.fetchAuditResults).mockReset().mockResolvedValue([result('i1', 'non_compliant'), result('i2', 'partially')] as never)
   vi.mocked(db.fetchProjectChecklistItems).mockReset().mockResolvedValue([item('i1', 'Needs a policy'), item('i2', 'Needs a contact')] as never)
+  vi.mocked(db.fetchResolutions).mockReset().mockResolvedValue([])
   getSuggestions.mockReset()
   setup()
 })
@@ -89,10 +92,10 @@ describe('ReportsPage provenance badges', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  it('a missing session token leaves the report rendering with no badges', async () => {
+  it('a missing auth token leaves the report rendering with no badges', async () => {
     const real = await vi.importActual<typeof import('../../evidence/api')>('../../evidence/api')
     getSuggestions.mockImplementation(real.getSuggestions)
-    useStore.setState({ sessionToken: null } as never)
+    useStore.setState({ authToken: null } as never)
     await openReport()
     await act(async () => { await new Promise((r) => setTimeout(r, 10)) })
     expect(screen.queryByText('Manual')).toBeNull()
@@ -115,6 +118,17 @@ describe('ReportsPage provenance badges', () => {
     await waitFor(() => expect(screen.getAllByText('Manual')).toHaveLength(2))
     const failing = screen.getAllByText('Needs a contact')[0].closest('li') as HTMLElement
     expect(within(failing).getByText('Manual')).toBeInTheDocument()
+  })
+
+  it('badges the resolved result: a resolution to compliant takes the item off the failing list', async () => {
+    getSuggestions.mockResolvedValue(reply([makeDecision({ itemId: 'i1', suggestedResult: 'no', finalResult: 'non_compliant' })]))
+    vi.mocked(db.fetchResolutions).mockResolvedValue([
+      { itemId: 'i2', resolvedBy: 'u1', resolvedStatus: 'compliant', notes: null, resolvedAt: '2026-01-02' },
+    ])
+    const container = await openReport()
+    await waitFor(() => expect(screen.getAllByText('AI suggested No · accepted')).toHaveLength(2))
+    expect(screenPane(container).queryByText('Needs a contact')).toBeNull()
+    expect(screen.queryByText('Manual')).toBeNull()
   })
 
   describe('switching reports', () => {

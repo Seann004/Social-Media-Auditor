@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { AUDITOR, ITEMS, PROJECT_ID, installStub, seedSession, type Stub } from './stubApi'
+import { AUDITOR, answeredCount, ITEMS, PROJECT_ID, installStub, seedSession, type Stub } from './stubApi'
 
 async function openAudit(page: Page): Promise<Stub> {
   const stub = await installStub(page, { withRun: false })
@@ -31,7 +31,7 @@ test.describe('AI evidence from a code repository', () => {
     await expect(panel.getByText('2 suggestions · 0 flagged')).toBeVisible()
 
     // Suggestions alone change nothing.
-    await expect(page.getByText('0/3 items')).toBeVisible()
+    await expect(answeredCount(page)).toHaveText('0/3')
     await expect(row(page, 0).getByRole('region', { name: 'AI suggestion' })).toContainText('No')
     await expect(row(page, 0).getByText('Based on the code at commit abc1234, not on the live app.')).toBeVisible()
     expect(stub.decisions).toHaveLength(0)
@@ -47,7 +47,7 @@ test.describe('AI evidence from a code repository', () => {
     // Only a decision moves the answer and the score.
     await row(page, 0).getByRole('button', { name: 'Accept', exact: true }).click()
     await expect(row(page, 0).getByText('Accepted', { exact: true })).toBeVisible()
-    await expect(page.getByText('1/3 items')).toBeVisible()
+    await expect(answeredCount(page)).toHaveText('1/3')
     expect(stub.decisions).toHaveLength(1)
     expect(stub.violations).toEqual([])
   })

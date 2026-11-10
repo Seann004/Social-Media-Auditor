@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { AUDITOR, ITEMS, PROJECT_ID, installStub, seedSession, type Stub } from './stubApi'
+import { AUDITOR, answeredCount, ITEMS, PROJECT_ID, installStub, seedSession, type Stub } from './stubApi'
 
 const SHOTS = process.env.E2E_SHOTS ?? ''
 const PASSWORD = 'Sup3r-secret-pw-9431'
@@ -61,7 +61,7 @@ test.describe('AI evidence from inside the app', () => {
     await expect(panel.getByText('Left changed')).toBeVisible()
 
     // Suggestions alone change nothing.
-    await expect(page.getByText('0/3 items')).toBeVisible()
+    await expect(answeredCount(page)).toHaveText('0/3')
     await expect(row(page, 0).getByRole('region', { name: 'AI suggestion' })).toContainText('No')
     expect(stub.decisions).toHaveLength(0)
 
@@ -89,7 +89,7 @@ test.describe('AI evidence from inside the app', () => {
     // Only a decision moves the answer and the score.
     await row(page, 0).getByRole('button', { name: 'Accept', exact: true }).click()
     await expect(row(page, 0).getByText('Accepted', { exact: true })).toBeVisible()
-    await expect(page.getByText('1/3 items')).toBeVisible()
+    await expect(answeredCount(page)).toHaveText('1/3')
     expect(stub.decisions).toHaveLength(1)
     expect(stub.violations).toEqual([])
   })
@@ -124,7 +124,7 @@ test.describe('AI evidence from inside the app', () => {
     await panel.getByLabel('Public pages').check()
     await expect(panel.getByRole('button', { name: 'Run assessment' })).toBeVisible()
     await row(page, 0).getByRole('button', { name: 'Yes' }).click()
-    await expect(page.getByText('1/3 items')).toBeVisible()
+    await expect(answeredCount(page)).toHaveText('1/3')
     expect(stub.savedAnswers).toHaveLength(1)
     expect(stub.violations).toEqual([])
   })

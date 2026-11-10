@@ -641,7 +641,7 @@ describe('recorded steps and changes', () => {
       quotes: quotes.map(({ id: _q, ...q }) => q),
     })
     await world.repo.updateRun(appRun.id, { status: 'completed' })
-    const res = await request(world.app).get(`/api/projects/${P1}/suggestions`).set(world.auth(USERS.auditor))
+    const res = await request(world.app).get(`/api/projects/${P1}/ai-suggestions`).set(world.auth(USERS.auditor))
     expect(res.body.run.id).toBe(appRun.id)
     expect(res.body.suggestions[0].quotes[0]).toMatchObject({ pageId: pages.pageId, pageUrl: 'https://example.com/privacy', pageTitle: 'Privacy' })
   })

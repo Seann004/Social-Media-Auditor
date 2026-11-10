@@ -38,7 +38,7 @@ const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync
 
 beforeEach(() => {
   vi.useFakeTimers()
-  useStore.setState({ sessionToken: null })
+  useStore.setState({ authToken: null })
   getLatestRun.mockReset()
   getSuggestions.mockReset()
   getSuggestions.mockResolvedValue(sugg())
@@ -173,8 +173,8 @@ describe('useEvidence', () => {
     expect(getLatestRun).toHaveBeenCalledTimes(2)
   })
 
-  it('loads again when the session token arrives, ending the 401 a missing token caused', async () => {
-    const noToken = new EvidenceApiError(401, 'You are not signed in to the evidence service.')
+  it('loads again when the auth token arrives, ending the 401 a missing token caused', async () => {
+    const noToken = new EvidenceApiError(401, 'You are not signed in.')
     getLatestRun.mockRejectedValue(noToken)
     getSuggestions.mockRejectedValue(noToken)
     const { result } = renderHook(() => useEvidence('p1', { enabled: true }))
@@ -183,7 +183,7 @@ describe('useEvidence', () => {
     getLatestRun.mockResolvedValue(latest(makeRun()))
     getSuggestions.mockResolvedValue(sugg())
 
-    act(() => useStore.getState().setSessionToken('tok'))
+    act(() => useStore.setState({ authToken: 'tok' }))
     await settle()
 
     expect(result.current.error).toBeNull()

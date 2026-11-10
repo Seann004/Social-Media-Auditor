@@ -1,6 +1,6 @@
 // A stand-in for the whole backend, driven by `page.route`. Nothing here talks to a real server.
 // Shapes follow backend/src/features/evidence/views.ts through src/features/evidence/types.ts.
-import type { Page, Route } from '@playwright/test'
+import type { Locator, Page, Route } from '@playwright/test'
 
 export const APP_ORIGIN = 'http://127.0.0.1:5199'
 const API_ORIGIN = 'http://127.0.0.1:5198'
@@ -388,7 +388,7 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
   }
 
   const evidence = (route: Route, method: string, path: string): Promise<void> | null => {
-    if (!/^\/(projects\/[^/]+\/(evidence-|suggestions|app-|repo-|test-accounts)|suggestions\/|evidence\/)/.test(path)) return null
+    if (!/^\/(projects\/[^/]+\/(evidence-|ai-suggestions|app-|repo-|test-accounts)|suggestions\/|evidence\/)/.test(path)) return null
     if (options.evidenceDown) {
       return json(route, { error: 'AI evidence assessment is not set up on this server.' }, 503)
     }
@@ -446,7 +446,7 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
       return json(route, { run: run('capturing', 0) }, 202)
     }
     if (path.endsWith('/evidence-runs/latest')) return latest(route)
-    if (path.endsWith('/suggestions') && method === 'GET') {
+    if (path.endsWith('/ai-suggestions') && method === 'GET') {
       return json(
         route,
         runState === 'completed'
@@ -476,7 +476,9 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
     if (method === 'GET' && path === '/guidelines') return json(route, [guideline])
     if (method === 'GET' && path === '/guidelines/g1/items') return json(route, items)
     if (method === 'GET' && path === '/projects') return json(route, [project()])
-    if (method === 'GET' && path === '/projects/compliance-summary') return json(route, { [PROJECT_ID]: percentage() })
+    if (method === 'GET' && path === '/projects/compliance-summary') {
+      return json(route, { [PROJECT_ID]: { percentage: percentage(), answered: answers.size, total: ITEMS.length } })
+    }
     if (method === 'GET' && path === `/projects/${PROJECT_ID}`) {
       return json(route, {
         project: project(),
@@ -487,6 +489,18 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
     }
     if (method === 'GET' && path === `/projects/${PROJECT_ID}/checklist`) return json(route, items)
     if (method === 'GET' && path === `/projects/${PROJECT_ID}/results`) return json(route, resultRows())
+    // The rest of the audit page: Head Auditor resolutions, answers from earlier audits, photos per auditor, agreement.
+    if (method === 'GET' && path === `/projects/${PROJECT_ID}/resolutions`) return json(route, [])
+    if (method === 'GET' && path === `/projects/${PROJECT_ID}/suggestions`) return json(route, [])
+    if (method === 'GET' && path === `/projects/${PROJECT_ID}/evidence`) {
+      const wanted = (url.searchParams.get('itemIds') ?? '').split(',')
+      return json(route, wanted.flatMap((itemId) => {
+        const images = answers.get(itemId)?.evidenceImages ?? []
+        return images.length > 0 ? [{ itemId, userId: AUDITOR.userId, images }] : []
+      }))
+    }
+    if (method === 'GET' && path === `/projects/${PROJECT_ID}/reliability`) return json(route, { kappa: null, sharedItems: 0, raterPair: null })
+    if (method === 'POST' && path === `/projects/${PROJECT_ID}/activate`) return json(route, { success: true })
     if (method === 'POST' && path === `/projects/${PROJECT_ID}/results`) {
       const body = route.request().postDataJSON() as { itemId: string; result: Answer }
       stub.savedAnswers.push(body as unknown as Json)
@@ -538,7 +552,7 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
 const sessionOf = (u: TestUser) => ({
   state: {
     isAuthenticated: true,
-    sessionToken: 'e2e-session-token',
+    authToken: 'e2e-auth-token',
     currentUserId: u.userId,
     users: [{ id: u.userId, name: u.userName, role: u.role, initials: 'XX', color: 'bg-slate-500' }],
   },
@@ -559,4 +573,9 @@ export async function switchSession(page: Page, user: TestUser): Promise<void> {
   await page.evaluate((session) => {
     window.localStorage.setItem('safetyaudit-session', JSON.stringify(session))
   }, sessionOf(user))
+}
+
+/** The "Answered" figure in the audit header, such as "1/3". */
+export function answeredCount(page: Page): Locator {
+  return page.getByText('Answered', { exact: true }).locator('xpath=preceding-sibling::p[1]')
 }
