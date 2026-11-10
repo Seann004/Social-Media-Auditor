@@ -74,11 +74,17 @@ const samePage = (a: PageState, b: PageState): boolean => a.url === b.url && a.t
 
 /**
  * Whether `action` repeats `last`: the same type, element and payload, where the last one left the
- * page (address, text and control states) as it was and the page is still the same now. A step that
- * changed the page, or one on another element, is not a repeat.
+ * page (address, text and control states) as it was. `last` is only ever the step just before this
+ * one (the check loop forgets it on any other step, and never keeps one whose page was still
+ * loading), so the page now is the page that action left. A step that changed the page, or one on
+ * another element, is not a repeat.
+ *
+ * Accepted edge case: a control whose effect shows in none of these, such as an image-only "Next"
+ * on a carousel that keeps one address and one text, gets its second identical click refused. The
+ * AI is told to try something else, and the refusal costs one step.
  */
-export function isRepeat(last: DoneAction | null, action: ActAction, el: AppElement | null, view: AppView | null): boolean {
-  if (last === null || view === null || last.action.type !== action.type) return false
+export function isRepeat(last: DoneAction | null, action: ActAction, el: AppElement | null): boolean {
+  if (last === null || last.action.type !== action.type) return false
   if (!samePayload(action, last.action) || !sameTarget(last, action, labelOf(el))) return false
-  return samePage(last.before, last.after) && samePage(last.after, pageState(view))
+  return samePage(last.before, last.after)
 }

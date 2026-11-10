@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { REPEATED_ACTION } from './appRepeat.js'
 import { FINISHED_TOO_EARLY } from './appSteps.js'
 import type { AppStep } from './appTypes.js'
 import { toAppStepView } from './appViews.js'
@@ -33,6 +34,12 @@ describe('toAppStepView: the early-finish nudge', () => {
     const view = toAppStepView(step({ outcome: 'refused', refusalReason: FINISHED_TOO_EARLY, line }), new Map())
     expect(view.hint).toBe(true)
     expect(view.line).toBe(`Step 5 · Teen 15 · Asked to look further: finished the check. ${FINISHED_TOO_EARLY}`)
+  })
+
+  it('marks a refused repeat as a hint too', () => {
+    const line = `Step 5 · Teen 15 · Asked to look further: clicked button "Next". ${REPEATED_ACTION}`
+    const view = toAppStepView(step({ outcome: 'refused', refusalReason: REPEATED_ACTION, line }), new Map())
+    expect(view).toMatchObject({ outcome: 'refused', hint: true, line })
   })
 
   it('keeps a real refusal a refusal', () => {

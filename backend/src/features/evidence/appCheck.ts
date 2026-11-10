@@ -6,9 +6,9 @@
 import { StepDecisionError, type AccountStatus, type DecideStep, type StepPrompt } from './appAgent.js'
 import type { AppRepository } from './appRepository.js'
 import { isRepeat, labelOf, pageState, REPEATED_ACTION, type DoneAction } from './appRepeat.js'
-import { pageDetail } from './appStepNotes.js'
+import { pageDetail, type PageDetailOptions } from './appStepNotes.js'
 import { checkAction, detectBlock, type SafetyContext } from './appSafety.js'
-import type { AppSession, AppSessionPool } from './appSession.js'
+import { wasStillLoading, type AppSession, type AppSessionPool } from './appSession.js'
 import {
   detectChange,
   FINISHED_TOO_EARLY,
@@ -130,13 +130,13 @@ export function leftChangedLine(change: AppChange): string {
   return `${change.accountLabel}: "${change.control}" on ${pathOf(change.pageUrl)} is ${change.after} (was ${change.before})`
 }
 
-/** `typed`: every text the AI typed in this check, so that the page repeating one is not quoted as its message (ruling A20). */
-function doneDetail(change: DetectedChange | null, typed: readonly string[], before: AppView | null, after: AppView | null, afterUrl: string): string {
+/** `opts.typed`: every text the AI typed in this check, so that the page repeating one is not quoted as its message (ruling A20). */
+function doneDetail(change: DetectedChange | null, opts: PageDetailOptions, before: AppView | null, after: AppView | null, afterUrl: string): string {
   if (change !== null) {
     if (change.chosen !== undefined) return `"${change.chosen}" is now on`
     return ON_OFF_CHANGE_ROLES.includes(change.role) ? `"${change.control}" is now ${change.after}` : `"${change.control}" set to "${change.after}"`
   }
-  return pageDetail(before, after, afterUrl, typed)
+  return pageDetail(before, after, afterUrl, opts)
 }
 
 export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<CheckOutcome> {
@@ -321,7 +321,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     if (refusal !== null) return refuse(action, refusal)
     const verdict = checkAction(action, before, safety())
     if (!verdict.allowed) return refuse(action, verdict.reason)
-    if (isRepeat(lastDone, action, el, before)) {
+    if (isRepeat(lastDone, action, el)) {
       // Kept, so that the same action a third time is refused too.
       const kept = lastDone
       await refuse(action, REPEATED_ACTION)
@@ -361,9 +361,10 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       await noteSave(el, before, who)
     }
     const typed = [...steps, { action }].flatMap((s) => (s.action.type === 'type' ? [s.action.text] : []))
-    const detail = doneDetail(change, typed, before, after, afterUrl)
+    const detail = doneDetail(change, { typed, stillLoading: wasStillLoading(result) }, before, after, afterUrl)
     await record({ action, outcome: 'done', detail, refusalReason: null, view: after, describedOn: before, screenshot: after === null ? null : await shoot() })
-    if (before !== null && after !== null) {
+    // A page still loading may yet change, so the same action again is not a repeat of this one.
+    if (before !== null && after !== null && !wasStillLoading(result)) {
       lastDone = { action, label: labelOf(el), before: pageState(before), after: pageState(after) }
     }
     noteExplored(afterUrl, signedInNow ? 'sign-in' : 'other')

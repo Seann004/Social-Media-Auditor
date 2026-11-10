@@ -74,6 +74,11 @@ export interface AppSessionPool {
 const OUTSIDE_APP = 'The app moved to an address outside it, so the page was left.'
 const LINK_OUTSIDE = 'The link led outside the app, so it was not followed.'
 const STILL_LOADING = 'The page was still loading.'
+
+/** Whether a done action's result says the page had not settled: what it shows may still change. */
+export function wasStillLoading(result: { ok: boolean; detail: string }): boolean {
+  return result.ok && result.detail.endsWith(STILL_LOADING)
+}
 const TOOK_TOO_LONG = 'The action took too long, so it was given up.'
 const FAILED = 'The action could not be carried out.'
 const UNUSABLE_REASON = 'signing in failed twice'

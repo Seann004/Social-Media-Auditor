@@ -36,7 +36,8 @@ describe('runCheck: the same action again on an unchanged page', () => {
     const { outcome, agent } = await kit.check([switchTo, fillLogin, fillLogin, fillLogin, FINISH, FINISH])
     expect(outcome.steps.map((s) => s.outcome).slice(0, 4)).toEqual(['done', 'done', 'refused', 'refused'])
     expect(outcome.steps[2]).toMatchObject({ refusalReason: REPEATED_ACTION })
-    expect(outcome.steps[2].line).toBe(`Step 3 · Teen 15 · Refused: filled the login of Teen 15 into "Username". ${REPEATED_ACTION}`)
+    // A hint to change tactics, like the early-finish nudge: not a safety refusal.
+    expect(outcome.steps[2].line).toBe(`Step 3 · Teen 15 · Asked to look further: filled the login of Teen 15 into "Username". ${REPEATED_ACTION}`)
     expect(agent.prompts[3].history.at(-1)).toContain(REPEATED_ACTION)
     // Not the early-finish nudge: the first finish after it is still refused as too early.
     expect(outcome.steps[4]).toMatchObject({ outcome: 'refused', refusalReason: expect.stringMatching(/^Finished too early/) })
@@ -80,5 +81,30 @@ describe('runCheck: the same action again on an unchanged page', () => {
     const toggle = on('switch', 'Private account', 'toggle')
     const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), toggle, toggle, FINISH])
     expect(outcome.steps.slice(5, 7).map((s) => s.outcome)).toEqual(['done', 'done'])
+  })
+
+  it('allows the same action again when the last one ended with the page still loading', async () => {
+    const [switchTo] = signIn('Teen 15')
+    const loading = (p: StepPrompt) => {
+      // The app was busy: the action is reported done, but the page had not settled.
+      vi.spyOn(kit.pool.get('acc-teen')!, 'execute').mockResolvedValue({ ok: true, detail: 'Filled. The page was still loading.' })
+      return fillLogin(p)
+    }
+    const { outcome } = await kit.check([switchTo, loading, fillLogin, FINISH])
+    expect(outcome.steps.slice(0, 3).map((s) => s.outcome)).toEqual(['done', 'done', 'done'])
+  })
+
+  it('refused repeats and the early-finish nudge each apply: repeats, then a finish refused once, then accepted', async () => {
+    const [switchTo] = signIn('Teen 15')
+    const { outcome } = await kit.check([switchTo, fillLogin, fillLogin, fillLogin, FINISH, FINISH])
+    expect(outcome.steps.map((s) => [s.outcome, s.refusalReason?.slice(0, 20) ?? null])).toEqual([
+      ['done', null],
+      ['done', null],
+      ['refused', REPEATED_ACTION.slice(0, 20)],
+      ['refused', REPEATED_ACTION.slice(0, 20)],
+      ['refused', 'Finished too early: '],
+      ['done', null],
+    ])
+    expect(outcome.finished).toBe(true)
   })
 })

@@ -38,37 +38,37 @@ describe('isRepeat', () => {
     const page = view([el()])
     // A filled value is not a change of the page: it is the same field, typed again.
     const filled = view([el({ state: { value: '[secret]' } })])
-    expect(isRepeat(done(FILL, el(), page, filled), FILL, el(), filled)).toBe(true)
+    expect(isRepeat(done(FILL, el(), page, filled), FILL, el())).toBe(true)
   })
 
   it('a new ref for the same control is still the same element', () => {
     const page = view([el()])
     const again = view([el({ ref: 'e7' })])
-    expect(isRepeat(done(FILL, el(), page, page), { ...FILL, ref: 'e7' }, el({ ref: 'e7' }), again)).toBe(true)
+    expect(isRepeat(done(FILL, el(), page, page), { ...FILL, ref: 'e7' }, el({ ref: 'e7' }))).toBe(true)
   })
 
   it('another field, another account or another text is not a repeat', () => {
     const page = view([el(), el({ ref: 'e2', name: 'Password', inputType: 'password' })])
     const last = done(FILL, el(), page, page)
-    expect(isRepeat(last, { ...FILL, ref: 'e2' }, el({ ref: 'e2', name: 'Password', inputType: 'password' }), page)).toBe(false)
-    expect(isRepeat(last, { ...FILL, account: 'Adult 30' }, el(), page)).toBe(false)
+    expect(isRepeat(last, { ...FILL, ref: 'e2' }, el({ ref: 'e2', name: 'Password', inputType: 'password' }))).toBe(false)
+    expect(isRepeat(last, { ...FILL, account: 'Adult 30' }, el())).toBe(false)
     const typed: Act = { type: 'type', ref: 'e1', text: 'a' }
-    expect(isRepeat(done(typed, el(), page, page), { ...typed, text: 'b' }, el(), page)).toBe(false)
+    expect(isRepeat(done(typed, el(), page, page), { ...typed, text: 'b' }, el())).toBe(false)
   })
 
   it('an action that changed the address or the text is not a repeat', () => {
     const page = view([el()])
     const click: Act = { type: 'click', ref: 'e1' }
-    expect(isRepeat(done(click, el(), page, view([el()], 'Sign in Wrong password')), click, el(), view([el()], 'Sign in Wrong password'))).toBe(false)
+    expect(isRepeat(done(click, el(), page, view([el()], 'Sign in Wrong password')), click, el())).toBe(false)
     const moved = view([el()], 'Sign in E-mail Password', 'https://app.test/login?next=1')
-    expect(isRepeat(done(click, el(), page, moved), click, el(), moved)).toBe(false)
+    expect(isRepeat(done(click, el(), page, moved), click, el())).toBe(false)
   })
 
   it('a toggle that changed only a control state is not a repeat', () => {
     const off = el({ role: 'switch', name: 'Private account', tag: 'button', inputType: null, state: { checked: false } })
     const on = { ...off, state: { checked: true } }
     const toggle: Act = { type: 'toggle', ref: 'e1' }
-    expect(isRepeat(done(toggle, off, view([off]), view([on])), toggle, on, view([on]))).toBe(false)
+    expect(isRepeat(done(toggle, off, view([off]), view([on])), toggle, on)).toBe(false)
   })
 
   it('a click that turned a password field into a text field changed the page', () => {
@@ -78,16 +78,10 @@ describe('isRepeat', () => {
     const click: Act = { type: 'click', ref: 'e3' }
     const before = view([hidden, button])
     const after = { ...view([shown, button]), hasPasswordField: false }
-    expect(isRepeat(done(click, button, before, after), click, button, after)).toBe(false)
+    expect(isRepeat(done(click, button, before, after), click, button)).toBe(false)
   })
 
-  it('a page that changed since the last action is not a repeat', () => {
-    const page = view([el()])
-    expect(isRepeat(done(FILL, el(), page, page), FILL, el(), view([el()], 'Sign in E-mail Password Session expired'))).toBe(false)
-  })
-
-  it('nothing done yet, or no page, is never a repeat', () => {
-    expect(isRepeat(null, FILL, el(), view([el()]))).toBe(false)
-    expect(isRepeat(done(FILL, el(), view([el()]), view([el()])), FILL, el(), null)).toBe(false)
+  it('nothing done yet is never a repeat', () => {
+    expect(isRepeat(null, FILL, el())).toBe(false)
   })
 })
