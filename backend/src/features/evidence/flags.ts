@@ -102,10 +102,14 @@ export function computeFlags(input: FlagInput): ReviewFlag[] {
     flags.push({ type: 'comments_only', reason: 'Only comments or documentation support this.' })
   }
 
-  if (!input.webAssessable) {
+  // For app and repo checks, a null result with too little evidence is already missing_evidence: the AI
+  // often marks such items not assessable although a screen or the code could show them.
+  const source = input.source ?? 'pages'
+  const coveredByMissing = source !== 'pages' && input.suggestedResult === null && evidenceShort
+  if (!input.webAssessable && !coveredByMissing) {
     flags.push({
       type: 'not_web_assessable',
-      reason: NOT_ASSESSABLE_REASON[input.source ?? 'pages'],
+      reason: NOT_ASSESSABLE_REASON[source],
     })
   }
 

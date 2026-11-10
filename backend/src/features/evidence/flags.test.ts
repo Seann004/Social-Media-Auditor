@@ -145,6 +145,24 @@ describe('computeFlags for app checks', () => {
     expect(types(input({ commentsOnly: true, suggestedResult: null }))).not.toContain('comments_only')
   })
 
+  it.each(['app', 'repo'] as const)('%s: a null result with too little evidence gets missing_evidence, not not_web_assessable', (source) => {
+    const flags = types(input({ source, webAssessable: false, suggestedResult: null, evidenceSufficient: false, quotes: [] }))
+    expect(flags).toContain('missing_evidence')
+    expect(flags).not.toContain('not_web_assessable')
+  })
+
+  it.each(['app', 'repo'] as const)('%s: keeps not_web_assessable in every other case', (source) => {
+    expect(types(input({ source, webAssessable: false, suggestedResult: null, evidenceSufficient: true, quotes: [] }))).toContain('not_web_assessable')
+    expect(types(input({ source, webAssessable: false, suggestedResult: 'no', evidenceSufficient: false }))).toContain('not_web_assessable')
+    expect(types(input({ source, webAssessable: false }))).toContain('not_web_assessable')
+  })
+
+  it('pages: keeps not_web_assessable on a null result with too little evidence', () => {
+    const flags = types(input({ source: 'pages', webAssessable: false, suggestedResult: null, evidenceSufficient: false, quotes: [] }))
+    expect(flags).toEqual(expect.arrayContaining(['missing_evidence', 'not_web_assessable']))
+    expect(types(input({ webAssessable: false, suggestedResult: null, evidenceSufficient: false, quotes: [] }))).toContain('not_web_assessable')
+  })
+
   it('uses the code wording for a repo item that is not assessable', () => {
     const flag = computeFlags(input({ webAssessable: false, source: 'repo' })).find((f) => f.type === 'not_web_assessable')
     expect(flag?.reason).toBe("This item needs evidence the code can't show.")
