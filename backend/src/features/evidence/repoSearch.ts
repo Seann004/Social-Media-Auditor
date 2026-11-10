@@ -16,6 +16,12 @@ const CODE_CHAR_BUDGET = MAX_CHARS_PER_PASSAGE - 200
 const PER_WORD_LINE_CAP = 5
 const POINTS_PER_WORD_IN_PATH = 2
 const POINTS_PER_HINT_IN_PATH = 3
+/** Points a file loses per avoid word that names one of its path segments, and the most it can lose. */
+const POINTS_PER_AVOIDED_SEGMENT = 4
+const MAX_AVOID_PENALTY = 8
+/** Splits a path into its words: folders, then file-name parts at "_", ".", "-" and camelCase humps. */
+const PATH_WORD_BREAK = /[/_.\-\s]+/
+const CAMEL_HUMP = /([a-z0-9])([A-Z])/g
 
 export function pieceKey(d: Pick<PieceDraft, 'path' | 'startLine' | 'endLine'>): string {
   return `${d.path}:${d.startLine}-${d.endLine}`
@@ -147,6 +153,22 @@ function buildWindows(matches: LineMatch[], lineCount: number): Window[] {
   return windows.sort((a, b) => b.distinct - a.distinct || b.total - a.total || a.start - b.start)
 }
 
+/** The lower-case words of a path: "app/javascript/NotificationAdminReport.tsx" gives app, javascript, notification, admin, report, tsx. */
+function pathWords(path: string): Set<string> {
+  return new Set(path.replace(CAMEL_HUMP, '$1 $2').toLowerCase().split(PATH_WORD_BREAK).filter((w) => w !== ''))
+}
+
+/**
+ * Points lost for the areas the AI asked to rank lower (such as admin or moderation code for a
+ * user-facing item): per avoid word that is a whole word of the path, capped. Never excludes a file.
+ */
+function avoidPenalty(path: string, avoid: string[]): number {
+  if (avoid.length === 0) return 0
+  const segments = pathWords(path)
+  const hits = avoid.filter((word) => segments.has(word)).length
+  return Math.min(hits * POINTS_PER_AVOIDED_SEGMENT, MAX_AVOID_PENALTY)
+}
+
 function scoreFile(file: RepoFile, linesPerWord: number[], words: string[], hints: string[]): number {
   const path = file.path.toLowerCase()
   let score = 0
@@ -158,10 +180,12 @@ function scoreFile(file: RepoFile, linesPerWord: number[], words: string[], hint
   return score
 }
 
-function toHit(file: RepoFile, words: string[], hints: string[], named: ReadonlySet<string>): FileHit | null {
+function toHit(file: RepoFile, words: string[], hints: string[], avoid: string[], named: ReadonlySet<string>): FileHit | null {
   const { matches, linesPerWord } = matchLines(file.lines, words)
   const windows = buildWindows(matches, file.lines.length)
-  const score = scoreFile(file, linesPerWord, words, hints)
+  // A file the AI named is exempt from the penalty.
+  const penalty = named.has(file.path) ? 0 : avoidPenalty(file.path, avoid)
+  const score = Math.max(0, scoreFile(file, linesPerWord, words, hints) - penalty)
   if (windows.length > 0) return { file, score, windows }
   if (!named.has(file.path) || file.lines.length === 0) return null
   const end = Math.min(file.lines.length - 1, 2 * REPO_LINES_AROUND)
@@ -209,9 +233,10 @@ export function findPieces(
   const exclude = opts.exclude ?? new Set<string>()
   const words = cleanList(terms.words)
   const hints = cleanList(terms.pathHints)
+  const avoid = cleanList(terms.avoidPaths ?? [])
   const named = new Set(terms.paths)
 
-  const matched = files.map((f) => toHit(f, words, hints, named)).filter((h): h is FileHit => h !== null)
+  const matched = files.map((f) => toHit(f, words, hints, avoid, named)).filter((h): h is FileHit => h !== null)
   const hits = withoutLocales(matched, named).sort(
     (a, b) => b.score - a.score || (a.file.path < b.file.path ? -1 : a.file.path > b.file.path ? 1 : 0),
   )

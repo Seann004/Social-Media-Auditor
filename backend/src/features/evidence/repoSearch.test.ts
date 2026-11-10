@@ -230,3 +230,42 @@ describe('isDocsOrTestPath', () => {
     expect(isDocsOrTestPath(path)).toBe(expected)
   })
 })
+
+describe('findPieces: paths the AI asked to rank lower (avoidPaths)', () => {
+  // The live Mastodon case: admin code repeats "report" far more often than the user-facing controller.
+  const admin = file('app/controllers/admin/reports_controller.rb', filler(12, 'report report_note'))
+  const adminUi = file('app/javascript/notification_admin_report.tsx', filler(8, 'report'))
+  const user = file('app/controllers/api/v1/reports_controller.rb', ['def create', '  @report = ReportService.new.call', 'end', 'report_params'])
+  const words = ['report']
+
+  it('without avoidPaths, the admin files win on plain matches', () => {
+    expect(findPieces([admin, adminUi, user], terms({ words }), { max: 1 })[0]?.path).toBe(admin.path)
+  })
+
+  it('ranks admin files below user-facing files with the same words, by folder or by a word of the file name', () => {
+    const out = findPieces([admin, adminUi, user], terms({ words, avoidPaths: ['admin'] }), { max: 3 })
+    expect(out.map((p) => p.path)).toEqual([user.path, admin.path, adminUi.path])
+  })
+
+  it('a word only inside a longer path word is not an avoided segment', () => {
+    const administrator = file('app/administrator/reports.rb', filler(12, 'report'))
+    expect(findPieces([administrator, user], terms({ words, avoidPaths: ['admin'] }), { max: 1 })[0]?.path).toBe(administrator.path)
+  })
+
+  it('still uses an admin file when nothing else matches', () => {
+    const out = findPieces([admin, file('app/models/user.rb', ['class User'])], terms({ words, avoidPaths: ['admin', 'moderation'] }))
+    expect(out.map((p) => p.path)).toEqual([admin.path])
+  })
+
+  it('a file named in terms.paths is exempt from the penalty', () => {
+    const out = findPieces([admin, user], terms({ words, avoidPaths: ['admin'], paths: [admin.path] }), { max: 1 })
+    expect(out[0]?.path).toBe(admin.path)
+  })
+
+  it('the penalty is capped, so a strong admin match still beats a weak user-facing one with no word in its path', () => {
+    const weak = file('app/models/account.rb', ['report'])
+    const strong = file('app/admin/moderation/staff/reports.rb', filler(12, 'report report_note abuse'))
+    const out = findPieces([strong, weak], terms({ words: ['report', 'abuse'], avoidPaths: ['admin', 'moderation', 'staff'] }), { max: 1 })
+    expect(out[0]?.path).toBe(strong.path)
+  })
+})

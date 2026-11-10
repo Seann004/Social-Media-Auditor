@@ -136,3 +136,60 @@ describe('askMoreTerms', () => {
     expect(out).toEqual({ terms: { words: [], pathHints: [], paths: [] }, tokensUsed: 12 })
   })
 })
+
+const sentSystem = (f: ReturnType<typeof vi.fn>, call = 0): string => {
+  const body = JSON.parse((f.mock.calls[call][1] as RequestInit).body as string)
+  return body.messages[0].content as string
+}
+
+describe('avoidPaths: areas of the code to rank lower', () => {
+  it('askSearchTerms keeps up to 4 good avoidPaths and drops bad ones', async () => {
+    stubFetch({
+      items: [
+        { itemId: 'i1', words: ['report'], pathHints: [], avoidPaths: ['admin', 'a', 'bad word', 'moderation', 'admin', 'x'.repeat(41), 'staff', 'mod', 'extra'] },
+        { itemId: 'i2', words: ['report'], pathHints: [], avoidPaths: 'admin' },
+      ],
+    })
+    const out = await askSearchTerms({ items: [ITEM, OTHER], platform: 'P', paths: [], apiKey: 'K', model: 'm' })
+    expect(out.terms.get('i1')?.avoidPaths).toEqual(['admin', 'moderation', 'staff', 'mod'])
+    // A list that is not a list is ignored, and the item's words are kept.
+    expect(out.terms.get('i2')).toEqual({ words: ['report'], pathHints: [], paths: [] })
+  })
+
+  it('askMoreTerms may return avoidPaths too', async () => {
+    stubFetch({ words: ['flag'], paths: [], avoidPaths: ['admin', 'not ok'] })
+    const out = await askMoreTerms({ item: ITEM, platform: 'P', seenPaths: [], paths: ['a.ts'], apiKey: 'K', model: 'm' })
+    expect(out.terms.avoidPaths).toEqual(['admin'])
+  })
+
+  it('fallbackTerms ranks nothing lower', () => {
+    expect(fallbackTerms(ITEM).avoidPaths ?? []).toEqual([])
+  })
+})
+
+describe('the search-terms prompts', () => {
+  it('asks for at least 8 varied words, user-facing path hints and avoidPaths left empty for staff items', async () => {
+    const f = stubFetch({ items: [] })
+    await askSearchTerms({ items: [ITEM], platform: 'P', paths: [], apiKey: 'K', model: 'm' })
+    const system = sentSystem(f)
+    expect(system).toMatch(/at least 8/i)
+    expect(system).toMatch(/synonyms/i)
+    expect(system).toContain('report, flag, abuse, complain, block, mute')
+    for (const layer of ['controllers', 'api', 'models', 'policies', 'services', 'views']) expect(system).toContain(`"${layer}"`)
+    expect(system).toMatch(/not .*staff tooling/i)
+    expect(system).toContain('"avoidPaths"')
+    expect(system).toMatch(/up to 4/)
+    expect(system).toMatch(/"admin", "moderation", "staff"/)
+    expect(system).toMatch(/leave "avoidPaths" empty when the item is about/i)
+    expect(system).toContain('"avoidPaths":["..."]')
+  })
+
+  it('round 2 asks to look in a different part of the code than the seen paths, and may give avoidPaths', async () => {
+    const f = stubFetch({ words: [], paths: [] })
+    await askMoreTerms({ item: ITEM, platform: 'P', seenPaths: ['app/admin/a.rb'], paths: ['a.ts'], apiKey: 'K', model: 'm' })
+    const system = sentSystem(f)
+    expect(system).toMatch(/DIFFERENT part of the code than the "seenPaths"/)
+    expect(system).toContain('"avoidPaths"')
+    expect(system).toMatch(/leave "avoidPaths" empty when the item is about/i)
+  })
+})

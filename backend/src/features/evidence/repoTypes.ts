@@ -59,4 +59,6 @@ export interface SearchTerms {
   words: string[]
   pathHints: string[]
   paths: string[]
+  /** Path words naming areas not relevant to the item (such as "admin"): files there rank lower, never out. */
+  avoidPaths?: string[]
 }

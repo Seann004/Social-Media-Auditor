@@ -167,6 +167,10 @@ export const REPO_LINES_AROUND = 20
 export const REPO_MAX_PIECES_PER_ITEM = 6
 export const REPO_MAX_MORE_TERMS = 3
 export const REPO_MAX_SEARCH_WORDS = 12
+/** The fewest search words the first search-terms prompt asks for, so that one wording does not decide what is found. */
+export const REPO_MIN_SEARCH_WORDS = 8
+/** Path words the AI may name as areas to rank lower (such as "admin"). */
+export const REPO_MAX_AVOID_PATHS = 4
 export const REPO_MAX_PATH_HINTS = 6
 export const REPO_PROMPT_PATHS_CHARS = 3_000
 export const REPO_FETCH_TIMEOUT_MS = 60_000
