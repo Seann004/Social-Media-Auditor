@@ -44,11 +44,9 @@ describe('findPieces', () => {
 
   it('ranks windows by distinct words, then total matches, then start line', () => {
     const f = file('a.ts', withAt(300, { 10: 'one', 150: 'one two', 290: 'one' }))
-    // One folder gives at most 2 pieces, so the third window is reached by excluding the best one.
+    // The third window is past the folder cap, and is backfilled because nothing else matches.
     const out = findPieces([f], terms({ words: ['one', 'two'] }), { max: 3 })
-    expect(out.map((p) => p.startLine)).toEqual([130, 1])
-    const rest = findPieces([f], terms({ words: ['one', 'two'] }), { max: 3, exclude: new Set(['a.ts:130-170']) })
-    expect(rest.map((p) => p.startLine)).toEqual([1, 270])
+    expect(out.map((p) => p.startLine)).toEqual([130, 1, 270])
   })
 
   it('takes the best window of each file, then the second-best, in a fixed order', () => {
@@ -170,14 +168,28 @@ describe('findPieces: locale files and the folder cap', () => {
     expect(out.map((p) => p.path).sort()).toEqual(['app/models/account.rb', 'config/locales/simple_form.be.yml'])
   })
 
-  it('takes at most 2 pieces from the same folder per call', () => {
+  it('takes 2 pieces per folder first, then backfills the skipped ones in rank order', () => {
     const many = Array.from({ length: 5 }, (_, i) => file(`app/models/m${i}.rb`, withAt(300, { 10: 'age', 200: 'age' })))
     const other = file('app/services/s.rb', ['age'])
     const out = findPieces([...many, other], terms({ words: ['age'] }), { max: 6 })
-    const fromModels = out.filter((p) => p.path.startsWith('app/models/'))
-    expect(fromModels).toHaveLength(2)
-    expect(out.map((p) => p.path)).toContain('app/services/s.rb')
-    expect(out).toHaveLength(3)
+    expect(out.map((p) => p.path)).toEqual([
+      'app/models/m0.rb', 'app/models/m1.rb', 'app/services/s.rb', 'app/models/m2.rb', 'app/models/m3.rb', 'app/models/m4.rb',
+    ])
+  })
+
+  it('a flat repository with every file in src/ still gets up to 6 pieces, the most varied first', () => {
+    const flat = Array.from({ length: 8 }, (_, i) => file(`src/f${i}.ts`, i < 2 ? ['age private consent'] : ['age']))
+    const lib = file('lib/l.ts', ['age'])
+    const out = findPieces([...flat, lib], terms({ words: ['age', 'private', 'consent'] }))
+    expect(out.map((p) => p.path)).toEqual(['src/f0.ts', 'src/f1.ts', 'lib/l.ts', 'src/f2.ts', 'src/f3.ts', 'src/f4.ts'])
+    expect(findPieces(flat, terms({ words: ['age'] }))).toHaveLength(6)
+  })
+
+  it('a named file in a folder whose 2 slots are taken is still included', () => {
+    const many = Array.from({ length: 4 }, (_, i) => file(`app/models/m${i}.rb`, ['age', 'age', 'age']))
+    const named = file('app/models/zz_named.rb', ['nothing to see'])
+    const out = findPieces([...many, named], terms({ words: ['age'], paths: ['app/models/zz_named.rb'] }), { max: 3 })
+    expect(out.map((p) => p.path)).toEqual(['app/models/m0.rb', 'app/models/m1.rb', 'app/models/zz_named.rb'])
   })
 })
 

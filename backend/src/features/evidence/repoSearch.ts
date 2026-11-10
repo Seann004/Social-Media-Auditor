@@ -7,7 +7,10 @@ const DOCS_EXTENSIONS = ['.md', '.mdx', '.txt', '.rst']
 const DOCS_OR_TEST_SEGMENTS = new Set(['docs', 'doc', 'test', 'tests', '__tests__', 'spec'])
 const LOCALE_SEGMENTS = new Set(['locales', 'locale', 'i18n', 'l10n', 'lang', 'langs', 'translations'])
 const LOCALE_EXTENSIONS = ['.po', '.pot', '.xliff', '.xlf', '.strings']
-/** Pieces one folder (parent directory) may give per call, so one folder of look-alike files cannot fill the list. */
+/**
+ * Pieces one folder (parent directory) gives before other folders have had their turn: a soft cap, so
+ * one folder of look-alike files cannot crowd out the rest, yet a flat repository still fills the list.
+ */
 const MAX_PIECES_PER_FOLDER = 2
 const CODE_CHAR_BUDGET = MAX_CHARS_PER_PASSAGE - 200
 const PER_WORD_LINE_CAP = 5
@@ -184,6 +187,19 @@ function toDraft(file: RepoFile, w: Window): PieceDraft {
   return { path: file.path, startLine: start + 1, endLine: end + 1, code }
 }
 
+/** Every candidate piece in rank order, built only as far as it is read: the best window of each file, then the second-best, and so on. */
+function* rankedDrafts(hits: FileHit[], exclude: ReadonlySet<string>): Generator<PieceDraft> {
+  const rounds = Math.max(0, ...hits.map((h) => h.windows.length))
+  for (let round = 0; round < rounds; round++) {
+    for (const hit of hits) {
+      const window = hit.windows[round]
+      if (!window) continue
+      const draft = toDraft(hit.file, window)
+      if (!exclude.has(pieceKey(draft))) yield draft
+    }
+  }
+}
+
 export function findPieces(
   files: RepoFile[],
   terms: SearchTerms,
@@ -200,22 +216,24 @@ export function findPieces(
     (a, b) => b.score - a.score || (a.file.path < b.file.path ? -1 : a.file.path > b.file.path ? 1 : 0),
   )
 
+  // First at most 2 per folder (named files are exempt), then the skipped ones backfill in rank order.
   const pieces: PieceDraft[] = []
+  const skipped: PieceDraft[] = []
   let perFolder: ReadonlyMap<string, number> = new Map()
-  const rounds = Math.max(0, ...hits.map((h) => h.windows.length))
-  for (let round = 0; round < rounds && pieces.length < max; round++) {
-    for (const hit of hits) {
-      const window = hit.windows[round]
-      if (!window) continue
-      const folder = folderOf(hit.file.path)
-      const taken = perFolder.get(folder) ?? 0
-      if (taken >= MAX_PIECES_PER_FOLDER) continue
-      const draft = toDraft(hit.file, window)
-      if (exclude.has(pieceKey(draft))) continue
+  for (const draft of rankedDrafts(hits, exclude)) {
+    if (pieces.length >= max) break
+    if (named.has(draft.path)) {
       pieces.push(draft)
-      perFolder = new Map(perFolder).set(folder, taken + 1)
-      if (pieces.length >= max) break
+      continue
     }
+    const folder = folderOf(draft.path)
+    const taken = perFolder.get(folder) ?? 0
+    if (taken >= MAX_PIECES_PER_FOLDER) {
+      skipped.push(draft)
+      continue
+    }
+    pieces.push(draft)
+    perFolder = new Map(perFolder).set(folder, taken + 1)
   }
-  return pieces
+  return [...pieces, ...skipped.slice(0, Math.max(0, max - pieces.length))]
 }
