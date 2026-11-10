@@ -67,13 +67,17 @@ function readingJudge(input: AssessInput): AssessOutput {
 
 describe('an app run against the social app', () => {
   it('the success picture: Teen private by default is Yes from the settings step; Adult can’t message Teen is No from two accounts’ steps', async () => {
-    kit.scripts.t1 = [...signIn('Teen 15'), openPath('/settings'), { type: 'finish', observations: 'The switch is on.', evidenceSteps: [5] }]
+    // Each check's first finish is refused as too early, and the same finish is then accepted.
+    const privateFinish = { type: 'finish', observations: 'The switch is on.', evidenceSteps: [5] } as const
+    const messagingFinish = { type: 'finish', observations: 'No Message link.', evidenceSteps: [2, 7] } as const
+    kit.scripts.t1 = [...signIn('Teen 15'), openPath('/settings'), privateFinish, privateFinish]
     kit.scripts.t2 = [
       { type: 'switch_account', account: 'Teen 15' },
       openPath('/settings'),
       ...signIn('Adult 30'),
       openPath('/u/teen15'),
-      { type: 'finish', observations: 'No Message link.', evidenceSteps: [2, 7] },
+      messagingFinish,
+      messagingFinish,
     ]
     kit.judge.current = readingJudge
 
@@ -102,9 +106,10 @@ describe('an app run against the social app', () => {
       [true, 'Teen 15'],
     ])
 
-    // Every step that recorded a page has its screenshot, for the replay.
+    // Every step that recorded a page has its screenshot, for the replay. Only the two finishes of each check
+    // (the refused early one and the accepted one) record no page.
     const withPage = [...privateSteps, ...messagingSteps].filter((s) => s.pageId !== null)
-    expect(withPage.length).toBe(privateSteps.length - 1 + messagingSteps.length - 1)
+    expect(withPage.length).toBe(privateSteps.length - 2 + messagingSteps.length - 2)
     for (const step of withPage) {
       const stored = await kit.repo.getPage(step.pageId as string)
       expect(stored?.screenshotPath, step.line).toEqual(expect.any(String))

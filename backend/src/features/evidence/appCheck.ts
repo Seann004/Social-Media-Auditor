@@ -76,6 +76,10 @@ const PAGE_UNREADABLE = 'The app page could not be read, so the check stopped.'
 const READ_PAGE = 'read the page'
 /** Failed reads of the session's page in a row that end the check: the AI is not asked about pages it cannot see. */
 const UNREADABLE_PAGES_BEFORE_STOP = 2
+/** The refusal of a first finish that comes before the check has explored (once per check). */
+export const FINISHED_TOO_EARLY = 'Finished too early: look at the page where this is set, or try the action, before finishing.'
+/** Done steps needed after the first sign-in before a finish is accepted at once. */
+const DONE_STEPS_BEFORE_FINISH = 3
 const NOT_A_CREDENTIAL_FIELD = 'A login name or password only goes into a sign-in name or password field.'
 const NOT_THE_SIGN_IN_FORM = 'A login name only goes into the sign-in form, next to its password field.'
 /** Stored as the action of a step the AI did not choose: an unreadable reply, or a page that stopped the check. */
@@ -148,6 +152,15 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   let loginPaths: ReadonlyMap<string, string> = new Map()
   /** Per change, the form or dialog of its control, to tell which Save button saves it. */
   let changeGroups: ReadonlyMap<string, string | null> = new Map()
+  /**
+   * For the early-finish rule: the path reached right after the first sign-in (or, before any sign-in,
+   * after the first account switch), the done steps since, and whether one of them opened another page.
+   */
+  let landing: string | null = null
+  let signedIn = false
+  let doneSinceLanding = 0
+  let leftLanding = false
+  let earlyFinishRefused = false
 
   await pool.resetAll()
 
@@ -187,6 +200,30 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       console.error(`[appCheck] run ${input.run.id}: could not read the page of ${current.account.label}`, err instanceof Error ? err.name : 'error')
       return null
     }
+  }
+
+  /** Notes a done step for the early-finish rule. */
+  function noteExplored(url: string, kind: 'sign-in' | 'switch' | 'other'): void {
+    const path = pathOf(url)
+    if (kind === 'sign-in' && !signedIn) {
+      signedIn = true
+      landing = path
+      doneSinceLanding = 0
+      leftLanding = false
+      return
+    }
+    if (landing === null) {
+      if (kind === 'switch') landing = path
+      return
+    }
+    doneSinceLanding += 1
+    if (path !== landing) leftLanding = true
+  }
+
+  /** A finish is refused once when it comes before the check has explored, unless it is the last step allowed. */
+  function finishTooEarly(): boolean {
+    if (earlyFinishRefused || steps.length + 1 >= maxSteps) return false
+    return doneSinceLanding < DONE_STEPS_BEFORE_FINISH || !leftLanding
   }
 
   const shoot = async (): Promise<Buffer | null> => (await session()?.screenshot()) ?? null
@@ -232,6 +269,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     view = await readView()
     const detail = view === null ? 'page unchanged' : `page ${pathOf(view.url)} opened`
     await record({ action, outcome: 'done', detail, refusalReason: null, view, screenshot: view === null ? null : await shoot() })
+    noteExplored(view?.url ?? pool.get(target.id)?.currentUrl() ?? '', 'switch')
   }
 
   async function noteChange(change: DetectedChange, at: AppView, el: AppElement, who: AgentAccount): Promise<void> {
@@ -292,14 +330,18 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     if (action.type === 'fill_credential' && action.field === 'password' && before !== null) {
       loginPaths = new Map(loginPaths).set(who.id, pathOf(before.url))
     }
+    let signedInNow = false
     if (action.type === 'click' && el !== null && before !== null) {
       // Still on the login path with a password field showing: the sign-in failed (ruling A18).
       const stillSigningIn = loginPaths.get(who.id) === pathOf(afterUrl) && after?.hasPasswordField === true
-      if (SIGN_IN_CONTROL.test(el.name) && stillSigningIn) pool.noteLoginFailure(who.id)
+      const signInControl = SIGN_IN_CONTROL.test(el.name)
+      if (signInControl && stillSigningIn) pool.noteLoginFailure(who.id)
+      signedInNow = signInControl && !stillSigningIn
       await noteSave(el, before, who)
     }
     const detail = doneDetail(change, before?.url ?? null, afterUrl)
     await record({ action, outcome: 'done', detail, refusalReason: null, view: after, describedOn: before, screenshot: after === null ? null : await shoot() })
+    noteExplored(afterUrl, signedInNow ? 'sign-in' : 'other')
   }
 
   while (steps.length < maxSteps) {
@@ -337,6 +379,12 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       continue
     }
 
+    if (action.type === 'finish' && finishTooEarly()) {
+      earlyFinishRefused = true
+      // Recorded with no page, like an accepted finish, so the newest page of each account stays the one the AI acted on.
+      await record({ action, outcome: 'refused', detail: '', refusalReason: FINISHED_TOO_EARLY, view: null, screenshot: null })
+      continue
+    }
     if (action.type === 'finish') {
       const known = steps.length
       const saved = await record({ action, outcome: 'done', detail: '', refusalReason: null, view: null, screenshot: null })

@@ -121,6 +121,16 @@ describe('buildStepPrompt', () => {
     expect(data.steps.at(-1)).toBe(`${total}. done ${total}`)
     expect(data.steps).toHaveLength(APP_HISTORY_LINES)
   })
+  it('tells the AI to explore before finishing: the setting page, both accounts for contact items, and when to finish', () => {
+    const { system } = buildStepPrompt(promptWith())
+    expect(system).toMatch(/before finishing/i)
+    expect(system).toMatch(/open the page where the (relevant )?setting or feature lives/i)
+    expect(system).toMatch(/settings, privacy or messaging/i)
+    expect(system).toMatch(/both an under-18 and an adult account/i)
+    expect(system).toMatch(/adult (account )?try the action towards the teen's handle/i)
+    expect(system).toMatch(/finish only when the recorded steps show the answer, or when you have looked in the likely places and the step limit is near/i)
+    expect(system).not.toMatch(/finish as soon as/i)
+  })
   it('tells the AI to use the numbers in the step lines', () => {
     expect(buildStepPrompt(promptWith()).system).toMatch(/number at the start of each step line/i)
   })

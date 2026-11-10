@@ -32,12 +32,14 @@ afterAll(async () => {
 
 const lines = (steps: AppStep[]) => steps.map((s) => s.line)
 const FINISH = { type: 'finish', observations: 'Seen.', evidenceSteps: [] } as const
+const TOO_EARLY = 'Finished too early: look at the page where this is set, or try the action, before finishing.'
 
 describe('runCheck: recording', () => {
   it('records each step with page, passages, masked screenshot and line, in order', async () => {
+    // The first finish comes too early and is refused; the scripted agent then finishes again.
     const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), FINISH])
     const steps = await kit.appRepo.listSteps(RUN.id, ITEM.id)
-    expect(steps.map((s) => s.position)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(steps.map((s) => s.position)).toEqual([1, 2, 3, 4, 5, 6, 7])
     expect(outcome.steps).toEqual(steps)
     expect(lines(steps)).toEqual([
       'Step 1 · Teen 15 · switched to Teen 15 → page /login opened',
@@ -45,7 +47,8 @@ describe('runCheck: recording', () => {
       'Step 3 · Teen 15 · filled the password of Teen 15 into "Password" → page unchanged',
       'Step 4 · Teen 15 · clicked button "Sign in" → page /home opened',
       'Step 5 · Teen 15 · opened /settings → page /settings opened',
-      'Step 6 · Teen 15 · finished the check',
+      `Step 6 · Teen 15 · Refused: finished the check. ${TOO_EARLY}`,
+      'Step 7 · Teen 15 · finished the check',
     ])
     expect(outcome.finished).toBe(true)
     expect(outcome.stop).toBeNull()
@@ -62,6 +65,7 @@ describe('runCheck: recording', () => {
     const settingsPage = pages.find((p) => p.id === steps[4].pageId)!
     expect(settingsPage.accessibilitySnapshot).toContain('switch "Private account" [on]')
     expect(steps[5].pageId).toBeNull()
+    expect(steps[6].pageId).toBeNull()
   })
 
   it('a refused action is a recorded step and the app state is unchanged', async () => {
@@ -76,24 +80,25 @@ describe('runCheck: recording', () => {
   })
 
   it('numbers the first step 1, and evidenceSteps refer to those numbers', async () => {
-    const { outcome, agent } = await kit.check([
-      { type: 'switch_account', account: 'Teen 15' },
-      { type: 'finish', observations: 'The login page is shown.', evidenceSteps: [1, 1, 7] },
-    ])
-    expect(outcome.steps.map((s) => s.position)).toEqual([1, 2])
+    const finish = { type: 'finish', observations: 'The login page is shown.', evidenceSteps: [1, 1, 7] } as const
+    // The first finish is refused as too early; the second is accepted.
+    const { outcome, agent } = await kit.check([{ type: 'switch_account', account: 'Teen 15' }, finish, finish])
+    expect(outcome.steps.map((s) => s.position)).toEqual([1, 2, 3])
     expect(outcome.evidenceSteps).toEqual([1])
     expect(agent.prompts[1].history).toEqual([outcome.steps[0].line])
     expect(agent.prompts[1].history[0]).toMatch(/^Step 1 · Teen 15 · switched to Teen 15/)
   })
 
   it('finish and a refusal before any read record a step with no page', async () => {
-    const { outcome } = await kit.check([{ type: 'back' }, { type: 'finish', observations: 'AI-NOTE-NOT-EVIDENCE', evidenceSteps: [] }])
+    const finish = { type: 'finish', observations: 'AI-NOTE-NOT-EVIDENCE', evidenceSteps: [] } as const
+    const { outcome } = await kit.check([{ type: 'back' }, finish, finish])
     expect(outcome.steps.map((s) => [s.outcome, s.pageId])).toEqual([
+      ['refused', null],
       ['refused', null],
       ['done', null],
     ])
     expect(outcome.steps[0].line).toBe('Step 1 · Refused: went back. No test account is in use yet; choose one first.')
-    expect(outcome.steps[1].action).toEqual({ type: 'finish', observations: 'AI-NOTE-NOT-EVIDENCE', evidenceSteps: [] })
+    expect(outcome.steps[2].action).toEqual({ type: 'finish', observations: 'AI-NOTE-NOT-EVIDENCE', evidenceSteps: [] })
     expect(await kit.repo.listPages(RUN.id)).toEqual([])
     expect(JSON.stringify(outcome.steps.map((s) => s.line))).not.toContain('AI-NOTE-NOT-EVIDENCE')
   })
@@ -101,7 +106,8 @@ describe('runCheck: recording', () => {
   it('calls onStep with each position', async () => {
     const seen: number[] = []
     await kit.check([{ type: 'back' }, FINISH], { onStep: async (position) => void seen.push(position) })
-    expect(seen).toEqual([1, 2])
+    // The finish is refused once as too early, so it takes two steps.
+    expect(seen).toEqual([1, 2, 3])
   })
 })
 
@@ -117,13 +123,15 @@ describe('runCheck: safety rules against the app', () => {
       on('button', 'Send'),
       FINISH,
     ])
-    expect(outcome.steps.map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'refused', 'done', 'refused', 'done', 'refused', 'refused', 'done'])
+    expect(outcome.steps.map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'refused', 'done', 'refused', 'done', 'refused', 'refused', 'refused', 'done'])
     expect(world.social.state().messages).toEqual([])
     expect(world.social.state().follows).toEqual([])
   })
 
   it('own accounts: Adult may open /u/teen15 and the Message button is absent, which is recorded', async () => {
-    const { outcome } = await kit.check([...signIn('Adult 30'), openPath('/u/teen15'), { type: 'finish', observations: 'No Message.', evidenceSteps: [5] }])
+    const finish = { type: 'finish', observations: 'No Message.', evidenceSteps: [5] } as const
+    // The first finish is refused as too early; the second is accepted.
+    const { outcome } = await kit.check([...signIn('Adult 30'), openPath('/u/teen15'), finish, finish])
     const opened = outcome.steps[4]
     expect(opened.line).toBe('Step 5 · Adult 30 · opened /u/teen15 → page /u/teen15 opened')
     const page = (await kit.repo.getPage(opened.pageId!))!
@@ -146,6 +154,7 @@ describe('runCheck: safety rules against the app', () => {
       ['refused', false],
       ['done', true],
       ['done', true],
+      ['refused', false],
       ['done', true],
     ])
     expect(outcome.steps[6].line).toBe('Step 7 · Teen 15 · selected "Only me" in "Audience" → "Audience" set to "Only me"')
@@ -410,7 +419,7 @@ describe('runCheck: changes and sign-in', () => {
       on('switch', 'Private account', 'toggle'),
       FINISH,
     ])
-    expect(outcome.steps.map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done'])
+    expect(outcome.steps.map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'refused', 'done'])
     await restoreChanges(kit.pool, outcome.changes, kit.appRepo, world.abort.signal, kit.safety)
     expect((await kit.appRepo.listChanges(RUN.id)).map((c) => c.restoreDetail)).toEqual(['Put back.'])
     const pages = await kit.repo.listPages(RUN.id)
@@ -551,5 +560,44 @@ describe('runCheck: a run that times out while the AI is asked', () => {
     expect(signals).toEqual([run.signal])
     expect(outcome.stop).toBe('timeout')
     expect(outcome.steps).toEqual([])
+  })
+})
+
+describe('runCheck: a finish that comes too early', () => {
+  it('refuses an early finish once, as a recorded step, and accepts the second', async () => {
+    const { outcome, agent } = await kit.check([...signIn('Teen 15'), FINISH, FINISH])
+    expect(outcome.steps.map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'refused', 'done'])
+    expect(outcome.steps[4]).toMatchObject({ refusalReason: TOO_EARLY, action: FINISH, pageId: null })
+    expect(outcome.steps[4].line).toBe(`Step 5 · Teen 15 · Refused: finished the check. ${TOO_EARLY}`)
+    expect(agent.prompts).toHaveLength(6)
+    expect(agent.prompts[5].history.at(-1)).toContain(TOO_EARLY)
+    expect(outcome).toMatchObject({ finished: true, stop: null })
+  })
+
+  it('refuses a finish after 3 steps that never left the page reached after sign-in', async () => {
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/home'), openPath('/home'), openPath('/home'), FINISH])
+    expect(outcome.steps.slice(4).map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'refused', 'done'])
+    expect(outcome.steps[7].refusalReason).toBe(TOO_EARLY)
+  })
+
+  it('accepts a finish at once after the check opened /settings and took 3 done steps after sign-in', async () => {
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), openPath('/home'), openPath('/settings'), { ...FINISH, evidenceSteps: [5] }])
+    expect(outcome.steps).toHaveLength(8)
+    expect(outcome.steps.every((s) => s.outcome === 'done')).toBe(true)
+    expect(outcome).toMatchObject({ finished: true, evidenceSteps: [5] })
+  })
+
+  it('accepts a finish that is the last step the limit allows', async () => {
+    const { outcome } = await kit.check([...signIn('Teen 15'), FINISH], {}, { maxSteps: 5 })
+    expect(outcome.steps.map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'done'])
+    expect(outcome.finished).toBe(true)
+  })
+
+  it('a check whose early finish was refused still ends at the step limit', async () => {
+    const { outcome, agent } = await kit.check([...signIn('Teen 15'), FINISH, openPath('/home'), openPath('/home'), openPath('/home')], {}, { maxSteps: 7 })
+    expect(outcome.steps).toHaveLength(7)
+    expect(outcome.steps[4].outcome).toBe('refused')
+    expect(agent.prompts).toHaveLength(7)
+    expect(outcome).toMatchObject({ finished: false, stop: null })
   })
 })

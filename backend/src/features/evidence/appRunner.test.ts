@@ -117,12 +117,15 @@ describe('executeAppRun, a capture run', () => {
     const run = await kit.run({ checkedItemIds: ['i1', 'i3'] })
     const progress = patches.filter((p) => 'currentItemId' in p || 'currentStep' in p)
     expect(progress).toEqual([
+      // Each check's first finish is refused as too early (step 2) and the second is accepted (step 3).
       { currentItemId: 'i1', currentStep: 0 },
       { currentStep: 1 },
       { currentStep: 2 },
+      { currentStep: 3 },
       { currentItemId: 'i3', currentStep: 0 },
       { currentStep: 1 },
       { currentStep: 2 },
+      { currentStep: 3 },
       expect.objectContaining({ currentItemId: null }),
     ])
     expect(run.currentItemId).toBeNull()
@@ -151,12 +154,12 @@ describe('executeAppRun, a capture run', () => {
       expect(spent).toBeLessThan(APP_MAX_TOKENS_PER_RUN)
       spent += call.tokens
     }
-    // i1: step, finish, judge (150 000); i2: one step reaches the cap.
+    // i1: step, a finish refused as too early, finish, judge: the cap is reached, so i2 gets no call.
     expect(kit.aiCalls.map((c) => [c.kind, c.itemId])).toEqual([
       ['step', 'i1'],
       ['step', 'i1'],
+      ['step', 'i1'],
       ['judge', 'i1'],
-      ['step', 'i2'],
     ])
     expect(run.tokensUsed).toBe(200_000)
     expect(run.status).toBe('partial')
