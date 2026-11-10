@@ -5,7 +5,7 @@ import type { AuditData } from './auditData.js'
 import {
   APP_RUN_TIMEOUT_MS,
   LOCKED_SUBMISSION_STATUSES,
-  MAX_RUNS_PER_PROJECT_PER_DAY,
+  maxRunsPerProjectPerDay,
   MAX_STALE_SWEEP,
   RUNS_WINDOW_MS,
   RUN_TIMEOUT_MS,
@@ -99,8 +99,9 @@ export async function createAndQueue(deps: RunStartDeps, plan: NewRunPlan, prepa
     if (prepared.refusal) return prepared.refusal
     if (await sweepStaleRuns(deps, plan.projectId)) return refuse(409, RUN_IN_PROGRESS)
     const since = new Date((deps.now ?? Date.now)() - RUNS_WINDOW_MS).toISOString()
-    if ((await deps.repo.countRunsSince(plan.projectId, since)) >= MAX_RUNS_PER_PROJECT_PER_DAY) {
-      return refuse(429, `This project has used its ${MAX_RUNS_PER_PROJECT_PER_DAY} runs for today. Try again tomorrow.`)
+    const dailyLimit = maxRunsPerProjectPerDay()
+    if ((await deps.repo.countRunsSince(plan.projectId, since)) >= dailyLimit) {
+      return refuse(429, `This project has used its ${dailyLimit} runs for today. Try again tomorrow.`)
     }
     const run = await deps.repo.createRun({
       projectId: plan.projectId,

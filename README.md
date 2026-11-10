@@ -217,7 +217,7 @@ All set in `backend/src/features/evidence/config.ts`:
 | Pages per run (links one level deep from the start links are followed) | 30 |
 | Start links per project | 10 |
 | Time per page / per whole run | 30 s / 15 min |
-| Runs per project per day | 5 |
+| Runs per project per day | 5 by default. Change it with `EVIDENCE_MAX_RUNS_PER_DAY` in `backend/.env` (1 to 100). |
 | Runs at the same time | 1 (others wait in a queue) |
 | AI tokens per run | 80 000 |
 

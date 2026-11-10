@@ -10,7 +10,23 @@ export const PAGE_TIMEOUT_MS = 30_000
 export const RUN_TIMEOUT_MS = 900_000
 export const MAX_START_URLS = 10
 export const MAX_CONCURRENT_RUNS = 1
-export const MAX_RUNS_PER_PROJECT_PER_DAY = 5
+export const DEFAULT_MAX_RUNS_PER_PROJECT_PER_DAY = 5
+/** The most EVIDENCE_MAX_RUNS_PER_DAY may be set to, so a typo cannot remove the cost protection. */
+export const MAX_RUNS_PER_PROJECT_PER_DAY_CEILING = 100
+/** The built-in limit. The running limit comes from maxRunsPerProjectPerDay. */
+export const MAX_RUNS_PER_PROJECT_PER_DAY = DEFAULT_MAX_RUNS_PER_PROJECT_PER_DAY
+
+/**
+ * How many evidence runs one project may start in 24 hours. Set EVIDENCE_MAX_RUNS_PER_DAY to a
+ * whole number from 1 up to the ceiling; anything else (unset, 0, negative, text) keeps the default.
+ */
+export function maxRunsPerProjectPerDay(env: Record<string, string | undefined> = process.env): number {
+  const raw = (env.EVIDENCE_MAX_RUNS_PER_DAY ?? '').trim()
+  if (!/^\d+$/.test(raw)) return DEFAULT_MAX_RUNS_PER_PROJECT_PER_DAY
+  const value = Number(raw)
+  if (value < 1) return DEFAULT_MAX_RUNS_PER_PROJECT_PER_DAY
+  return Math.min(value, MAX_RUNS_PER_PROJECT_PER_DAY_CEILING)
+}
 export const MAX_REDIRECT_HOPS = 5
 export const NETWORK_IDLE_WAIT_MS = 5_000
 export const MAX_RESPONSE_BYTES = 25 * 1024 * 1024
