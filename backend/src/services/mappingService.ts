@@ -175,10 +175,11 @@ Each source item comes with a few candidate items from other guidelines. Decide 
 Return JSON only:
 {"matches":[{"source":"S1","candidate":"C2","relation":"equivalent","confidence":0.85,"reason":"one short sentence"}]}`
 
-export async function generateMappingsForGuideline(guidelineId: string, ask: AskModel) {
+export async function generateMappingsForGuideline(guidelineId: string, ask: AskModel, scopeGuidelineIds?: string[]) {
   const all = await fetchGlobalItems()
+  const scope = scopeGuidelineIds ? new Set(scopeGuidelineIds) : null
   const own = all.filter((i) => i.guidelineId === guidelineId)
-  const others = all.filter((i) => i.guidelineId !== guidelineId)
+  const others = all.filter((i) => i.guidelineId !== guidelineId && (!scope || scope.has(i.guidelineId)))
   if (own.length === 0) throw new MappingNotFoundError('Guideline not found or it has no checklist items.')
   if (others.length === 0) return { checked: own.length, suggested: 0, failedBatches: 0 }
 
@@ -271,6 +272,59 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
     throw new MappingFailedError(`AI matching failed for every batch. ${reason.slice(0, 300)}`)
   }
   return { checked: own.length, suggested, failedBatches }
+}
+
+async function fetchProjectMasterGuidelineIds(projectId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('Guideline')
+    .select('originalGuidelineId')
+    .eq('projectId', projectId)
+  if (error) throw error
+  const ids = ((data ?? []) as { originalGuidelineId: string | null }[])
+    .map((g) => g.originalGuidelineId)
+    .filter((id): id is string => !!id)
+  return Array.from(new Set(ids))
+}
+
+/** Links only the items of the guidelines assigned to this project, never the whole library. */
+export async function generateMappingsForProject(projectId: string, ask: AskModel) {
+  const guidelineIds = await fetchProjectMasterGuidelineIds(projectId)
+  const total = { checked: 0, suggested: 0, failedBatches: 0 }
+  if (guidelineIds.length < 2) return total
+
+  let runs = 0
+  let failedRuns = 0
+  let lastError: unknown = null
+  for (const guidelineId of guidelineIds) {
+    try {
+      const result = await generateMappingsForGuideline(guidelineId, ask, guidelineIds)
+      runs++
+      total.checked += result.checked
+      total.suggested += result.suggested
+      total.failedBatches += result.failedBatches
+    } catch (error) {
+      if (error instanceof MappingNotFoundError) continue
+      runs++
+      failedRuns++
+      lastError = error
+    }
+  }
+  if (runs > 0 && failedRuns === runs) {
+    throw lastError instanceof MappingFailedError ? lastError : new MappingFailedError('AI matching failed for this project.')
+  }
+  return total
+}
+
+export async function fetchProjectMappings(projectId: string) {
+  const inProject = new Set(await fetchProjectMasterGuidelineIds(projectId))
+  const all = await fetchMappings()
+  return all.filter((m) => inProject.has(m.itemA!.guidelineId) && inProject.has(m.itemB!.guidelineId))
+}
+
+export async function reviewProjectMapping(projectId: string, mappingId: string, status: MappingStatus, relation: MappingRelation | undefined, userId: string): Promise<void> {
+  const allowed = await fetchProjectMappings(projectId)
+  if (!allowed.some((m) => m.mappingId === mappingId)) throw new MappingNotFoundError()
+  await reviewMapping(mappingId, status, relation, userId)
 }
 
 function describeItem(item: GlobalItem | undefined) {
@@ -415,7 +469,7 @@ async function fetchSourceProjects(userId: string, platform: string, excludeProj
 export async function fetchProjectSuggestions(projectId: string, userId: string): Promise<AnswerSuggestion[]> {
   const { data: project, error: projectError } = await supabase
     .from('Audit_Project')
-    .select('smPlatform, submissionStatus')
+    .select('smPlatform, submissionStatus, projectTitle')
     .eq('projectId', projectId)
     .single()
   if (projectError) throw projectError
@@ -469,6 +523,8 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
   if (targets.length === 0) return []
 
   const titles = await fetchSourceProjects(userId, (project as any).smPlatform, projectId)
+  // The project's own other guidelines are a source too, so overlapping items are answered once.
+  titles.set(projectId, (project as any).projectTitle ?? '')
   const sourceProjectIds = Array.from(titles.keys())
   if (sourceProjectIds.length === 0) return []
 
@@ -494,9 +550,9 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
       .not('originalItemId', 'is', null)
       .order('itemId')
       .range(from, to)),
-    fetchAllIn<{ itemId: string; result: string; findings: string | null; evidenceCount: number | null; timeSubmitted: string }>(sourceProjectIds, (ids, from, to) => supabase
+    fetchAllIn<{ itemId: string; userId: string; result: string; findings: string | null; evidenceCount: number | null; timeSubmitted: string }>(sourceProjectIds, (ids, from, to) => supabase
       .from('Audit_Result')
-      .select('itemId, result, findings, evidenceCount, timeSubmitted')
+      .select('itemId, userId, result, findings, evidenceCount, timeSubmitted')
       .in('projectId', ids)
       .order('resultId')
       .range(from, to)),
@@ -519,8 +575,10 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
   const answersByOriginal = new Map<string, SourceAnswer[]>()
   for (const si of sourceItems) {
     const info = checklistInfo.get(si.checklistId)
-    const rows = resultsByItem.get(si.itemId)
-    if (!info || !rows || rows.length === 0) continue
+    if (!info) continue
+    // Inside the current project only the auditor's own answers count; other projects are already approved.
+    const rows = (resultsByItem.get(si.itemId) ?? []).filter((r) => info.projectId !== projectId || r.userId === userId)
+    if (rows.length === 0) continue
 
     const effective = reconcileEffectiveStatus(rows.map((r) => r.result), resolutionByItem.get(`${info.projectId}|${si.itemId}`))
     if (effective === 'needs_review' || effective === 'not_started') continue

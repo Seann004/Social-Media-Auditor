@@ -285,6 +285,10 @@ app.post('/api/projects/:id/guidelines', requireAuth, requireRole('head_auditor'
     }
     await db.syncProjectGuidelines(req.params.id, guidelineIds)
     res.json({ success: true })
+    // Link only the guidelines this project uses; already-linked pairs are skipped.
+    mapping.generateMappingsForProject(req.params.id, askGroq)
+      .then((r) => console.log(`Mapped project ${req.params.id}: ${r.suggested} suggested links`))
+      .catch((err) => console.error('Project mapping failed:', err))
   } catch (error) {
     sendError(res, error)
   }
@@ -314,9 +318,6 @@ app.post('/api/guidelines', requireAuth, requireRole('admin'), async (req, res) 
     }
     await db.createGuideline({ guideline, items })
     res.status(201).json({ success: true })
-    mapping.generateMappingsForGuideline(guideline.guidelineId, askGroq)
-      .then((r) => console.log(`Mapped ${guideline.guidelineName}: ${r.suggested} suggested links`))
-      .catch((err) => console.error('Auto mapping failed:', err))
   } catch (error) {
     sendError(res, error)
   }
@@ -945,6 +946,39 @@ app.patch('/api/mappings/:id', requireAuth, requireRole('admin'), async (req, re
       return res.status(400).json({ error: 'relation must be equivalent or partial.' })
     }
     await mapping.reviewMapping(req.params.id, status, relation, req.user!.userId)
+    res.json({ success: true })
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.get('/api/projects/:id/mappings', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
+  try {
+    res.json(await mapping.fetchProjectMappings(req.params.id))
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.post('/api/projects/:id/mappings/generate', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
+  try {
+    res.json(await mapping.generateMappingsForProject(req.params.id, askGroq))
+  } catch (error) {
+    sendError(res, error)
+  }
+})
+
+app.patch('/api/projects/:id/mappings/:mappingId', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
+  try {
+    const { status, relation } = req.body
+    if (!UUID_RE.test(req.params.mappingId)) return res.status(404).json({ error: 'Mapping not found.' })
+    if (!['suggested', 'confirmed', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'status must be suggested, confirmed or rejected.' })
+    }
+    if (relation !== undefined && !['equivalent', 'partial'].includes(relation)) {
+      return res.status(400).json({ error: 'relation must be equivalent or partial.' })
+    }
+    await mapping.reviewProjectMapping(req.params.id, req.params.mappingId, status, relation, req.user!.userId)
     res.json({ success: true })
   } catch (error) {
     sendError(res, error)

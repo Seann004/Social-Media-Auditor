@@ -41,6 +41,7 @@ import ScoreRing from '../../audits/components/ScoreRing'
 import { useEvidence } from '../../evidence/useEvidence'
 import EvidencePanel from '../../evidence/components/EvidencePanel'
 import ItemSuggestion from '../../evidence/components/ItemSuggestion'
+import ProjectLinksPanel from '../components/ProjectLinksPanel'
 import OverrideDialog from '../../evidence/components/OverrideDialog'
 import FlaggedFilterToggle from '../../evidence/components/FlaggedFilterToggle'
 import ProvenanceBadge from '../../evidence/components/ProvenanceBadge'
@@ -1290,6 +1291,8 @@ helpText: newItemHelp.trim() || undefined,
           )}
 
         </div>
+
+        {isHeadAuditor && project && id && <ProjectLinksPanel projectId={id} />}
 
         {loadError && (
           <div role="alert" className="mt-3 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700">

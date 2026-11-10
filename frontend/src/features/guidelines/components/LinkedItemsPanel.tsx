@@ -24,7 +24,7 @@ const STATUS_TABS: { key: MappingStatus; label: string }[] = [
   { key: 'rejected', label: 'Rejected' },
 ]
 
-function ItemSide({ item }: { item: MappedItem }) {
+export function ItemSide({ item }: { item: MappedItem }) {
   return (
     <div className="flex-1 min-w-0 bg-slate-50 border border-slate-100 rounded-lg px-4 py-3">
       <div className="flex items-center gap-2 mb-1.5 flex-wrap">

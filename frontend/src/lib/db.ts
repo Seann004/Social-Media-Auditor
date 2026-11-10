@@ -551,6 +551,21 @@ export async function reviewMapping(mappingId: string, status: MappingStatus, re
   })
 }
 
+export async function fetchProjectMappings(projectId: string): Promise<ItemMapping[]> {
+  return request<ItemMapping[]>(`/projects/${projectId}/mappings`)
+}
+
+export async function generateProjectMappings(projectId: string): Promise<{ checked: number; suggested: number; failedBatches: number }> {
+  return request(`/projects/${projectId}/mappings/generate`, { method: 'POST' })
+}
+
+export async function reviewProjectMapping(projectId: string, mappingId: string, status: MappingStatus, relation?: MappingRelation): Promise<void> {
+  await request(`/projects/${projectId}/mappings/${mappingId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status, relation }),
+  })
+}
+
 export async function fetchMappingCoverage(): Promise<MappingCoverage> {
   return request<MappingCoverage>('/mappings/coverage')
 }

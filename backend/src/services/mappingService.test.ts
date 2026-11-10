@@ -380,3 +380,139 @@ describe('dismissSuggestion', () => {
     await expect(mapping.dismissSuggestion('P2', USER, 'p2b', 'p1a')).rejects.toThrow(mapping.SuggestionNotFoundError)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Links limited to the guidelines a project actually uses
+// ---------------------------------------------------------------------------
+
+const G3_TEXT = 'Age assurance for teenagers is proportionate to the risk'
+
+function addThirdGuideline() {
+  tables.Checklist.push({ checklistId: 'gc3', guidelineId: 'G3', projectId: null, Guideline: { guidelineName: 'EDPB Audit', shortName: 'EDPB' } })
+  tables.Checklist_Item.push({ itemId: 'g3a', checklistId: 'gc3', category: 'Age', itemDescription: G3_TEXT, itemName: null, itemCode: 'E-1', reference: null, verbatimClauseText: null })
+}
+
+function attachGuidelines(projectId: string, masterIds: string[]) {
+  tables.Guideline = [
+    ...(tables.Guideline ?? []).filter((g) => g.projectId !== projectId),
+    ...masterIds.map((originalGuidelineId) => ({ guidelineId: `clone-${projectId}-${originalGuidelineId}`, projectId, originalGuidelineId })),
+  ]
+}
+
+function candidateTexts(ask: ReturnType<typeof askMatchingAge>): string[] {
+  return ask.mock.calls.flatMap(([, user]) => (JSON.parse(user) as { candidates: { text: string }[] }[]).flatMap((p) => p.candidates.map((c) => c.text)))
+}
+
+describe('generateMappingsForGuideline with a scope', () => {
+  beforeEach(() => { tables.Item_Mapping = [] })
+
+  it('compares only against the guidelines it is told to', async () => {
+    addThirdGuideline()
+    const ask = askMatchingAge()
+    await mapping.generateMappingsForGuideline('G1', ask, ['G2'])
+    const texts = candidateTexts(ask)
+    expect(texts).toContain('Age assurance restricts children from accessing adult content')
+    expect(texts).not.toContain(G3_TEXT)
+    expect(tables.Item_Mapping.map((m) => `${m.itemIdA}|${m.itemIdB}`)).toEqual(['g1a|g2a'])
+  })
+
+  it('returns zero suggestions when the scope holds no other guideline', async () => {
+    const ask = askMatchingAge()
+    expect(await mapping.generateMappingsForGuideline('G1', ask, [])).toEqual({ checked: 1, suggested: 0, failedBatches: 0 })
+    expect(ask).not.toHaveBeenCalled()
+  })
+})
+
+describe('generateMappingsForProject', () => {
+  beforeEach(() => { tables.Item_Mapping = [] })
+
+  it('links the items of the guidelines assigned to the project, and nothing else', async () => {
+    addThirdGuideline()
+    attachGuidelines('P2', ['G1', 'G2'])
+    const ask = askMatchingAge()
+    const result = await mapping.generateMappingsForProject('P2', ask)
+    expect(result.suggested).toBe(1)
+    expect(candidateTexts(ask)).not.toContain(G3_TEXT)
+    expect(tables.Item_Mapping.map((m) => `${m.itemIdA}|${m.itemIdB}`)).toEqual(['g1a|g2a'])
+  })
+
+  it('does not call the AI when the project has a single guideline', async () => {
+    attachGuidelines('P2', ['G2'])
+    const ask = askMatchingAge()
+    expect(await mapping.generateMappingsForProject('P2', ask)).toEqual({ checked: 0, suggested: 0, failedBatches: 0 })
+    expect(ask).not.toHaveBeenCalled()
+  })
+
+  it('does not ask again about pairs that were already linked', async () => {
+    attachGuidelines('P2', ['G1', 'G2'])
+    await mapping.generateMappingsForProject('P2', askMatchingAge())
+    const ask = askMatchingAge()
+    const second = await mapping.generateMappingsForProject('P2', ask)
+    expect(ask).not.toHaveBeenCalled()
+    expect(second.suggested).toBe(0)
+  })
+
+  it('throws MappingFailedError when the AI fails for every guideline', async () => {
+    attachGuidelines('P2', ['G1', 'G2'])
+    const ask = vi.fn(async () => { throw new Error('Groq down') })
+    await expect(mapping.generateMappingsForProject('P2', ask)).rejects.toThrow(mapping.MappingFailedError)
+  })
+})
+
+describe('fetchProjectMappings', () => {
+  it('returns links between the project guidelines', async () => {
+    attachGuidelines('P2', ['G1', 'G2'])
+    const out = await mapping.fetchProjectMappings('P2')
+    expect(out.map((m) => m.mappingId)).toEqual(['m1'])
+  })
+
+  it('leaves out links that involve a guideline the project does not use', async () => {
+    addThirdGuideline()
+    attachGuidelines('P2', ['G2', 'G3'])
+    expect(await mapping.fetchProjectMappings('P2')).toEqual([])
+  })
+})
+
+describe('reviewProjectMapping', () => {
+  it('lets a project confirm a link between its own guidelines', async () => {
+    attachGuidelines('P2', ['G1', 'G2'])
+    tables.Item_Mapping[0].status = 'suggested'
+    await mapping.reviewProjectMapping('P2', 'm1', 'confirmed', 'equivalent', 'head-1')
+    expect(tables.Item_Mapping[0]).toMatchObject({ status: 'confirmed', relation: 'equivalent', reviewedBy: 'head-1' })
+  })
+
+  it('refuses a link that belongs to guidelines outside the project', async () => {
+    addThirdGuideline()
+    attachGuidelines('P2', ['G2', 'G3'])
+    tables.Item_Mapping[0].status = 'suggested'
+    await expect(mapping.reviewProjectMapping('P2', 'm1', 'confirmed', undefined, 'head-1')).rejects.toThrow(mapping.MappingNotFoundError)
+    expect(tables.Item_Mapping[0].status).toBe('suggested')
+  })
+})
+
+describe('fetchProjectSuggestions inside the same project', () => {
+  // The project itself holds both guidelines; no earlier approved project exists.
+  beforeEach(() => {
+    tables.Audit_Project[0].submissionStatus = 'draft'
+    tables.Checklist.push({ checklistId: 'pc2b', guidelineId: 'G1', projectId: 'P2', Guideline: { guidelineName: 'ONSA Code', shortName: 'ONSA' } })
+    tables.Checklist_Item.push({ itemId: 'p2c', checklistId: 'pc2b', category: 'Age', itemCode: 'O-1', reference: null, originalItemId: 'g1a' })
+    tables.Audit_Result.push({ resultId: 'r7', projectId: 'P2', itemId: 'p2c', userId: USER, result: 'non_compliant', findings: 'No age gate', evidenceCount: 0, timeSubmitted: '2026-05-02T00:00:00Z' })
+  })
+
+  it('suggests the answer given to the linked item of another guideline in the same project', async () => {
+    const out = await mapping.fetchProjectSuggestions('P2', USER)
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ itemId: 'p2a', suggestedStatus: 'non_compliant', relation: 'equivalent', sourceProjectId: 'P2', sourceItemId: 'p2c', findings: 'No age gate' })
+  })
+
+  it('only uses answers the same auditor gave', async () => {
+    tables.Audit_Result.find((r) => r.resultId === 'r7')!.userId = 'user-2'
+    expect(await mapping.fetchProjectSuggestions('P2', USER)).toEqual([])
+  })
+
+  it('can be accepted like any other suggestion', async () => {
+    const accepted = await mapping.acceptSuggestions('P2', USER, ['p2a'])
+    expect(accepted.map((a) => a.itemId)).toEqual(['p2a'])
+    expect(tables.Audit_Result.find((r) => r.projectId === 'P2' && r.itemId === 'p2a')).toMatchObject({ result: 'non_compliant', findings: 'No age gate' })
+  })
+})
