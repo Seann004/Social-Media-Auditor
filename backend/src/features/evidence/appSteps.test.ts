@@ -14,6 +14,7 @@ import {
   unknownChange,
   type StepContext,
 } from './appSteps.js'
+import { REPEATED_ACTION } from './appRepeat.js'
 import type { AgentAccount, AppAction, AppElement, AppStep, AppView } from './appTypes.js'
 import { createMemoryAppRepository } from './memoryAppRepository.js'
 import { createMemoryRepository } from './memoryRepository.js'
@@ -84,6 +85,13 @@ describe('stepLine', () => {
     expect(isLookFurtherHint(FINISHED_TOO_EARLY)).toBe(true)
     expect(isLookFurtherHint('Not a test account.')).toBe(false)
     expect(isLookFurtherHint(null)).toBe(false)
+  })
+
+  it('a repeat refusal with the hint after it is still a hint; a lookalike reason is not', () => {
+    const withHint = `${REPEATED_ACTION} Next, fill "Password" (e2).`
+    expect(isLookFurtherHint(withHint)).toBe(true)
+    expect(isLookFurtherHint(`${REPEATED_ACTION}x`)).toBe(false)
+    expect(isLookFurtherHint(`Not a test account. ${REPEATED_ACTION}`)).toBe(false)
   })
 
   it('leaves the account out before any account is in use', () => {

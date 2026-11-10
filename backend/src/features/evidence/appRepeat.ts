@@ -3,6 +3,7 @@
  * changed nothing on the page and nothing has changed since, is refused so that the AI tries
  * something else (a live run typed the login into the e-mail field four times in a row).
  */
+import { isCredentialField, isSignInButton, isTextField } from './appFields.js'
 import type { AppAction, AppElement, AppView } from './appTypes.js'
 
 /** The refusal of a repeat. The AI sees it in its history. */
@@ -87,4 +88,51 @@ export function isRepeat(last: DoneAction | null, action: ActAction, el: AppElem
   if (last === null || last.action.type !== action.type) return false
   if (!samePayload(action, last.action) || !sameTarget(last, action, labelOf(el))) return false
   return samePage(last.before, last.after)
+}
+
+/** What the repeat hint knows: the account in use, and whether this check filled a field for it. */
+export interface RepeatHintContext {
+  account: string | null
+  filled: (field: AppElement) => boolean
+}
+
+const quoted = (el: AppElement): string => `"${el.name.trim()}" (${el.ref})`
+
+function listed(items: string[]): string {
+  return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
+}
+
+/** The text and password fields of the form or dialog the element is in (the page's loose fields when it is in none). */
+function formFields(el: AppElement, view: AppView): AppElement[] {
+  return view.elements.filter((other) => other.groupId === el.groupId && isTextField(other))
+}
+
+function nextStep(el: AppElement, view: AppView, fields: AppElement[], ctx: RepeatHintContext): string | null {
+  const credentials = fields.filter(isCredentialField)
+  const button = view.elements.find((other) => other.groupId === el.groupId && isSignInButton(other))
+  if (credentials.length > 0 && credentials.every(ctx.filled) && button !== undefined) {
+    const which = credentials.length === 2 ? 'Both fields are' : credentials.length === 1 ? 'The field is' : 'All the fields are'
+    return `${which} filled: click the "${button.name.trim()}" button (${button.ref}) next.`
+  }
+  const unfilled = [...credentials, ...fields.filter((f) => !isCredentialField(f))].find((f) => !ctx.filled(f))
+  return unfilled === undefined ? null : `Next, fill ${quoted(unfilled)}.`
+}
+
+/**
+ * The refusal of a repeat. A repeated fill (a credential or a typed text) also says which fields of
+ * its form this check already filled for the account in use, and what to do next: the form's sign-in
+ * button once every credential field is filled, else the next empty field. It names only fields, refs
+ * and buttons the AI already sees, never a value. It is a hint: nothing is clicked for the AI.
+ */
+export function repeatRefusal(action: ActAction, el: AppElement | null, view: AppView | null, ctx: RepeatHintContext): string {
+  if ((action.type !== 'fill_credential' && action.type !== 'type') || el === null || view === null) return REPEATED_ACTION
+  const fields = formFields(el, view)
+  const done = fields.filter(ctx.filled).map(quoted)
+  const who = ctx.account === null ? 'This check has' : `For ${ctx.account} this check has`
+  const parts = [
+    REPEATED_ACTION,
+    done.length === 0 ? null : `${who} already filled ${listed(done)} in this form.`,
+    nextStep(el, view, fields, ctx),
+  ]
+  return parts.filter((p): p is string => p !== null).join(' ')
 }

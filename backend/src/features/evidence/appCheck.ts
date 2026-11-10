@@ -5,7 +5,8 @@
  */
 import { StepDecisionError, type AccountStatus, type DecideStep, type StepPrompt } from './appAgent.js'
 import type { AppRepository } from './appRepository.js'
-import { isRepeat, labelOf, pageState, REPEATED_ACTION, type DoneAction } from './appRepeat.js'
+import { isCredentialField, SIGN_IN_CONTROL } from './appFields.js'
+import { isRepeat, labelOf, pageState, repeatRefusal, type DoneAction } from './appRepeat.js'
 import { pageDetail, type PageDetailOptions } from './appStepNotes.js'
 import { checkAction, detectBlock, type SafetyContext } from './appSafety.js'
 import { wasStillLoading, type AppSession, type AppSessionPool } from './appSession.js'
@@ -68,12 +69,8 @@ export interface CheckOutcome {
 
 export { REPEATED_ACTION } from './appRepeat.js'
 
-/** A submit that signs in. Enter in a credential field would count too, but no action presses Enter. */
-export const SIGN_IN_CONTROL = /\b(sign ?in|log ?in)\b/i
+export { SIGN_IN_CONTROL } from './appFields.js'
 const SAVE_CONTROL = /\b(save|apply|update|done|confirm)\b/i
-/** A login-name box, by its label. */
-const LOGIN_FIELD_NAME = /\b(?:user ?name|e-?mail|log ?in|phone,? (?:or|\/) e-?mail|e-?mail,? (?:or|\/) phone)\b/i
-const LOGIN_FIELD_TYPES: (string | null)[] = [null, 'text', 'email']
 
 const UNREADABLE = "The AI's reply could not be read."
 const ASKED = 'asked the AI for the next step'
@@ -87,13 +84,6 @@ const NOT_A_CREDENTIAL_FIELD = 'A login name or password only goes into a sign-i
 const NOT_THE_SIGN_IN_FORM = 'A login name only goes into the sign-in form, next to its password field.'
 /** Stored as the action of a step the AI did not choose: an unreadable reply, or a page that stopped the check. */
 const NO_ACTION: AppAction = { type: 'finish', observations: '', evidenceSteps: [] }
-
-/** A password box, or a text or email box whose label says it takes a login name (ruling A14). */
-function isCredentialField(el: AppElement): boolean {
-  if (el.tag !== 'input') return false
-  if (el.inputType === 'password') return true
-  return LOGIN_FIELD_TYPES.includes(el.inputType) && LOGIN_FIELD_NAME.test(el.name)
-}
 
 /** A login-name box shares a form or dialog with a password field, or the page has a password field and no forms (ruling A14b). */
 function besidePasswordField(el: AppElement, view: AppView): boolean {
@@ -167,6 +157,8 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   let earlyFinishRefused = false
   /** The last step when it was a done action: an identical action next, on an unchanged page, is refused. */
   let lastDone: DoneAction | null = null
+  /** Per account, the fields this check filled (a fill or a typed text), by path and label: for the repeat hint. */
+  let filledFields: ReadonlyMap<string, ReadonlySet<string>> = new Map()
 
   await pool.resetAll()
 
@@ -207,6 +199,19 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       console.error(`[appCheck] run ${input.run.id}: could not read the page of ${current.account.label}`, err instanceof Error ? err.name : 'error')
       return null
     }
+  }
+
+  const fieldKey = (field: AppElement, at: AppView): string => `${pathOf(at.url)}\u0001${labelOf(field) ?? ''}`
+
+  /** Whether this check filled the field, on this page, for the account in use. */
+  function wasFilled(field: AppElement, at: AppView | null): boolean {
+    if (account === null || at === null) return false
+    return filledFields.get(account.id)?.has(fieldKey(field, at)) === true
+  }
+
+  function noteFilled(field: AppElement, at: AppView, who: AgentAccount): void {
+    const keys = new Set(filledFields.get(who.id) ?? []).add(fieldKey(field, at))
+    filledFields = new Map(filledFields).set(who.id, keys)
   }
 
   /** Notes a done step for the early-finish rule. */
@@ -324,7 +329,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     if (isRepeat(lastDone, action, el)) {
       // Kept, so that the same action a third time is refused too.
       const kept = lastDone
-      await refuse(action, REPEATED_ACTION)
+      await refuse(action, repeatRefusal(action, el, before, { account: account?.label ?? null, filled: (field) => wasFilled(field, before) }))
       lastDone = kept
       return
     }
@@ -347,6 +352,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       await record({ action, outcome: 'failed', detail: result.detail, refusalReason: null, view: after, describedOn: before, screenshot: after === null ? null : await shoot() })
       return
     }
+    if ((action.type === 'fill_credential' || action.type === 'type') && before !== null && el !== null) noteFilled(el, before, who)
     if (action.type === 'fill_credential' && action.field === 'password' && before !== null) {
       loginPaths = new Map(loginPaths).set(who.id, pathOf(before.url))
     }

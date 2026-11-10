@@ -116,7 +116,9 @@ const HINT_REASONS: readonly string[] = [FINISHED_TOO_EARLY, REPEATED_ACTION]
  * refusal, so it is still not evidence, but it is shown as a hint.
  */
 export function isLookFurtherHint(refusalReason: string | null): boolean {
-  return refusalReason !== null && HINT_REASONS.includes(refusalReason)
+  if (refusalReason === null) return false
+  // A refused repeat may carry a hint after its reason (the form's fields, the next step).
+  return HINT_REASONS.some((hint) => refusalReason === hint || refusalReason.startsWith(`${hint} `))
 }
 
 /** One step as the AI, the replay and the passages read it. */
