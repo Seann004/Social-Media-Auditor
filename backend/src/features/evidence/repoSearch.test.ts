@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findPieces, pieceKey, isCommentLine, isDocsOrTestPath } from './repoSearch.js'
+import { findPieces, pieceKey, isCommentLine, isDocsOrTestPath, isLocalePath } from './repoSearch.js'
 import { MAX_CHARS_PER_PASSAGE } from './config.js'
 import type { RepoFile, SearchTerms } from './repoTypes.js'
 
@@ -44,20 +44,25 @@ describe('findPieces', () => {
 
   it('ranks windows by distinct words, then total matches, then start line', () => {
     const f = file('a.ts', withAt(300, { 10: 'one', 150: 'one two', 290: 'one' }))
+    // One folder gives at most 2 pieces, so the third window is reached by excluding the best one.
     const out = findPieces([f], terms({ words: ['one', 'two'] }), { max: 3 })
-    expect(out.map((p) => p.startLine)).toEqual([130, 1, 270])
+    expect(out.map((p) => p.startLine)).toEqual([130, 1])
+    const rest = findPieces([f], terms({ words: ['one', 'two'] }), { max: 3, exclude: new Set(['a.ts:130-170']) })
+    expect(rest.map((p) => p.startLine)).toEqual([1, 270])
   })
 
   it('takes the best window of each file, then the second-best, in a fixed order', () => {
+    // Each file sits in its own folder, so the 2-per-folder cap does not apply.
     const mk = (p: string) => file(p, withAt(300, { 10: 'k', 200: 'k', 201: 'k' }))
-    const out = findPieces([mk('c.ts'), mk('a.ts'), mk('b.ts')], terms({ words: ['k'] }), { max: 6 })
+    const out = findPieces([mk('c/x.ts'), mk('a/x.ts'), mk('b/x.ts')], terms({ words: ['k'] }), { max: 6 })
     expect(out.map((p) => `${p.path}:${p.startLine}`)).toEqual([
-      'a.ts:180', 'b.ts:180', 'c.ts:180', 'a.ts:1', 'b.ts:1', 'c.ts:1',
+      'a/x.ts:180', 'b/x.ts:180', 'c/x.ts:180', 'a/x.ts:1', 'b/x.ts:1', 'c/x.ts:1',
     ])
   })
 
   it('stops at max and defaults to 6', () => {
-    const files = Array.from({ length: 9 }, (_, i) => file(`f${i}.ts`, ['k']))
+    // One folder per file, so the 2-per-folder cap does not apply.
+    const files = Array.from({ length: 9 }, (_, i) => file(`d${i}/f.ts`, ['k']))
     expect(findPieces(files, terms({ words: ['k'] }))).toHaveLength(6)
     expect(findPieces(files, terms({ words: ['k'] }), { max: 2 })).toHaveLength(2)
   })
@@ -139,8 +144,51 @@ describe('findPieces', () => {
   })
 
   it('sorts equal scores by path so the order is stable', () => {
-    const files = [file('b.ts', ['k']), file('c.ts', ['k']), file('a.ts', ['k'])]
-    expect(findPieces(files, terms({ words: ['k'] })).map((p) => p.path)).toEqual(['a.ts', 'b.ts', 'c.ts'])
+    // One folder per file, so the 2-per-folder cap does not apply.
+    const files = [file('b/k.ts', ['k']), file('c/k.ts', ['k']), file('a/k.ts', ['k'])]
+    expect(findPieces(files, terms({ words: ['k'] })).map((p) => p.path)).toEqual(['a/k.ts', 'b/k.ts', 'c/k.ts'])
+  })
+})
+
+describe('findPieces: locale files and the folder cap', () => {
+  const locale = (lang: string) => file(`config/locales/simple_form.${lang}.yml`, ['age: Age', 'private: Private account', 'age minimum'])
+
+  it('skips locale files when real code matches, even when they score higher', () => {
+    const code = file('app/models/account.rb', ['def default_private?', '  age < 16', 'end'])
+    const out = findPieces([locale('ar'), locale('be'), locale('bg'), code], terms({ words: ['age', 'private'] }))
+    expect(out.map((p) => p.path)).toEqual(['app/models/account.rb'])
+  })
+
+  it('uses locale files when no other file matches, so a translations-only repository gets an answer', () => {
+    const out = findPieces([locale('ar'), file('app/x.rb', ['nothing here'])], terms({ words: ['age'] }))
+    expect(out.map((p) => p.path)).toEqual(['config/locales/simple_form.ar.yml'])
+  })
+
+  it('still gives a locale file named in terms.paths', () => {
+    const code = file('app/models/account.rb', ['age'])
+    const out = findPieces([locale('ar'), locale('be'), code], terms({ words: ['age'], paths: ['config/locales/simple_form.be.yml'] }))
+    expect(out.map((p) => p.path).sort()).toEqual(['app/models/account.rb', 'config/locales/simple_form.be.yml'])
+  })
+
+  it('takes at most 2 pieces from the same folder per call', () => {
+    const many = Array.from({ length: 5 }, (_, i) => file(`app/models/m${i}.rb`, withAt(300, { 10: 'age', 200: 'age' })))
+    const other = file('app/services/s.rb', ['age'])
+    const out = findPieces([...many, other], terms({ words: ['age'] }), { max: 6 })
+    const fromModels = out.filter((p) => p.path.startsWith('app/models/'))
+    expect(fromModels).toHaveLength(2)
+    expect(out.map((p) => p.path)).toContain('app/services/s.rb')
+    expect(out).toHaveLength(3)
+  })
+})
+
+describe('isLocalePath', () => {
+  it.each([
+    ['config/locales/en.yml', true], ['src/locale/fr.json', true], ['src/i18n/de.ts', true], ['l10n/x.json', true],
+    ['res/lang/en.php', true], ['langs/a.json', true], ['src/translations/es.json', true], ['Config/Locales/en.yml', true],
+    ['po/de.po', true], ['messages.pot', true], ['a/b.xliff', true], ['a/b.xlf', true], ['ios/Localizable.strings', true],
+    ['app/models/account.rb', false], ['src/localeHelpers.ts', false], ['src/language.ts', false], ['src/i18n.ts', false],
+  ])('%s -> %s', (path, expected) => {
+    expect(isLocalePath(path)).toBe(expected)
   })
 })
 

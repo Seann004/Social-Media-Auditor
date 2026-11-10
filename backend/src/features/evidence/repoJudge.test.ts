@@ -342,8 +342,9 @@ const sentTokens = (passages: Passage[]) => passages.reduce((n, p) => n + estima
 const NULL_ANSWER: Answer = () => ({ results: [NULL_RESULT], missingItemIds: [], tokensUsed: 70 })
 
 describe('the input budget of each repo judge call', () => {
-  const NEEDLES = Array.from({ length: 6 }, (_, i) => bigFile(`src/needle${i}.ts`, `needle${i}`))
-  const OTHERS = Array.from({ length: 2 }, (_, i) => bigFile(`src/other${i}.ts`, `otherword${i}`))
+  // One folder per file: the search takes at most 2 pieces per folder, and these tests are about the token budget.
+  const NEEDLES = Array.from({ length: 6 }, (_, i) => bigFile(`src/n${i}/needle${i}.ts`, `needle${i}`))
+  const OTHERS = Array.from({ length: 2 }, (_, i) => bigFile(`src/o${i}/other${i}.ts`, `otherword${i}`))
 
   it('round 1 stores and sends only the ranked pieces that fit the budget', async () => {
     const kit = await createKit()
@@ -370,7 +371,7 @@ describe('the input budget of each repo judge call', () => {
     const final = kit.calls[1].passages
     const pieces = await kit.repoRepo.listPieces(kit.ctx.run.id, ITEM.id)
     const roundTwo = pieces.filter((p) => p.round === 2)
-    expect(roundTwo.map((p) => p.path)).toEqual(['src/other0.ts', 'src/other1.ts'])
+    expect(roundTwo.map((p) => p.path)).toEqual(['src/o0/other0.ts', 'src/o1/other1.ts'])
     expect(final.slice(0, 2).map((p) => p.pageId)).toEqual(roundTwo.map((p) => p.pageId))
     const roundOneSent = final.slice(2)
     expect(roundOneSent.length).toBeLessThan(first.length)
@@ -381,7 +382,7 @@ describe('the input budget of each repo judge call', () => {
   })
 
   it('round 2 stores only the new pieces that were sent', async () => {
-    const MANY = Array.from({ length: 6 }, (_, i) => bigFile(`src/many${i}.ts`, `manyword${i}`))
+    const MANY = Array.from({ length: 6 }, (_, i) => bigFile(`src/m${i}/many${i}.ts`, `manyword${i}`))
     const kit = await createKit([NULL_ANSWER], { words: ['manyword'], paths: [] })
     await judgeRepoItem(kit.ctx, {
       item: ITEM, platform: 'Social', files: [FILES[0], ...MANY], snapshot: kit.snapshot, terms: WORDS('isPrivate'), repoRepo: kit.repoRepo, meter: meterOf(),

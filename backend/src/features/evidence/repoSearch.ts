@@ -5,6 +5,10 @@ import type { PieceDraft, RepoFile, SearchTerms } from './repoTypes.js'
 const COMMENT_STARTS = ['//', '#', '/*', '*', '*/', '<!--', '--', ';']
 const DOCS_EXTENSIONS = ['.md', '.mdx', '.txt', '.rst']
 const DOCS_OR_TEST_SEGMENTS = new Set(['docs', 'doc', 'test', 'tests', '__tests__', 'spec'])
+const LOCALE_SEGMENTS = new Set(['locales', 'locale', 'i18n', 'l10n', 'lang', 'langs', 'translations'])
+const LOCALE_EXTENSIONS = ['.po', '.pot', '.xliff', '.xlf', '.strings']
+/** Pieces one folder (parent directory) may give per call, so one folder of look-alike files cannot fill the list. */
+const MAX_PIECES_PER_FOLDER = 2
 const CODE_CHAR_BUDGET = MAX_CHARS_PER_PASSAGE - 200
 const PER_WORD_LINE_CAP = 5
 const POINTS_PER_WORD_IN_PATH = 2
@@ -26,6 +30,27 @@ export function isDocsOrTestPath(path: string): boolean {
   const fileName = segments[segments.length - 1] ?? ''
   if (fileName.includes('.test.') || fileName.includes('.spec.')) return true
   return segments.slice(0, -1).some((s) => DOCS_OR_TEST_SEGMENTS.has(s))
+}
+
+/** A translation file: a folder named like locales or i18n, or a translation file extension. */
+export function isLocalePath(path: string): boolean {
+  const lower = path.toLowerCase()
+  if (LOCALE_EXTENSIONS.some((ext) => lower.endsWith(ext))) return true
+  return lower.split('/').slice(0, -1).some((s) => LOCALE_SEGMENTS.has(s))
+}
+
+function folderOf(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash === -1 ? '' : path.slice(0, slash)
+}
+
+/**
+ * Locale files crowd out code because they repeat the same words in many languages: they are dropped
+ * unless named, or unless no other file matches at all (so a translations-only repository still gets an answer).
+ */
+function withoutLocales(hits: FileHit[], named: ReadonlySet<string>): FileHit[] {
+  const codeMatches = hits.some((h) => !isLocalePath(h.file.path))
+  return codeMatches ? hits.filter((h) => !isLocalePath(h.file.path) || named.has(h.file.path)) : hits
 }
 
 interface Window {
@@ -170,20 +195,25 @@ export function findPieces(
   const hints = cleanList(terms.pathHints)
   const named = new Set(terms.paths)
 
-  const hits = files
-    .map((f) => toHit(f, words, hints, named))
-    .filter((h): h is FileHit => h !== null)
-    .sort((a, b) => b.score - a.score || (a.file.path < b.file.path ? -1 : a.file.path > b.file.path ? 1 : 0))
+  const matched = files.map((f) => toHit(f, words, hints, named)).filter((h): h is FileHit => h !== null)
+  const hits = withoutLocales(matched, named).sort(
+    (a, b) => b.score - a.score || (a.file.path < b.file.path ? -1 : a.file.path > b.file.path ? 1 : 0),
+  )
 
   const pieces: PieceDraft[] = []
+  let perFolder: ReadonlyMap<string, number> = new Map()
   const rounds = Math.max(0, ...hits.map((h) => h.windows.length))
   for (let round = 0; round < rounds && pieces.length < max; round++) {
     for (const hit of hits) {
       const window = hit.windows[round]
       if (!window) continue
+      const folder = folderOf(hit.file.path)
+      const taken = perFolder.get(folder) ?? 0
+      if (taken >= MAX_PIECES_PER_FOLDER) continue
       const draft = toDraft(hit.file, window)
       if (exclude.has(pieceKey(draft))) continue
       pieces.push(draft)
+      perFolder = new Map(perFolder).set(folder, taken + 1)
       if (pieces.length >= max) break
     }
   }
