@@ -22,6 +22,7 @@ const step = (over: Partial<AppStepView> = {}): AppStepView => ({
   refusalReason: null,
   pageId: 'pg-1',
   hasScreenshot: true,
+  hint: false,
   ...over,
 })
 const change = (over: Partial<AppChangeView> = {}): AppChangeView => ({
@@ -103,6 +104,21 @@ describe('ReplaySteps', () => {
     expect(screen.getByRole('heading', { name: 'Left changed' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Put back' })).toBeInTheDocument()
     expect(screen.getByText(/Private account/)).toBeInTheDocument()
+  })
+
+  it('shows the early-finish nudge as a gentle hint, not as a refusal', async () => {
+    const reason = 'Finished too early: look at the page where this is set, or try the action, before finishing.'
+    await open([
+      step({ id: 'a', position: 1, line: 'Tried to press Delete account', outcome: 'refused', refusalReason: 'Deleting an account is never allowed.', pageId: null, hasScreenshot: false }),
+      step({ id: 'b', position: 2, line: `Step 2 · Teen 15 · Asked to look further: finished the check. ${reason}`, outcome: 'refused', refusalReason: reason, pageId: null, hasScreenshot: false, hint: true }),
+    ])
+    const list = screen.getByRole('list', { name: 'Steps' })
+    const refusedChip = within(list).getByText('Refused')
+    const hintChip = within(list).getByText('Asked to look further')
+    expect(within(list).getAllByText('Refused')).toHaveLength(1)
+    expect(refusedChip).toHaveAttribute('data-tone', 'refusal')
+    expect(hintChip).toHaveAttribute('data-tone', 'hint')
+    expect(hintChip.className).not.toBe(refusedChip.className)
   })
 
   it('renders step lines as text, never as HTML', async () => {

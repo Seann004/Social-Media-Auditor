@@ -9,6 +9,7 @@ import { checkAction, detectBlock, type SafetyContext } from './appSafety.js'
 import type { AppSession, AppSessionPool } from './appSession.js'
 import {
   detectChange,
+  FINISHED_TOO_EARLY,
   isAiFinish,
   ON_OFF_CHANGE_ROLES,
   pathOf,
@@ -76,8 +77,6 @@ const PAGE_UNREADABLE = 'The app page could not be read, so the check stopped.'
 const READ_PAGE = 'read the page'
 /** Failed reads of the session's page in a row that end the check: the AI is not asked about pages it cannot see. */
 const UNREADABLE_PAGES_BEFORE_STOP = 2
-/** The refusal of a first finish that comes before the check has explored (once per check). */
-export const FINISHED_TOO_EARLY = 'Finished too early: look at the page where this is set, or try the action, before finishing.'
 /** Done steps needed after the first sign-in before a finish is accepted at once. */
 const DONE_STEPS_BEFORE_FINISH = 3
 const NOT_A_CREDENTIAL_FIELD = 'A login name or password only goes into a sign-in name or password field.'

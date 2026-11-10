@@ -47,7 +47,7 @@ describe('runCheck: recording', () => {
       'Step 3 · Teen 15 · filled the password of Teen 15 into "Password" → page unchanged',
       'Step 4 · Teen 15 · clicked button "Sign in" → page /home opened',
       'Step 5 · Teen 15 · opened /settings → page /settings opened',
-      `Step 6 · Teen 15 · Refused: finished the check. ${TOO_EARLY}`,
+      `Step 6 · Teen 15 · Asked to look further: finished the check. ${TOO_EARLY}`,
       'Step 7 · Teen 15 · finished the check',
     ])
     expect(outcome.finished).toBe(true)
@@ -568,7 +568,7 @@ describe('runCheck: a finish that comes too early', () => {
     const { outcome, agent } = await kit.check([...signIn('Teen 15'), FINISH, FINISH])
     expect(outcome.steps.map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'refused', 'done'])
     expect(outcome.steps[4]).toMatchObject({ refusalReason: TOO_EARLY, action: FINISH, pageId: null })
-    expect(outcome.steps[4].line).toBe(`Step 5 · Teen 15 · Refused: finished the check. ${TOO_EARLY}`)
+    expect(outcome.steps[4].line).toBe(`Step 5 · Teen 15 · Asked to look further: finished the check. ${TOO_EARLY}`)
     expect(agent.prompts).toHaveLength(6)
     expect(agent.prompts[5].history.at(-1)).toContain(TOO_EARLY)
     expect(outcome).toMatchObject({ finished: true, stop: null })

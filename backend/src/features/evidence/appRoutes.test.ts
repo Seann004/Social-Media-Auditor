@@ -568,8 +568,8 @@ describe('recorded steps and changes', () => {
     const res = await request(world.app).get(`/api/suggestions/${seeded.suggestionId}/steps`).set(world.auth(USERS.head))
     expect(res.status).toBe(200)
     expect(res.body.steps).toEqual([
-      { id: expect.any(String), position: 1, accountLabel: 'Teen 15', line: 'Step 1: Teen 15 turned on Private account.', outcome: 'done', refusalReason: null, pageId: seeded.pageId, hasScreenshot: true },
-      { id: expect.any(String), position: 2, accountLabel: 'Teen 15', line: 'Step 2: Teen 15 tried to post.', outcome: 'refused', refusalReason: 'Posting publicly is not allowed.', pageId: null, hasScreenshot: false },
+      { id: expect.any(String), position: 1, accountLabel: 'Teen 15', line: 'Step 1: Teen 15 turned on Private account.', outcome: 'done', refusalReason: null, pageId: seeded.pageId, hasScreenshot: true, hint: false },
+      { id: expect.any(String), position: 2, accountLabel: 'Teen 15', line: 'Step 2: Teen 15 tried to post.', outcome: 'refused', refusalReason: 'Posting publicly is not allowed.', pageId: null, hasScreenshot: false, hint: false },
     ])
     expect(res.body.changes).toEqual([
       { id: expect.any(String), itemId: 'item-1', accountLabel: 'Teen 15', pageUrl: 'https://example.com/settings', control: 'Private account', before: 'off', after: 'on', restored: true, restoreDetail: 'Put back to off.' },

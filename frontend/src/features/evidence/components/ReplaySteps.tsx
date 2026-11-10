@@ -18,9 +18,26 @@ type Shot = { state: 'loading' } | { state: 'ready'; url: string } | { state: 'f
 const NO_STEPS = 'This suggestion has no recorded steps.'
 const SHOT_FAILED = 'The screenshot could not be loaded.'
 
+const CHIP = 'rounded px-1.5 py-0.5 text-xs font-medium'
+/** The early-finish nudge is a hint to keep looking: neutral, not the colour of a safety refusal. */
+const HINT_LABEL = 'Asked to look further'
+
 function OutcomeChip({ step }: { step: AppStepView }) {
   if (step.outcome === 'done') return null
-  return <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600">{OUTCOME_LABEL[step.outcome]}</span>
+  if (step.hint) {
+    return (
+      <span data-tone="hint" className={`${CHIP} bg-sky-50 text-sky-700`}>
+        {HINT_LABEL}
+      </span>
+    )
+  }
+  const tone = step.outcome === 'refused' ? 'refusal' : 'other'
+  const colours = tone === 'refusal' ? 'bg-amber-50 text-amber-800' : 'bg-slate-100 text-slate-600'
+  return (
+    <span data-tone={tone} className={`${CHIP} ${colours}`}>
+      {OUTCOME_LABEL[step.outcome]}
+    </span>
+  )
 }
 
 /** The screenshot of one step. The signed link is fetched when the step is shown and never cached. */

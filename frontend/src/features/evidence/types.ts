@@ -195,6 +195,8 @@ export interface AppStepView {
   refusalReason: string | null
   pageId: string | null
   hasScreenshot: boolean
+  /** The early-finish nudge: stored as a refusal, shown as a hint to look further. */
+  hint: boolean
 }
 export interface AppChangeView {
   id: string

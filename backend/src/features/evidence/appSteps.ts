@@ -102,6 +102,19 @@ export function describeAction(action: AppAction, view: AppView | null): string 
   }
 }
 
+/** The refusal of a first finish that comes before the check has explored (once per check). */
+export const FINISHED_TOO_EARLY = 'Finished too early: look at the page where this is set, or try the action, before finishing.'
+/** How the early-finish nudge is labelled: a hint to keep looking, not a safety refusal. */
+export const LOOK_FURTHER = 'Asked to look further'
+
+/**
+ * Whether a refused step is the early-finish nudge, told by its refusal reason. It is stored as a
+ * refusal, so it is still not evidence, but it is shown as a hint.
+ */
+export function isLookFurtherHint(refusalReason: string | null): boolean {
+  return refusalReason === FINISHED_TOO_EARLY
+}
+
 /** One step as the AI, the replay and the passages read it. */
 export function stepLine(position: number, accountLabel: string | null, description: string, outcome: AppStepOutcome, detail: string): string {
   const head = accountLabel === null ? `Step ${position}` : `Step ${position} · ${accountLabel}`
@@ -109,6 +122,7 @@ export function stepLine(position: number, accountLabel: string | null, descript
     case 'done':
       return detail === '' ? `${head} · ${description}` : `${head} · ${description} → ${detail}`
     case 'refused':
+      if (isLookFurtherHint(detail)) return `${head} · ${LOOK_FURTHER}: ${description}. ${detail}`
       return `${head} · Refused: ${description}. ${detail}`
     case 'failed':
       return `${head} · Failed: ${description}. ${detail}`

@@ -210,9 +210,9 @@ const CODE = {
 
 /** Three steps for one suggestion: a page with a picture, a refused action, and a page with a picture. */
 const STEPS = [
-  { id: 'st-1', position: 1, accountLabel: 'Teen 15', line: 'Opened the settings page', outcome: 'done', refusalReason: null, pageId: 'pg-1', hasScreenshot: true },
-  { id: 'st-2', position: 2, accountLabel: 'Teen 15', line: 'Tried to press Delete account', outcome: 'refused', refusalReason: 'Deleting an account is never allowed.', pageId: null, hasScreenshot: false },
-  { id: 'st-3', position: 3, accountLabel: 'Adult 30', line: 'Read the privacy options', outcome: 'done', refusalReason: null, pageId: 'pg-2', hasScreenshot: true },
+  { id: 'st-1', position: 1, accountLabel: 'Teen 15', line: 'Opened the settings page', outcome: 'done', refusalReason: null, pageId: 'pg-1', hasScreenshot: true, hint: false },
+  { id: 'st-2', position: 2, accountLabel: 'Teen 15', line: 'Tried to press Delete account', outcome: 'refused', refusalReason: 'Deleting an account is never allowed.', pageId: null, hasScreenshot: false, hint: false },
+  { id: 'st-3', position: 3, accountLabel: 'Adult 30', line: 'Read the privacy options', outcome: 'done', refusalReason: null, pageId: 'pg-2', hasScreenshot: true, hint: false },
 ]
 const CHANGES = [
   { id: 'c-1', itemId: 'i1', accountLabel: 'Teen 15', pageUrl: 'http://127.0.0.1:5199/settings', control: 'Private account', before: 'on', after: 'off', restored: false, restoreDetail: 'The switch could not be found again.' },

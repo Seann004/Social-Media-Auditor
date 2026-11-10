@@ -1,4 +1,5 @@
 /** What the browser is shown of app evidence. A test account's view never carries its password or ciphertext. */
+import { isLookFurtherHint, LOOK_FURTHER } from './appSteps.js'
 import type { AgeGroup, AppChange, AppSource, AppStep, AppStepOutcome, TestAccount } from './appTypes.js'
 import type { PageSummary } from './types.js'
 
@@ -29,6 +30,11 @@ export interface AppStepView {
   refusalReason: string | null
   pageId: string | null
   hasScreenshot: boolean
+  /**
+   * The early-finish nudge: stored as a refusal (so it is never evidence) but shown as a hint to look
+   * further, not as a safety refusal.
+   */
+  hint: boolean
 }
 
 export interface AppChangeView {
@@ -60,18 +66,29 @@ export function toAppSourceView(source: AppSource): AppSourceView {
   return { appUrl: source.appUrl, loginDomains: [...source.loginDomains], updatedAt: source.updatedAt }
 }
 
+/** The marker of a refused step in its line, after the step number and account. */
+const REFUSED_MARK = ' · Refused: '
+
+/** Rows stored before the nudge had its own words say "Refused:"; they are shown with the hint's words. */
+function hintLine(line: string): string {
+  const at = line.indexOf(REFUSED_MARK)
+  return at === -1 ? line : `${line.slice(0, at)} · ${LOOK_FURTHER}: ${line.slice(at + REFUSED_MARK.length)}`
+}
+
 /** `pages` holds the step pages by id; a step whose page has a picture can show it. */
 export function toAppStepView(step: AppStep, pages: ReadonlyMap<string, PageSummary>): AppStepView {
   const page = step.pageId ? pages.get(step.pageId) : undefined
+  const hint = step.outcome === 'refused' && isLookFurtherHint(step.refusalReason)
   return {
     id: step.id,
     position: step.position,
     accountLabel: step.accountLabel,
-    line: step.line,
+    line: hint ? hintLine(step.line) : step.line,
     outcome: step.outcome,
     refusalReason: step.refusalReason,
     pageId: step.pageId,
     hasScreenshot: page !== undefined && page.screenshotPath !== null,
+    hint,
   }
 }
 

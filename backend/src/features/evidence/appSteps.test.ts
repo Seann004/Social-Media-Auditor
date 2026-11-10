@@ -8,6 +8,8 @@ import {
   recordStep,
   restoreAddress,
   stepLine,
+  FINISHED_TOO_EARLY,
+  isLookFurtherHint,
   touchesSetting,
   unknownChange,
   type StepContext,
@@ -73,6 +75,15 @@ describe('stepLine', () => {
     expect(stepLine(2, 'Teen 15', 'clicked button "Sign in"', 'blocked', 'The page asks for a captcha.')).toBe(
       'Step 2 · Teen 15 · Stopped: The page asks for a captcha.',
     )
+  })
+
+  it('writes the early-finish nudge as a hint, not a refusal', () => {
+    expect(stepLine(6, 'Teen 15', 'finished the check', 'refused', FINISHED_TOO_EARLY)).toBe(
+      `Step 6 · Teen 15 · Asked to look further: finished the check. ${FINISHED_TOO_EARLY}`,
+    )
+    expect(isLookFurtherHint(FINISHED_TOO_EARLY)).toBe(true)
+    expect(isLookFurtherHint('Not a test account.')).toBe(false)
+    expect(isLookFurtherHint(null)).toBe(false)
   })
 
   it('leaves the account out before any account is in use', () => {
