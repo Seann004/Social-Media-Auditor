@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AppSession, AppSessionPool } from './appSession.js'
 import type { AppStep, StoppedBy } from './appTypes.js'
-import { estimateTokens, type AssessItem } from './assess.js'
+import { estimateTokens, type AssessItem, type PassageSource } from './assess.js'
 import { MAX_INPUT_TOKENS_PER_CALL } from './config.js'
 import { isAboutDefault } from './flags.js'
 import { normaliseForMatch } from './quotes.js'
@@ -141,6 +141,17 @@ function pagePriority(stepPages: AppStep[], evidenceSteps: number[]): string[] {
   return [...new Set([...named, ...rest])]
 }
 
+/** Per passage id, the account and step whose page it came from, for the judge to attribute each page (fix A2). */
+function sourcesOf(passages: Passage[], stepPages: AppStep[]): Map<string, PassageSource> {
+  const stepOfPage = new Map(stepPages.map((s) => [s.pageId as string, s]))
+  return new Map(
+    passages.flatMap((p) => {
+      const step = stepOfPage.get(p.pageId)
+      return step === undefined ? [] : [[p.id, { account: step.accountLabel, step: step.position }] as const]
+    }),
+  )
+}
+
 function groupByPage(passages: Passage[]): Map<string, Passage[]> {
   const byPage = new Map<string, Passage[]>()
   for (const p of passages) byPage.set(p.pageId, [...(byPage.get(p.pageId) ?? []), p])
@@ -174,7 +185,15 @@ export async function judgeItem(ctx: RunCtx, input: JudgeInput): Promise<Suggest
   const selected = selectStepPassages(stepLines, pagePassages)
 
   const output = await abortable(
-    ctx.deps.assessBatch({ items: [item], passages: selected, platform, apiKey: ctx.deps.apiKey, model: ctx.deps.model, evidenceKind: 'app' }),
+    ctx.deps.assessBatch({
+      items: [item],
+      passages: selected,
+      platform,
+      apiKey: ctx.deps.apiKey,
+      model: ctx.deps.model,
+      evidenceKind: 'app',
+      passageSources: sourcesOf(selected, stepPages),
+    }),
     ctx.signal,
   )
   input.meter.add(output.tokensUsed)

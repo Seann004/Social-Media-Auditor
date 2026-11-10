@@ -3,7 +3,7 @@ import { APP_NO_STEPS_REASON, judgeItem, liveHighlighter, selectStepPassages } f
 import type { AppSession, AppSessionPool } from './appSession.js'
 import { recordStep, type StepContext, type StepInput } from './appSteps.js'
 import type { AgentAccount, AppAction, AppElement, AppStep, AppView, StoppedBy } from './appTypes.js'
-import type { AssessedItem, AssessInput, AssessItem, AssessOutput } from './assess.js'
+import { buildPrompt, type AssessedItem, type AssessInput, type AssessItem, type AssessOutput } from './assess.js'
 import { fakeAudit, PROJECT } from './__fixtures__/runnerWorld.js'
 import { createMemoryAppRepository } from './memoryAppRepository.js'
 import { createMemoryRepository } from './memoryRepository.js'
@@ -23,6 +23,7 @@ const ITEM: AssessItem = {
   helpText: null,
 }
 const TEEN: AgentAccount = { id: 'acc-teen', label: 'Teen 15', ageGroup: 'under_18', age: 15, handles: ['@teen'] }
+const ADULT: AgentAccount = { id: 'acc-adult', label: 'Adult 30', ageGroup: 'adult', age: 30, handles: ['@adult'] }
 const HOME_TEXT = 'Welcome home. Your feed shows the newest posts first.'
 const SETTINGS_TEXT = 'Your account is private. Only approved followers see your posts.'
 const TYPED = 'Teen accounts are private'
@@ -553,6 +554,50 @@ describe('judgeItem', () => {
     const page = await plain.repo.getPage(t?.quotes[0].pageId as string)
     expect(page?.screenshotPath).toMatch(/step-/)
     expect(plain.browserProvider).not.toHaveBeenCalled()
+  })
+})
+
+describe('judgeItem: which account saw each page', () => {
+  const ADULT_SETTINGS = view('/settings', 'Private account Off. Anyone can follow you.', [el('e6', 'switch', 'Private account', { state: { checked: false } })])
+
+  /** Teen 15 opens home (step 1); Adult 30 opens its settings (step 2); the finish names step 2. */
+  async function recordTwoAccounts(kit: Kit): Promise<void> {
+    await kit.record({ action: { type: 'open_link', url: '/home' }, detail: 'page /home opened', view: HOME })
+    await kit.record({ action: { type: 'open_link', url: '/settings' }, detail: 'page /settings opened', view: ADULT_SETTINGS, account: ADULT })
+    await kit.record({ action: { type: 'finish', observations: 'Seen.', evidenceSteps: [2] } })
+  }
+
+  it('each sent passage carries the account and step of the page it came from, and the prompt shows them', async () => {
+    const kit = await createKit()
+    await recordTwoAccounts(kit)
+    await judge(kit)
+    const call = kit.calls[0]
+    const sources = call.passageSources ?? new Map()
+    for (const p of call.passages) {
+      const step = kit.steps.find((s) => s.pageId === p.pageId)!
+      expect(sources.get(p.id)).toEqual({ account: step.accountLabel, step: step.position })
+    }
+    const adultPage = call.passages.find((p) => p.text.includes('Anyone can follow you'))!
+    expect(sources.get(adultPage.id)).toEqual({ account: 'Adult 30', step: 2 })
+    // The stored passage text is unchanged: no account is written into it.
+    expect(adultPage.text).not.toContain('Adult 30')
+    const { user } = buildPrompt(call.items, call.passages, call.platform, 'app', call.passageSources)
+    const sent = JSON.parse(user.slice(user.indexOf('{'))).passages as { account?: string; step?: number; text: string }[]
+    expect(sent.find((p) => p.text.includes('Anyone can follow you'))).toMatchObject({ account: 'Adult 30', step: 2 })
+    expect(sent.find((p) => p.text.includes('newest posts first'))).toMatchObject({ account: 'Teen 15', step: 1 })
+  })
+
+  it('a quote of a page passage still verifies against the stored text', async () => {
+    const kit = await createKit()
+    await recordTwoAccounts(kit)
+    kit.answer.current = (input) => ({
+      results: [result({ suggestedResult: 'no', quotes: [quoting((p) => p.text.includes('Anyone can follow you'), 'Anyone can follow you')(input)] })],
+      missingItemIds: [],
+      tokensUsed: 50,
+    })
+    const s = await judge(kit)
+    expect(s?.quotes.map((q) => q.verified)).toEqual([true])
+    expect(s?.quotes[0].pageId).toBe(kit.steps[1].pageId)
   })
 })
 

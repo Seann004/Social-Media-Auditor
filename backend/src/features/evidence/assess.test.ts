@@ -109,6 +109,57 @@ describe('buildPrompt for app evidence', () => {
   })
 })
 
+describe('buildPrompt: the account and step of each app passage', () => {
+  const sources = new Map([
+    ['real-a', { account: 'Teen 15', step: 2 }],
+    ['real-b', { account: 'Adult 30', step: 5 }],
+  ])
+
+  it('puts the account and step next to each passage label, leaving the passage text as stored', () => {
+    const passages = [passage('Private account Off', 'real-a'), passage('Private account On', 'real-b')]
+    const { user } = buildPrompt([item('i1')], passages, 'TikTok', 'app', sources)
+    const data = JSON.parse(user.slice(user.indexOf('{')))
+    expect(data.passages).toEqual([
+      { passageId: 'P1', account: 'Teen 15', step: 2, text: 'Private account Off' },
+      { passageId: 'P2', account: 'Adult 30', step: 5, text: 'Private account On' },
+    ])
+  })
+
+  it('a passage with no known source, or no sources at all, has no account field', () => {
+    const { user } = buildPrompt([item('i1')], [passage('x', 'other')], 'TikTok', 'app', sources)
+    expect(JSON.parse(user.slice(user.indexOf('{'))).passages).toEqual([{ passageId: 'P1', text: 'x' }])
+    expect(buildPrompt([item('i1')], [passage('x', 'real-a')], 'TikTok', 'pages').user).not.toContain('account')
+  })
+
+  it('the app prompt says to attribute a page only to the account named for its step', () => {
+    const { system } = buildPrompt([item('i1')], [passage('x')], 'TikTok', 'app')
+    expect(system).toMatch(/"account" and "step"/)
+    expect(system).toMatch(/attribute what a page shows only to the account named for that page's step/i)
+    expect(system).toMatch(/if pages from different accounts differ, say which account each came from/i)
+    expect(system).toMatch(/if the evidence for the account the item is about is not there, say so instead of using another account's page/i)
+    for (const kind of ['pages', 'repo'] as const) {
+      expect(buildPrompt([item('i1')], [passage('x')], 'TikTok', kind).system).not.toMatch(/account named for that page's step/)
+    }
+  })
+
+  it('assessBatch sends the sources and maps quotes back to the real passage ids', async () => {
+    const f = vi.fn().mockResolvedValue(groqResponse({ results: [goodResult('i1', { quotes: [{ passageId: 'P1', text: 'hello' }] })] }))
+    vi.stubGlobal('fetch', f)
+    const out = await assessBatch({
+      items: [item('i1')],
+      passages: [passage('hello world', 'real-a')],
+      platform: 'T',
+      apiKey: 'K',
+      model: 'm',
+      evidenceKind: 'app',
+      passageSources: sources,
+    })
+    const body = JSON.parse((f.mock.calls[0][1] as RequestInit).body as string)
+    expect(JSON.stringify(body.messages)).toContain('\\"account\\":\\"Teen 15\\"')
+    expect(out.results[0].quotes).toEqual([{ passageId: 'real-a', text: 'hello' }])
+  })
+})
+
 describe('the webAssessable rule of the app and repo prompts', () => {
   it.each([
     ['app', /no app screen could ever show/i],
