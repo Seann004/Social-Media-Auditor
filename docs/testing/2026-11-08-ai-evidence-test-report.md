@@ -186,3 +186,25 @@ Automated checks after the fixes:
 ### New finding: no retry on a network failure
 - **What happens:** a single "fetch failed" talking to Groq or Supabase ends that item and leaves the run `partial`. Groq rate limits (429) are retried, but plain network errors are not.
 - **Suggested fix:** retry a failed network call once or twice before giving up on the item.
+
+---
+
+## 7. Final re-test (11 November 2026), after the retry and target fixes
+
+Fixes tested here: network retries, the AI no longer names its own account as a click target, and a Groq "invalid JSON" reply gets one more try.
+
+### App run (practice app, P-1 and P-2): completed, 18 441 tokens, 68 seconds, nothing left changed
+- **P-2 (direct messages):** the AI signed in as Teen 15 and opened Settings, then Privacy, then Direct messages, before finishing. The result is still **not settled**: the page was opened, but nothing on it showed the default state. No steps were wasted on refused targets this time.
+- **P-1 (private by default):** the AI opened Settings, where the page said "Private account **On**". It had tried to finish after 2 steps. The "finished too early" rule refused that once, as designed, and it then finished properly. The quote "Settings Private account On" was **verified**. The result is still **not settled**, with the reason that the page shows the setting is On but not whether it was on by default. That is a cautious answer for a 15-year-old account that already existed.
+- **One quote was marked unverified.** The AI also quoted the whole link list of the home page, and the quote check flagged it. The checker worked as designed.
+
+### Code run (Mastodon, R-1): not re-run
+The project had used its 5 runs for the day, so the server refused with "This project has used its 5 runs for today". The earlier R-1 result stands: **Partially**, with 2 verified quotes from `reports_controller.rb`. The server-side fix for Groq's invalid-JSON 400 is covered by automated tests only. It has not been seen live.
+
+### Overall status
+| Area | Status |
+|---|---|
+| Automated tests | Backend 2 655 / 2 657 on the last full run. The 2 failures are old page-capture timing tests that pass when run alone (82 / 82). Frontend 326 / 326. Both type checks clean. |
+| App evidence, live | Works end to end. The AI now explores settings and messaging pages, and the safety rules block wrong actions. |
+| Code evidence, live | Works end to end. Real code is quoted and checked, and translation files no longer crowd the search. |
+| Accuracy | P-1 and P-2 still come back "not settled" in both features. This is cautious rather than wrong, but a demo would be stronger if the AI also tried the adult account messaging the teen, and used a freshly created under-18 account for the "by default" items. |
