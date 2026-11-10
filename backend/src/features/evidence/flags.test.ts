@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeFlags, type FlagInput } from './flags.js'
+import { computeFlags, isAboutDefault, type FlagInput } from './flags.js'
 
 function input(overrides: Partial<FlagInput> = {}): FlagInput {
   return {
@@ -167,4 +167,50 @@ describe('computeFlags for app checks', () => {
     const flag = computeFlags(input({ webAssessable: false, source: 'repo' })).find((f) => f.type === 'not_web_assessable')
     expect(flag?.reason).toBe("This item needs evidence the code can't show.")
   })
+})
+
+describe('computeFlags default_unverified', () => {
+  const REASON =
+    "This item is about a default setting, but the check only saw this account's current setting. Confirm the default yourself, for example with a newly created account."
+
+  it.each(['yes', 'no', 'partially'] as const)('flags an app %s result on an item about a default', (r) => {
+    const flags = computeFlags(input({ source: 'app', aboutDefault: true, suggestedResult: r }))
+    expect(flags).toContainEqual({ type: 'default_unverified', reason: REASON })
+  })
+
+  it('leaves it out for pages and repo checks', () => {
+    expect(types(input({ source: 'pages', aboutDefault: true }))).not.toContain('default_unverified')
+    expect(types(input({ source: 'repo', aboutDefault: true }))).not.toContain('default_unverified')
+    expect(types(input({ aboutDefault: true }))).not.toContain('default_unverified')
+  })
+
+  it('leaves it out for a null or not_applicable result', () => {
+    expect(types(input({ source: 'app', aboutDefault: true, suggestedResult: null }))).not.toContain('default_unverified')
+    expect(types(input({ source: 'app', aboutDefault: true, suggestedResult: 'not_applicable' }))).not.toContain('default_unverified')
+  })
+
+  it('leaves it out when the item is not about a default', () => {
+    expect(types(input({ source: 'app', aboutDefault: false }))).not.toContain('default_unverified')
+    expect(types(input({ source: 'app' }))).not.toContain('default_unverified')
+  })
+})
+
+describe('isAboutDefault', () => {
+  it.each([
+    'Accounts of users under 16 are private by default',
+    'Are teen accounts private BY DEFAULT?',
+    'Is the default for teen accounts private?',
+    'Privacy defaults for minors',
+    'Location sharing defaults to off',
+    'The setting is defaulting to private',
+  ])('true for %s', (text) => {
+    expect(isAboutDefault(text)).toBe(true)
+  })
+
+  it.each(['Adults cannot message teens', 'Teens can hide their activity status', 'Payment defaulted loans', 'defaultValue'])(
+    'false for %s',
+    (text) => {
+      expect(isAboutDefault(text)).toBe(false)
+    },
+  )
 })

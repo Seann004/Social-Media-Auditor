@@ -20,6 +20,7 @@ export type FlagType =
   | 'low_confidence'
   | 'not_web_assessable'
   | 'comments_only'
+  | 'default_unverified'
 
 export interface ReviewFlag {
   type: FlagType
@@ -261,4 +262,5 @@ export interface CodeEvidence {
 /** Shown label for each flag type that needs a short name. */
 export const FLAG_LABEL: Partial<Record<FlagType, string>> = {
   comments_only: 'Comments only',
+  default_unverified: 'Check the default',
 }

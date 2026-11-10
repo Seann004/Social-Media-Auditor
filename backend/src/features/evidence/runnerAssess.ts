@@ -140,6 +140,8 @@ export interface Round {
   takesCloseUp?: (passage: Passage) => boolean
   /** For repo checks: whether the verified quotes come only from comments, docs or tests (the `comments_only` flag). */
   commentsOnly?: (verified: { text: string; passage: Passage }[]) => boolean
+  /** For app checks: whether an item is about a default setting (the `default_unverified` flag). */
+  defaultItem?: (itemId: string) => boolean
 }
 
 function verifiedQuotes(drafts: QuoteDraft[]): { text: string; passage: Passage }[] {
@@ -199,6 +201,7 @@ export async function storeRound(ctx: RunCtx, round: Round, batch: BatchContext,
         source: batch.source,
         stoppedBy: batch.stoppedBy?.get(result.itemId) ?? null,
         commentsOnly: round.commentsOnly?.(verifiedQuotes(drafts)) ?? false,
+        aboutDefault: round.defaultItem?.(result.itemId) ?? false,
       }),
       passageIdsSent,
       source: batch.source,

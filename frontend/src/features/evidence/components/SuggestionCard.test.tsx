@@ -385,6 +385,17 @@ describe('SuggestionCard replay', () => {
   })
 })
 
+describe('SuggestionCard for an app suggestion about a default', () => {
+  const REASON =
+    "This item is about a default setting, but the check only saw this account's current setting. Confirm the default yourself, for example with a newly created account."
+
+  it('shows the Check the default label with its reason', () => {
+    renderCard({ suggestion: makeSuggestion({ source: 'app', flags: [{ type: 'default_unverified', reason: REASON }] }) })
+    expect(screen.getByText('Check the default')).toBeInTheDocument()
+    expect(screen.getByText(REASON)).toBeInTheDocument()
+  })
+})
+
 describe('SuggestionCard for a code repository suggestion', () => {
   const repoCard = (over: Partial<SuggestionView> = {}) =>
     makeSuggestion({ source: 'repo', commitSha: 'abc1234def5678', hasCode: true, flags: [{ type: 'comments_only', reason: 'Only comments or documentation support this.' }], ...over })

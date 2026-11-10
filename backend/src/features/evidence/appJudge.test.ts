@@ -695,3 +695,52 @@ describe('liveHighlighter', () => {
     expect(none.size).toBe(0)
   })
 })
+
+describe('judgeItem and items about a default', () => {
+  const DEFAULT_REASON =
+    "This item is about a default setting, but the check only saw this account's current setting. Confirm the default yourself, for example with a newly created account."
+  const quotedSettings = (input: AssessInput) => ({
+    results: [result({ quotes: [quoting((p) => p.text.includes('Only approved'), 'Only approved followers see your posts.')(input)] })],
+    missingItemIds: [],
+    tokensUsed: 50,
+  })
+  const judgeOf = (kit: Kit, item: AssessItem) =>
+    judgeItem(kit.ctx, { item, platform: 'TikTok', steps: kit.steps, evidenceSteps: [2], stoppedBy: null, meter: meterOf(), highlighter: null })
+
+  it('a Yes on a "by default" item is stored with the default_unverified flag', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    kit.answer.current = quotedSettings
+
+    const s = await judge(kit)
+
+    expect(s?.suggestedResult).toBe('yes')
+    expect(s?.flags).toContainEqual({ type: 'default_unverified', reason: DEFAULT_REASON })
+    const [stored] = await kit.repo.listSuggestions(kit.ctx.run.id)
+    expect(stored.flags.map((f) => f.type)).toContain('default_unverified')
+  })
+
+  it('reads the item name too', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    kit.answer.current = quotedSettings
+
+    const s = await judgeOf(kit, { ...ITEM, name: 'Private by default', text: 'Are teen accounts private?' })
+
+    expect(s?.flags.map((f) => f.type)).toContain('default_unverified')
+  })
+
+  it('no flag for an item that is not about a default, or for a null result', async () => {
+    const kit = await createKit()
+    await recordDefault(kit)
+    kit.answer.current = quotedSettings
+    const plain = await judgeOf(kit, { ...ITEM, text: 'Are teen accounts private?' })
+    expect(plain?.flags).toEqual([])
+
+    const other = await createKit()
+    await recordDefault(other)
+    other.answer.current = () => ({ results: [result({ suggestedResult: null })], missingItemIds: [], tokensUsed: 50 })
+    const none = await judge(other)
+    expect(none?.flags.map((f) => f.type)).not.toContain('default_unverified')
+  })
+})

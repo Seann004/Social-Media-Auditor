@@ -17,6 +17,7 @@ export type FlagType =
   | 'low_confidence'
   | 'not_web_assessable'
   | 'comments_only'
+  | 'default_unverified'
 
 export interface ReviewFlag {
   type: FlagType

@@ -93,7 +93,8 @@ describe('an app run against the social app', () => {
     expect(settingsStep?.line).toContain('/settings')
     expect(privateSuggestion).toMatchObject({ itemId: PRIVATE.id, suggestedResult: 'yes', source: 'app', originSuggestionId: null })
     expect(privateSuggestion.quotes).toHaveLength(1)
-    expect(privateSuggestion.flags).toEqual([])
+    // The settings step shows this account's current setting, not the default: the auditor must confirm it.
+    expect(privateSuggestion.flags.map((f) => f.type)).toEqual(['default_unverified'])
     expect(privateSuggestion.quotes[0]).toMatchObject({ verified: true, pageId: settingsStep?.pageId })
     expect(typeof privateSuggestion.quotes[0].highlightScreenshotPath).toBe('string')
 

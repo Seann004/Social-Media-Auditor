@@ -8,6 +8,7 @@ import type { AppSession, AppSessionPool } from './appSession.js'
 import type { AppStep, StoppedBy } from './appTypes.js'
 import { estimateTokens, type AssessItem } from './assess.js'
 import { MAX_INPUT_TOKENS_PER_CALL } from './config.js'
+import { isAboutDefault } from './flags.js'
 import { normaliseForMatch } from './quotes.js'
 import { storeRound, storeSuggestion, withoutEvidence, type BatchContext, type Highlighter, type Round, type TokenMeter } from './runnerAssess.js'
 import { highlightKey } from './runnerHighlights.js'
@@ -185,6 +186,7 @@ export async function judgeItem(ctx: RunCtx, input: JudgeInput): Promise<Suggest
     isUnproven: unprovenRule(input.steps),
     // A step line is SafetyAudit's own words, never on the page: close-ups are for page text.
     takesCloseUp: (p) => p.position !== STEP_LINE_POSITION,
+    defaultItem: (itemId) => itemId === item.id && isAboutDefault(`${item.name ?? ''} ${item.text}`),
   }
   const [stored] = await storeRound(ctx, round, batch, input.highlighter)
   return stored ?? null

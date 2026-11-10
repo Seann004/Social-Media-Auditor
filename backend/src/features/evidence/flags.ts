@@ -17,6 +17,8 @@ export interface FlagInput {
   stoppedBy?: StoppedBy | null
   /** A repo check whose verified quotes all come from comments, docs or tests. */
   commentsOnly?: boolean
+  /** An app check of an item about a default setting (see `isAboutDefault`). */
+  aboutDefault?: boolean
 }
 
 const MAX_URLS_NAMED = 3
@@ -27,6 +29,14 @@ const NOT_ASSESSABLE_REASON: Readonly<Record<RunSource, string>> = {
   repo: "This item needs evidence the code can't show.",
 }
 const CLAIM_RESULTS: readonly SuggestedResult[] = ['yes', 'no', 'partially']
+const DEFAULT_WORDING = /\bby default\b|\bdefaults?\b|\bdefault(ing)? to\b/i
+const DEFAULT_UNVERIFIED_REASON =
+  "This item is about a default setting, but the check only saw this account's current setting. Confirm the default yourself, for example with a newly created account."
+
+/** Whether a checklist item's text or name is about a default setting ("private by default"). */
+export function isAboutDefault(text: string): boolean {
+  return DEFAULT_WORDING.test(text)
+}
 
 const STATUS_WORDS: Readonly<Record<AccessStatus, string>> = {
   ok: 'could not be used',
@@ -100,6 +110,17 @@ export function computeFlags(input: FlagInput): ReviewFlag[] {
     CLAIM_RESULTS.includes(input.suggestedResult)
   ) {
     flags.push({ type: 'comments_only', reason: 'Only comments or documentation support this.' })
+  }
+
+  // An app check sees one account's current setting, which does not prove the default. Code can show
+  // a default, and pages state it, so only app checks get this flag.
+  if (
+    input.source === 'app' &&
+    input.aboutDefault === true &&
+    input.suggestedResult !== null &&
+    CLAIM_RESULTS.includes(input.suggestedResult)
+  ) {
+    flags.push({ type: 'default_unverified', reason: DEFAULT_UNVERIFIED_REASON })
   }
 
   // For app and repo checks, a null result with too little evidence is already missing_evidence: the AI

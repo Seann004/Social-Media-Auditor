@@ -268,6 +268,8 @@ On the same panel there is a second source, **App (test accounts)**. Here the AI
 
 **The auditor still decides.** An app run only gives suggestions. Nothing changes an answer or the compliance score until an auditor presses Accept or Override, the same as for page runs. Each app suggestion has a **Replay steps** button. It shows every step in order, with its screenshot and a plain sentence about what was done. It also shows actions that were refused and any setting that was left changed (or put back).
 
+**Answers about defaults are flagged.** A test account shows only its current settings, which may have been changed since it was made. So when an item is about a default (for example "private by default") and an app check answers Yes, No or Partially, the card shows a **Check the default** flag. Confirm the default yourself, for example with a newly created account.
+
 ### Set up
 
 1. **Make a secret key.** Add `EVIDENCE_SECRET_KEY` to `backend/.env`. It must be 32 random bytes written in base64. You can make one with:
