@@ -5,6 +5,7 @@
  */
 import { StepDecisionError, type AccountStatus, type DecideStep, type StepPrompt } from './appAgent.js'
 import type { AppRepository } from './appRepository.js'
+import { isRepeat, labelOf, pageState, REPEATED_ACTION, type DoneAction } from './appRepeat.js'
 import { pageDetail } from './appStepNotes.js'
 import { checkAction, detectBlock, type SafetyContext } from './appSafety.js'
 import type { AppSession, AppSessionPool } from './appSession.js'
@@ -64,6 +65,8 @@ export interface CheckOutcome {
   /** 'error': the AI failed in a way other than a limit, which ends only this check. */
   stop: StopReason | 'error' | null
 }
+
+export { REPEATED_ACTION } from './appRepeat.js'
 
 /** A submit that signs in. Enter in a credential field would count too, but no action presses Enter. */
 export const SIGN_IN_CONTROL = /\b(sign ?in|log ?in)\b/i
@@ -162,6 +165,8 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   let doneSinceLanding = 0
   let pathsSinceLanding: ReadonlySet<string> = new Set()
   let earlyFinishRefused = false
+  /** The last step when it was a done action: an identical action next, on an unchanged page, is refused. */
+  let lastDone: DoneAction | null = null
 
   await pool.resetAll()
 
@@ -178,6 +183,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   const safety = (): SafetyContext => ({ accounts: input.accounts, currentAccount: account, appUrl: input.app.appUrl, loginDomains: input.app.loginDomains })
 
   async function record(step: Omit<StepInput, 'position' | 'account'>): Promise<AppStep> {
+    lastDone = null
     const saved = await recordStep(stepCtx, { ...step, account, position: steps.length + 1 })
     steps = [...steps, saved]
     await input.onStep?.(saved.position)
@@ -315,6 +321,13 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     if (refusal !== null) return refuse(action, refusal)
     const verdict = checkAction(action, before, safety())
     if (!verdict.allowed) return refuse(action, verdict.reason)
+    if (isRepeat(lastDone, action, el, before)) {
+      // Kept, so that the same action a third time is refused too.
+      const kept = lastDone
+      await refuse(action, REPEATED_ACTION)
+      lastDone = kept
+      return
+    }
     const current = session()
     const who = account
     if (current === null || who === null) {
@@ -350,6 +363,9 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     const typed = [...steps, { action }].flatMap((s) => (s.action.type === 'type' ? [s.action.text] : []))
     const detail = doneDetail(change, typed, before, after, afterUrl)
     await record({ action, outcome: 'done', detail, refusalReason: null, view: after, describedOn: before, screenshot: after === null ? null : await shoot() })
+    if (before !== null && after !== null) {
+      lastDone = { action, label: labelOf(el), before: pageState(before), after: pageState(after) }
+    }
     noteExplored(afterUrl, signedInNow ? 'sign-in' : 'other')
   }
 

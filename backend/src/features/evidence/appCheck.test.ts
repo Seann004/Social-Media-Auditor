@@ -575,7 +575,7 @@ describe('runCheck: a finish that comes too early', () => {
   })
 
   it('refuses a finish after 3 steps that never left the page reached after sign-in', async () => {
-    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/home'), openPath('/home'), openPath('/home'), FINISH])
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/home'), openPath('/home?tab=1'), openPath('/home'), FINISH])
     expect(outcome.steps.slice(4).map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'refused', 'done'])
     expect(outcome.steps[7].refusalReason).toBe(TOO_EARLY)
   })
