@@ -86,6 +86,20 @@ describe('buildPrompt for app evidence', () => {
     expect(buildPrompt([item('i1')], [passage('x')], 'TikTok').system).toMatch(/judged from a website/i)
   })
 
+  it('the app prompt says a default needs more than the current setting', () => {
+    const { system } = buildPrompt([item('i1')], [passage('x')], 'TikTok', 'app')
+    expect(system).toMatch(/item about a default setting/i)
+    expect(system).toMatch(/only the account's CURRENT state, which is not proof of the default/)
+    expect(system).toMatch(/answer "yes" or "no" only if the steps show the account is new or untouched, or a page states the default/i)
+    expect(system).toMatch(/otherwise answer "partially" or null/i)
+    expect(system).toMatch(/the setting is on for this account/i)
+    expect(system).toMatch(/the default itself was not shown/i)
+    // Pages and repo prompts are unchanged.
+    for (const kind of ['pages', 'repo'] as const) {
+      expect(buildPrompt([item('i1')], [passage('x')], 'TikTok', kind).system).not.toMatch(/CURRENT state/)
+    }
+  })
+
   it('assessBatch sends the app prompt when evidenceKind is app', async () => {
     const f = vi.fn().mockResolvedValue(groqResponse({ results: [goodResult('i1')] }))
     vi.stubGlobal('fetch', f)

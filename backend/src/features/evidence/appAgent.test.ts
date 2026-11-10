@@ -131,6 +131,16 @@ describe('buildStepPrompt', () => {
     expect(system).toMatch(/finish only when the recorded steps show the answer, or when you have looked in the likely places and the step limit is near/i)
     expect(system).not.toMatch(/finish as soon as/i)
   })
+  it('for an item about a default, tells the AI to look for text stating the default and signs the account is new, without making accounts', () => {
+    const { system } = buildStepPrompt(promptWith())
+    expect(system).toMatch(/item about a default setting/i)
+    expect(system).toMatch(/look for text on the page that states the default, such as help text or a settings description/i)
+    expect(system).toMatch(/note whether anything shows the account is new/i)
+    expect(system).toMatch(/never create or change an account to test the default/i)
+    // The safety rules are unchanged.
+    expect(system).toMatch(/Never delete or deactivate an account, pay for anything, or change a password, email address or phone number\./)
+    expect(system).toMatch(/The system enforces these rules and refuses any action that breaks them/)
+  })
   it('tells the AI to use the numbers in the step lines', () => {
     expect(buildStepPrompt(promptWith()).system).toMatch(/number at the start of each step line/i)
   })
