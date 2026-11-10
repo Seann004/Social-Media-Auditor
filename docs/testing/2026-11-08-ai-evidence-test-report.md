@@ -147,3 +147,42 @@ The "Code found" view lists 6 pieces, with the reports controller marked **Quote
 - **Newest wins.** P-1 and P-2 now show the Code run's suggestions, because it ran last. R-1 shows the Code run's "Partially".
 - **No code files were changed** by testing.
 - **Raw results** (every run, suggestion, step and code piece) are saved as JSON next to this report.
+
+---
+
+## 6. Re-test after the fixes (10 November 2026)
+
+This re-test came after the merge of GitHub main (e7a97d7) and four fixes:
+
+| Fix | Commit |
+|---|---|
+| App checks must explore before finishing | ddad110, e09fd6a |
+| Translation files no longer crowd the code search | 06ed9b5, 49166fb |
+| No "can't show" flag on unsettled items | 46c2408 |
+| A decision no longer copies photos between auditors | a3ec8fb |
+
+Automated checks after the fixes:
+- **Backend:** 2 605+ tests pass. A few browser tests fail only when the full suite runs at the same time, and pass on their own.
+- **Frontend:** 326 / 326.
+- **Type checks:** both clean.
+- **E2E:** 7 / 7.
+
+### App run (practice app, P-1 and P-2)
+- **P-2 (direct messages):** the AI now explored much further, in 12 steps:
+  - signed in as Adult 30;
+  - opened Settings, then `/settings/privacy`, then `/settings/direct_messages`;
+  - then finished.
+
+  The result is still **not settled**. It looked only from the adult's side, and it never had the adult try to message the teen. The "can't show" flag no longer appears.
+- **P-1 (private by default):** not checked. A network failure reaching Groq ("fetch failed") ended the check. A second try also failed, because Groq could not be reached from this computer at the time (GitHub could).
+- **Still to improve:** the AI keeps naming the account it is using as the "target" of plain clicks, which the safety rules refuse. Each of those wastes a step.
+
+### Code run (Mastodon, P-1, P-2 and R-1)
+- **Translation files are gone from the pieces.** The AI now sees real code: `status/visibility.rb`, `date_of_birth_validator.rb`, `admin_settings.rb`, the registration view and `setting.rb`.
+- **P-1:** **not settled**, now with a verified quote showing Mastodon only validates a minimum age (`record.errors.add(attribute, :below_limit) if value.present? && value.to_date > min_age.ago`). There is no "private by default for under-16s". The answer is correct and better supported than before.
+- **P-2:** **not settled**. This is correct, because Mastodon has no age-based message defaults. The "can't show" flag no longer appears.
+- **R-1:** not re-checked this time. A network failure reaching Supabase while saving ended that item. The earlier result, **Partially** with 2 verified quotes, stands.
+
+### New finding: no retry on a network failure
+- **What happens:** a single "fetch failed" talking to Groq or Supabase ends that item and leaves the run `partial`. Groq rate limits (429) are retried, but plain network errors are not.
+- **Suggested fix:** retry a failed network call once or twice before giving up on the item.
