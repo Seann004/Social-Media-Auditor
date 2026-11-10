@@ -587,6 +587,33 @@ describe('runCheck: a finish that comes too early', () => {
     expect(outcome).toMatchObject({ finished: true, evidenceSteps: [5] })
   })
 
+  it('a "Log in" click on a public landing page is not the sign-in: a finish right after the real sign-in is refused', async () => {
+    await kit.pool.closeAll()
+    kit = createCheckKit(world, [world.teen, world.adult], { ...world.app, appUrl: `${world.social.url}/welcome` })
+    const { outcome } = await kit.check([
+      { type: 'switch_account', account: 'Teen 15' },
+      on('link', 'Log in'),
+      ...signIn('Teen 15').slice(1),
+      FINISH,
+      FINISH,
+    ])
+    expect(lines(outcome.steps)[1]).toBe('Step 2 · Teen 15 · clicked link "Log in" → page /login opened')
+    expect(lines(outcome.steps)[4]).toBe('Step 5 · Teen 15 · clicked button "Sign in" → page /home opened')
+    expect(outcome.steps.slice(5).map((s) => [s.outcome, s.refusalReason])).toEqual([
+      ['refused', TOO_EARLY],
+      ['done', null],
+    ])
+  })
+
+  it('switching to a second account and filling its sign-in form is not leaving the landing page', async () => {
+    const { outcome } = await kit.check([...signIn('Teen 15'), ...signIn('Adult 30').slice(0, 3), FINISH, FINISH])
+    expect(lines(outcome.steps)[4]).toBe('Step 5 · Adult 30 · switched to Adult 30 → page /login opened')
+    expect(outcome.steps.slice(7).map((s) => [s.outcome, s.refusalReason])).toEqual([
+      ['refused', TOO_EARLY],
+      ['done', null],
+    ])
+  })
+
   it('accepts a finish that is the last step the limit allows', async () => {
     const { outcome } = await kit.check([...signIn('Teen 15'), FINISH], {}, { maxSteps: 5 })
     expect(outcome.steps.map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'done'])

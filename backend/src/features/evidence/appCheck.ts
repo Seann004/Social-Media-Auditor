@@ -154,12 +154,12 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   let changeGroups: ReadonlyMap<string, string | null> = new Map()
   /**
    * For the early-finish rule: the path reached right after the first sign-in (or, before any sign-in,
-   * after the first account switch), the done steps since, and whether one of them opened another page.
+   * after the first account switch), the done steps since, and the paths they reached.
    */
   let landing: string | null = null
   let signedIn = false
   let doneSinceLanding = 0
-  let leftLanding = false
+  let pathsSinceLanding: ReadonlySet<string> = new Set()
   let earlyFinishRefused = false
 
   await pool.resetAll()
@@ -209,7 +209,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       signedIn = true
       landing = path
       doneSinceLanding = 0
-      leftLanding = false
+      pathsSinceLanding = new Set()
       return
     }
     if (landing === null) {
@@ -217,13 +217,19 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       return
     }
     doneSinceLanding += 1
-    if (path !== landing) leftLanding = true
+    pathsSinceLanding = new Set(pathsSinceLanding).add(path)
+  }
+
+  /** Another page than the landing page was opened; a sign-in page (where a password was filled) does not count. */
+  function leftLanding(): boolean {
+    const signInPaths = new Set(loginPaths.values())
+    return [...pathsSinceLanding].some((path) => path !== landing && !signInPaths.has(path))
   }
 
   /** A finish is refused once when it comes before the check has explored, unless it is the last step allowed. */
   function finishTooEarly(): boolean {
     if (earlyFinishRefused || steps.length + 1 >= maxSteps) return false
-    return doneSinceLanding < DONE_STEPS_BEFORE_FINISH || !leftLanding
+    return doneSinceLanding < DONE_STEPS_BEFORE_FINISH || !leftLanding()
   }
 
   const shoot = async (): Promise<Buffer | null> => (await session()?.screenshot()) ?? null
@@ -336,7 +342,8 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       const stillSigningIn = loginPaths.get(who.id) === pathOf(afterUrl) && after?.hasPasswordField === true
       const signInControl = SIGN_IN_CONTROL.test(el.name)
       if (signInControl && stillSigningIn) pool.noteLoginFailure(who.id)
-      signedInNow = signInControl && !stillSigningIn
+      // A sign-in counts only after a password was filled for the account: a "Log in" link on a public page is not one.
+      signedInNow = signInControl && loginPaths.has(who.id) && !stillSigningIn
       await noteSave(el, before, who)
     }
     const detail = doneDetail(change, before?.url ?? null, afterUrl)

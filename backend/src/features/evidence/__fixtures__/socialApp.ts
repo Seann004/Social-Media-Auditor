@@ -519,6 +519,8 @@ export async function startSocialApp(): Promise<SocialApp> {
     'GET /start': (ctx) => send(ctx.res, ctx.viewer ? homePage(ctx.viewer) : loginPage(null, '/start')),
     'POST /start': (ctx) => signIn(ctx, '/start', '/start'),
     'GET /find': (ctx) => send(ctx.res, findPage()),
+    // A public landing page whose "Log in" link leads to the sign-in form, as on TikTok or Instagram.
+    'GET /welcome': (ctx) => send(ctx.res, page('Welcome', '<h1>Social</h1><p>Share moments with friends.</p><a href="/login">Log in</a>')),
     'GET /captcha': (ctx) =>
       send(ctx.res, page('Security check', '<h1>Verify you are human</h1><iframe src="/recaptcha/api2/anchor" title="Check"></iframe>')),
     'GET /recaptcha/api2/anchor': (ctx) => send(ctx.res, page('Check', `<label><input type="checkbox"> I'm not a robot</label>`)),
