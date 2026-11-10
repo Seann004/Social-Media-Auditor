@@ -82,6 +82,23 @@ describe('ProjectLinksPanel', () => {
     expect(screen.getByText(/1 awaiting review/i)).toBeInTheDocument()
   })
 
+  it('lists the links already decided and puts one back to awaiting review', async () => {
+    m.fetch.mockResolvedValue([
+      link(),
+      link({ mappingId: 'm2', status: 'confirmed', relation: 'equivalent', itemA: { ...link().itemA, text: 'Decided item' } }),
+      link({ mappingId: 'm3', status: 'rejected', itemA: { ...link().itemA, text: 'Rejected item' } }),
+    ])
+    render(<ProjectLinksPanel projectId="p1" />)
+    await userEvent.click(screen.getByRole('button', { name: /review linked requirements/i }))
+    await screen.findByText('Age verification restricts minors')
+    expect(screen.queryByText('Decided item')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /decided here \(2\)/i }))
+    expect(screen.getByText('Decided item')).toBeInTheDocument()
+    expect(screen.getByText('Rejected item')).toBeInTheDocument()
+    await userEvent.click(screen.getAllByRole('button', { name: /back to review/i })[0])
+    expect(m.review).toHaveBeenCalledWith('p1', 'm2', 'suggested', undefined)
+  })
+
   it('lets the head auditor ask the AI to find links when there are none', async () => {
     m.fetch.mockResolvedValueOnce([]).mockResolvedValue([link()])
     render(<ProjectLinksPanel projectId="p1" />)

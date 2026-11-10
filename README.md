@@ -51,12 +51,14 @@ Social-Media-Auditor/
 │   ├── e2e/                    ← Browser end-to-end tests (Playwright, network stubbed)
 │   └── playwright.config.ts
 └── backend/                    ← Express REST API
-    ├── supabase/migrations/    ← SQL to run by hand (001_evidence_assessment.sql)
+    ├── supabase/migrations/    ← SQL to run by hand, in order (001 to 006)
     └── src/
         ├── server.ts           ← All API routes
         ├── features/evidence/  ← AI evidence assessment: capture, assessment, decisions, routes
+        ├── routes/             ← Cross-guideline link and answer reuse routes
         ├── services/
-        │   └── dbService.ts    ← Supabase queries + RPC calls
+        │   ├── dbService.ts    ← Supabase queries + RPC calls
+        │   └── mappingService.ts ← Cross-guideline links and answer reuse
         └── config/
             └── supabase.ts
 ```
@@ -190,6 +192,29 @@ Score = (compliant × 1.0 + partially × 0.5) / applicable items × 100
 ```
 
 Color thresholds: **≥ 80%** emerald · **≥ 60%** amber · **< 60%** rose
+
+---
+
+## Reusing answers across guidelines
+
+Different guidelines often ask the same thing in different words. The app links such items so an answer given once can be offered again.
+
+**How it works**
+1. **Links are found per project.** When a head auditor saves a project's guidelines, the AI compares only the items of **those** guidelines and proposes links: *same requirement* or *partly overlaps*. Each pair is matched once and shared.
+2. **The project's head auditor decides.** In the audit page, **Review linked requirements** lists the links for that project. A decision applies to **that project only**, so one project never changes another. A link with no decision falls back to the shared status an admin may have set.
+3. **Auditors reuse answers.** Items with a confirmed link show **from earlier audits**. *Use answer* copies the status, findings and evidence photos. Only *same requirement* links are reused in one click. Answers come from the same project's other guidelines (the auditor's own answers) and from earlier **approved** projects on the same platform.
+
+**Who can do what**
+
+| Action | Role |
+|---|---|
+| Run the AI across one whole guideline, review shared links, see the library-wide Linked items tab | Admin |
+| See, find and decide the links of a project | That project's head auditor |
+| Accept or dismiss a reused answer | Auditor on that project |
+
+**Setup**
+- Run `backend/supabase/migrations/004_cross_guideline_mapping.sql`, `005_mapping_fixes.sql` and `006_project_mapping_decision.sql` in the Supabase SQL editor, in order.
+- `MAPPING_GROQ_MODEL` picks the model that matches items (default `openai/gpt-oss-120b`). It is separate from `GROQ_MODEL` and must be a model your Groq account can use.
 
 ---
 

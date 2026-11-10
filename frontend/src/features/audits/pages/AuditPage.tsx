@@ -573,6 +573,15 @@ function AuditPageContent() {
     try {
       const accepted = await acceptAnswerSuggestions(id, itemIds)
       applyAcceptedAnswers(accepted)
+      if (accepted.length > 0) {
+        try {
+          // Same as any saved answer: refresh the score and move a draft project to in progress.
+          await useStore.getState().refreshAfterAnswer(id)
+        } catch (err) {
+          // The answers are saved; only the score and project status are stale until the next load.
+          console.error('[AuditPage] Could not refresh compliance after reusing answers:', err)
+        }
+      }
       if (accepted.length < itemIds.length) {
         setSuggestionError(accepted.length === 0
           ? 'Nothing was reused. Those items already have an answer.'

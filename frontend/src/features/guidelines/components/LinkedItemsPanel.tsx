@@ -118,6 +118,12 @@ export default function LinkedItemsPanel({ guidelines, isAdmin }: Props) {
     }
   }
 
+  if (coverage === null) {
+    return error
+      ? <div role="alert" className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg px-4 py-3">{error}</div>
+      : <p role="status" className="text-sm text-slate-400 py-10 text-center">Loading linked items…</p>
+  }
+
   return (
     <div className="space-y-5">
       {error && (

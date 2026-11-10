@@ -40,6 +40,13 @@ const CANDIDATES_PER_ITEM = 5
 const MIN_SIMILARITY = 0.12
 const ITEMS_PER_PROMPT = 8
 
+const DEFAULT_MAPPING_MODEL = 'openai/gpt-oss-120b'
+
+/** Link matching has its own model setting. The default is one Groq serves today; Llama models are no longer offered to every account. */
+export function resolveMappingModel(env: Record<string, string | undefined>): string {
+  return env.MAPPING_GROQ_MODEL?.trim() || DEFAULT_MAPPING_MODEL
+}
+
 export class MappingNotFoundError extends Error {
   constructor(message = 'Mapping not found.') {
     super(message)
@@ -158,6 +165,11 @@ function itemText(item: GlobalItem): string {
   return [item.itemName, item.itemDescription, (item.verbatimClauseText ?? '').slice(0, 300)].filter(Boolean).join(' ')
 }
 
+/** The prompt's S1/C2 labels mean nothing to a reader, so say what they stand for. */
+function plainReason(reason: string): string {
+  return reason.replace(/\bS\d+\b/g, 'this item').replace(/\bC\d+\b/g, 'the other item')
+}
+
 function orderPair(x: string, y: string): [string, string] {
   const a = x.toLowerCase()
   const b = y.toLowerCase()
@@ -171,6 +183,7 @@ Each source item comes with a few candidate items from other guidelines. Decide 
 - "partial": they overlap, but one is broader, narrower or adds extra conditions.
 - Leave a candidate out if it only shares a topic. Most source items have zero or one real match.
 - Only use "equivalent" when you are confident; when unsure, use "partial".
+- In "reason", never mention the S1 or C2 style labels; say "this item" and "the other item" instead.
 
 Return JSON only:
 {"matches":[{"source":"S1","candidate":"C2","relation":"equivalent","confidence":0.85,"reason":"one short sentence"}]}`
@@ -246,7 +259,7 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
           itemIdB,
           relation: m.relation === 'equivalent' ? 'equivalent' : 'partial',
           confidence: Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : null,
-          rationale: typeof m.reason === 'string' ? m.reason.slice(0, 500) : null,
+          rationale: typeof m.reason === 'string' ? plainReason(m.reason).slice(0, 500) : null,
           status: 'suggested',
         })
       }
@@ -272,6 +285,28 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
     throw new MappingFailedError(`AI matching failed for every batch. ${reason.slice(0, 300)}`)
   }
   return { checked: own.length, suggested, failedBatches }
+}
+
+interface ProjectDecision {
+  projectId: string
+  mappingId: string
+  status: 'confirmed' | 'rejected'
+  relation: MappingRelation | null
+}
+
+async function fetchProjectDecisions(projectId: string): Promise<ProjectDecision[]> {
+  return fetchAllRows<ProjectDecision>((from, to) => supabase
+    .from('Project_Mapping_Decision')
+    .select('projectId, mappingId, status, relation')
+    .eq('projectId', projectId)
+    .order('decisionId')
+    .range(from, to))
+}
+
+/** A project's own decision wins; without one the shared status and relation apply. */
+function effectiveLink(m: Pick<MappingRow, 'status' | 'relation'>, decision?: ProjectDecision) {
+  if (!decision) return { status: m.status, relation: m.relation }
+  return { status: decision.status as MappingStatus, relation: decision.relation ?? m.relation }
 }
 
 async function fetchProjectMasterGuidelineIds(projectId: string): Promise<string[]> {
@@ -316,15 +351,30 @@ export async function generateMappingsForProject(projectId: string, ask: AskMode
 }
 
 export async function fetchProjectMappings(projectId: string) {
-  const inProject = new Set(await fetchProjectMasterGuidelineIds(projectId))
+  const [guidelineIds, decisions] = await Promise.all([fetchProjectMasterGuidelineIds(projectId), fetchProjectDecisions(projectId)])
+  const inProject = new Set(guidelineIds)
+  const byMapping = new Map(decisions.map((d) => [d.mappingId, d]))
   const all = await fetchMappings()
-  return all.filter((m) => inProject.has(m.itemA!.guidelineId) && inProject.has(m.itemB!.guidelineId))
+  return all
+    .filter((m) => inProject.has(m.itemA!.guidelineId) && inProject.has(m.itemB!.guidelineId))
+    .map((m) => ({ ...m, ...effectiveLink(m, byMapping.get(m.mappingId)) }))
 }
 
+/** Records this project's decision only. The shared link is never changed from a project. */
 export async function reviewProjectMapping(projectId: string, mappingId: string, status: MappingStatus, relation: MappingRelation | undefined, userId: string): Promise<void> {
   const allowed = await fetchProjectMappings(projectId)
   if (!allowed.some((m) => m.mappingId === mappingId)) throw new MappingNotFoundError()
-  await reviewMapping(mappingId, status, relation, userId)
+
+  if (status === 'suggested') {
+    const { error } = await supabase.from('Project_Mapping_Decision').delete().eq('projectId', projectId).eq('mappingId', mappingId)
+    if (error) throw error
+    return
+  }
+  const { error } = await supabase.from('Project_Mapping_Decision').upsert(
+    { projectId, mappingId, status, relation: relation ?? null, decidedBy: userId, decidedAt: new Date().toISOString() },
+    { onConflict: 'projectId,mappingId' },
+  )
+  if (error) throw error
 }
 
 function describeItem(item: GlobalItem | undefined) {
@@ -494,7 +544,7 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
     .range(from, to))
   if (items.length === 0) return []
 
-  const [answeredRows, dismissedRows, mappings] = await Promise.all([
+  const [answeredRows, dismissedRows, mappings, projectDecisions] = await Promise.all([
     fetchAllRows<{ itemId: string }>((from, to) => supabase
       .from('Audit_Result').select('itemId')
       .eq('projectId', projectId).eq('userId', userId)
@@ -504,19 +554,22 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
       .eq('projectId', projectId).eq('userId', userId).eq('decision', 'dismissed')
       .order('decisionId').range(from, to)),
     fetchMappingRows(),
+    fetchProjectDecisions(projectId),
   ])
+  const decisionByMapping = new Map(projectDecisions.map((d) => [d.mappingId, d]))
   const answered = new Set(answeredRows.map((r) => r.itemId))
   const dismissed = new Set(dismissedRows.map((r) => `${r.itemId}|${r.sourceItemId}`))
 
   const links = new Map<string, { otherId: string; relation: MappingRelation }[]>()
   for (const m of mappings) {
-    if (m.status !== 'confirmed') continue
+    const { status, relation } = effectiveLink(m, decisionByMapping.get(m.mappingId))
+    if (status !== 'confirmed') continue
     const a = m.itemIdA.toLowerCase()
     const b = m.itemIdB.toLowerCase()
     if (!links.has(a)) links.set(a, [])
     if (!links.has(b)) links.set(b, [])
-    links.get(a)!.push({ otherId: b, relation: m.relation })
-    links.get(b)!.push({ otherId: a, relation: m.relation })
+    links.get(a)!.push({ otherId: b, relation })
+    links.get(b)!.push({ otherId: a, relation })
   }
 
   const targets = items.filter((i) => !answered.has(i.itemId) && links.has(i.originalItemId.toLowerCase()))

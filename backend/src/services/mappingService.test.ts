@@ -1,100 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
+import { tables, resetTables, supabase as fakeSupabase } from '../test/fakeSupabase.js'
+
+vi.mock('../config/supabase.js', async () => {
+  const fake = await import('../test/fakeSupabase.js')
+  return { supabase: fake.supabase }
+})
+
 type Row = Record<string, any>
-const tables: Record<string, Row[]> = {}
-let nextId = 0
-
-const ID_COLUMN: Record<string, string> = {
-  Item_Mapping: 'mappingId',
-  Suggestion_Decision: 'decisionId',
-  Audit_Result: 'resultId',
-}
-
-// A small in-memory stand-in for the Supabase query builder: just the calls mappingService makes.
-class FakeQuery implements PromiseLike<{ data: any; error: any }> {
-  private op: 'select' | 'insert' | 'upsert' | 'update' = 'select'
-  private filters: ((r: Row) => boolean)[] = []
-  private payload: any
-  private opts: Row = {}
-  private window: [number, number] | null = null
-  private wantsOne = false
-
-  constructor(private readonly table: string) {}
-
-  select() { return this }
-  insert(rows: Row | Row[]) { this.op = 'insert'; this.payload = rows; return this }
-  upsert(rows: Row[], opts: Row = {}) { this.op = 'upsert'; this.payload = rows; this.opts = opts; return this }
-  update(values: Row) { this.op = 'update'; this.payload = values; return this }
-  eq(col: string, val: unknown) { this.filters.push((r) => r[col] === val); return this }
-  is(col: string, val: unknown) { this.filters.push((r) => (r[col] ?? null) === val); return this }
-  in(col: string, vals: unknown[]) { this.filters.push((r) => vals.includes(r[col])); return this }
-  gt(col: string, val: number) { this.filters.push((r) => r[col] > val); return this }
-  not(col: string, op: string, val: unknown) {
-    if (op === 'is') this.filters.push((r) => (r[col] ?? null) !== val)
-    else if (op === 'like') {
-      const prefix = String(val).replace(/%$/, '')
-      this.filters.push((r) => !String(r[col] ?? '').startsWith(prefix))
-    }
-    return this
-  }
-  order() { return this }
-  range(from: number, to: number) { this.window = [from, to]; return this }
-  single() { this.wantsOne = true; return this }
-
-  private matching() {
-    const rows = (tables[this.table] ??= [])
-    return rows.filter((r) => this.filters.every((f) => f(r)))
-  }
-
-  private withDefaults(row: Row): Row {
-    const out = { ...row }
-    const idCol = ID_COLUMN[this.table]
-    if (idCol && !out[idCol]) out[idCol] = `gen-${++nextId}`
-    if (this.table === 'Item_Mapping' && !out.createdAt) out.createdAt = new Date(2026, 0, nextId + 1).toISOString()
-    if (this.table === 'Audit_Result') out.evidenceCount = Array.isArray(out.evidenceImages) ? out.evidenceImages.length : 0
-    return out
-  }
-
-  private run(): { data: any; error: any } {
-    const rows = (tables[this.table] ??= [])
-    if (this.op === 'insert') {
-      const list = (Array.isArray(this.payload) ? this.payload : [this.payload]).map((r: Row) => this.withDefaults(r))
-      rows.push(...list)
-      return { data: list, error: null }
-    }
-    if (this.op === 'upsert') {
-      const keys = String(this.opts.onConflict).split(',')
-      const inserted: Row[] = []
-      for (const r of this.payload as Row[]) {
-        const dup = rows.some((e) => keys.every((k) => e[k] === r[k]))
-        if (dup && this.opts.ignoreDuplicates) continue
-        const row = this.withDefaults(r)
-        rows.push(row)
-        inserted.push(row)
-      }
-      return { data: inserted, error: null }
-    }
-    if (this.op === 'update') {
-      const hit = this.matching()
-      hit.forEach((r) => Object.assign(r, this.payload))
-      return { data: hit, error: null }
-    }
-    let hit = this.matching()
-    if (this.window) hit = hit.slice(this.window[0], this.window[1] + 1)
-    if (this.wantsOne) {
-      return hit.length === 1 ? { data: hit[0], error: null } : { data: null, error: { message: 'no single row' } }
-    }
-    return { data: hit, error: null }
-  }
-
-  then<A, B>(ok?: ((v: { data: any; error: any }) => A | PromiseLike<A>) | null, bad?: ((e: unknown) => B | PromiseLike<B>) | null) {
-    return Promise.resolve().then(() => this.run()).then(ok, bad)
-  }
-}
-
-vi.mock('../config/supabase.js', () => ({
-  supabase: { from: (table: string) => new FakeQuery(table) },
-}))
+void fakeSupabase
 
 const mapping = await import('./mappingService.js')
 const { EditLockedError } = await import('./dbService.js')
@@ -102,9 +16,7 @@ const { EditLockedError } = await import('./dbService.js')
 const USER = 'user-1'
 
 function seed(extra: Partial<Record<string, Row[]>> = {}) {
-  for (const k of Object.keys(tables)) delete tables[k]
-  nextId = 0
-  Object.assign(tables, {
+  resetTables({
     // Master guidelines: ONSA (G1) and UK Children's Code (G2)
     Checklist: [
       { checklistId: 'gc1', guidelineId: 'G1', projectId: null, Guideline: { guidelineName: 'ONSA Code', shortName: 'ONSA' } },
@@ -211,6 +123,24 @@ describe('generateMappingsForGuideline', () => {
     expect(tables.Item_Mapping[0]).toMatchObject({ relation: 'partial', confidence: 1 })
   })
 
+  it('turns the prompt\'s internal labels in the AI\'s reason into plain words', async () => {
+    const ask = vi.fn(async (_system: string, user: string) => {
+      const payload = JSON.parse(user) as { source: string; candidates: { candidate: string; text: string }[] }[]
+      const c = payload[0].candidates.find((x) => /age assurance/i.test(x.text))!
+      return { matches: [{ source: payload[0].source, candidate: c.candidate, relation: 'equivalent', confidence: 0.8, reason: `${c.candidate} focuses on risk while ${payload[0].source} asks about certainty.` }] }
+    })
+    await mapping.generateMappingsForGuideline('G1', ask)
+    const reason = tables.Item_Mapping[0].rationale as string
+    expect(reason).toBe('the other item focuses on risk while this item asks about certainty.')
+    expect(reason).not.toMatch(/\b[SC]\d+\b/)
+  })
+
+  it('tells the model not to use the labels in its reason', async () => {
+    const ask = askMatchingAge()
+    await mapping.generateMappingsForGuideline('G1', ask)
+    expect(ask.mock.calls[0][0]).toMatch(/do not mention the S1|never mention .*S1/i)
+  })
+
   it('stores a missing confidence as null', async () => {
     await mapping.generateMappingsForGuideline('G1', askMatchingAge('equivalent', 'high'))
     expect(tables.Item_Mapping[0].confidence).toBeNull()
@@ -235,6 +165,21 @@ describe('generateMappingsForGuideline', () => {
     const ask = askMatchingAge()
     expect(await mapping.generateMappingsForGuideline('G1', ask)).toEqual({ checked: 1, suggested: 0, failedBatches: 0 })
     expect(ask).not.toHaveBeenCalled()
+  })
+})
+
+describe('resolveMappingModel', () => {
+  it('uses a model Groq currently serves by default', () => {
+    expect(mapping.resolveMappingModel({})).toBe('openai/gpt-oss-120b')
+  })
+
+  it('does not follow GROQ_MODEL, which the other prompts use', () => {
+    expect(mapping.resolveMappingModel({ GROQ_MODEL: 'llama-3.1-8b-instant' })).toBe('openai/gpt-oss-120b')
+  })
+
+  it('uses MAPPING_GROQ_MODEL when it is set, ignoring blanks around it', () => {
+    expect(mapping.resolveMappingModel({ MAPPING_GROQ_MODEL: '  openai/gpt-oss-120b ' })).toBe('openai/gpt-oss-120b')
+    expect(mapping.resolveMappingModel({ MAPPING_GROQ_MODEL: '   ' })).toBe('openai/gpt-oss-120b')
   })
 })
 
@@ -474,19 +419,80 @@ describe('fetchProjectMappings', () => {
 })
 
 describe('reviewProjectMapping', () => {
-  it('lets a project confirm a link between its own guidelines', async () => {
+  beforeEach(() => {
     attachGuidelines('P2', ['G1', 'G2'])
     tables.Item_Mapping[0].status = 'suggested'
+  })
+
+  it('records the decision for this project only and leaves the shared link untouched', async () => {
     await mapping.reviewProjectMapping('P2', 'm1', 'confirmed', 'equivalent', 'head-1')
-    expect(tables.Item_Mapping[0]).toMatchObject({ status: 'confirmed', relation: 'equivalent', reviewedBy: 'head-1' })
+    expect(tables.Project_Mapping_Decision).toEqual([
+      expect.objectContaining({ projectId: 'P2', mappingId: 'm1', status: 'confirmed', relation: 'equivalent', decidedBy: 'head-1' }),
+    ])
+    expect(tables.Item_Mapping[0]).toMatchObject({ status: 'suggested' })
+    expect(tables.Item_Mapping[0].reviewedBy).toBeUndefined()
+  })
+
+  it('changes an earlier decision instead of adding a second one', async () => {
+    await mapping.reviewProjectMapping('P2', 'm1', 'confirmed', 'equivalent', 'head-1')
+    await mapping.reviewProjectMapping('P2', 'm1', 'rejected', undefined, 'head-1')
+    expect(tables.Project_Mapping_Decision).toHaveLength(1)
+    expect(tables.Project_Mapping_Decision[0]).toMatchObject({ status: 'rejected', relation: null })
+  })
+
+  it('puts a link back to awaiting review by removing the decision', async () => {
+    await mapping.reviewProjectMapping('P2', 'm1', 'confirmed', 'equivalent', 'head-1')
+    await mapping.reviewProjectMapping('P2', 'm1', 'suggested', undefined, 'head-1')
+    expect(tables.Project_Mapping_Decision).toEqual([])
   })
 
   it('refuses a link that belongs to guidelines outside the project', async () => {
     addThirdGuideline()
     attachGuidelines('P2', ['G2', 'G3'])
-    tables.Item_Mapping[0].status = 'suggested'
     await expect(mapping.reviewProjectMapping('P2', 'm1', 'confirmed', undefined, 'head-1')).rejects.toThrow(mapping.MappingNotFoundError)
-    expect(tables.Item_Mapping[0].status).toBe('suggested')
+    expect(tables.Project_Mapping_Decision ?? []).toEqual([])
+  })
+})
+
+describe("a project's own decisions decide which links it uses", () => {
+  beforeEach(() => { attachGuidelines('P2', ['G1', 'G2']) })
+
+  it('shows the project decision instead of the shared status', async () => {
+    tables.Project_Mapping_Decision = [{ decisionId: 'd1', projectId: 'P2', mappingId: 'm1', status: 'rejected', relation: null, decidedBy: 'head-1' }]
+    const [link] = await mapping.fetchProjectMappings('P2')
+    expect(link.status).toBe('rejected')
+  })
+
+  it('shows the shared status when the project has not decided', async () => {
+    const [link] = await mapping.fetchProjectMappings('P2')
+    expect(link.status).toBe('confirmed')
+  })
+
+  it("does not let another project's decision change this one", async () => {
+    tables.Project_Mapping_Decision = [{ decisionId: 'd1', projectId: 'OTHER', mappingId: 'm1', status: 'rejected', relation: null, decidedBy: 'head-9' }]
+    const [link] = await mapping.fetchProjectMappings('P2')
+    expect(link.status).toBe('confirmed')
+  })
+
+  it('offers an answer through a link this project confirmed, even though the shared link is only suggested', async () => {
+    tables.Item_Mapping[0].status = 'suggested'
+    expect(await mapping.fetchProjectSuggestions('P2', USER)).toEqual([])
+    tables.Project_Mapping_Decision = [{ decisionId: 'd1', projectId: 'P2', mappingId: 'm1', status: 'confirmed', relation: null, decidedBy: 'head-1' }]
+    const out = await mapping.fetchProjectSuggestions('P2', USER)
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ itemId: 'p2a', relation: 'equivalent' })
+  })
+
+  it('offers nothing through a shared link this project rejected', async () => {
+    tables.Project_Mapping_Decision = [{ decisionId: 'd1', projectId: 'P2', mappingId: 'm1', status: 'rejected', relation: null, decidedBy: 'head-1' }]
+    expect(await mapping.fetchProjectSuggestions('P2', USER)).toEqual([])
+  })
+
+  it('uses the relation the project chose, so a partial choice is never accepted in bulk', async () => {
+    tables.Project_Mapping_Decision = [{ decisionId: 'd1', projectId: 'P2', mappingId: 'm1', status: 'confirmed', relation: 'partial', decidedBy: 'head-1' }]
+    const out = await mapping.fetchProjectSuggestions('P2', USER)
+    expect(out[0].relation).toBe('partial')
+    expect(await mapping.acceptSuggestions('P2', USER, ['p2a'])).toEqual([])
   })
 })
 

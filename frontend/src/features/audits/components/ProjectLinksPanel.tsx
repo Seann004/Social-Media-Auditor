@@ -26,6 +26,7 @@ export default function ProjectLinksPanel({ projectId }: Props) {
   const [finding, setFinding] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [showDecided, setShowDecided] = useState(false)
 
   async function load() {
     try {
@@ -73,6 +74,7 @@ export default function ProjectLinksPanel({ projectId }: Props) {
   }
 
   const waiting = (links ?? []).filter((m) => m.status === 'suggested')
+  const decided = (links ?? []).filter((m) => m.status !== 'suggested')
 
   return (
     <div className="mt-3">
@@ -106,6 +108,36 @@ export default function ProjectLinksPanel({ projectId }: Props) {
           {links !== null && waiting.length === 0 && (
             <p className="text-sm text-slate-400 py-4">No links to review right now.</p>
           )}
+
+          {decided.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowDecided((v) => !v)}
+              aria-expanded={showDecided}
+              className="text-xs font-medium text-blue-700 hover:underline cursor-pointer"
+            >
+              Decided here ({decided.length})
+            </button>
+          )}
+
+          {showDecided && decided.map((m) => (
+            <div key={m.mappingId} className="bg-slate-50 border border-slate-200 rounded-xl px-5 py-4">
+              <div className="flex flex-col md:flex-row items-stretch gap-3">
+                <ItemSide item={m.itemA} />
+                <div className="flex md:flex-col items-center justify-center gap-1 text-slate-400 shrink-0">
+                  <ArrowsLeftRight size={16} />
+                  <span className="text-2xs font-semibold uppercase tracking-wide">{m.status === 'rejected' ? 'not related' : m.relation}</span>
+                </div>
+                <ItemSide item={m.itemB} />
+              </div>
+              <div className="flex items-center justify-between gap-3 mt-3">
+                <p className="text-xs text-slate-500">{m.status === 'rejected' ? 'You marked this as not related.' : 'You confirmed this link.'}</p>
+                <Button variant="ghost" size="xs" disabled={busyId === m.mappingId} onClick={() => handleReview(m, 'suggested')}>
+                  Back to review
+                </Button>
+              </div>
+            </div>
+          ))}
 
           {waiting.map((m) => (
             <div key={m.mappingId} className="bg-white border border-slate-200 rounded-xl px-5 py-4">
