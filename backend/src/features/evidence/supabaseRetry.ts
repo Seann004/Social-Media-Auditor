@@ -1,10 +1,10 @@
 import { SUPABASE_NETWORK_RETRY_DELAYS_MS } from './config.js'
-import { isNetworkError, retryOnNetworkFailure } from './networkRetry.js'
+import { codeIn, isNetworkError, NETWORK_CODES, NETWORK_MESSAGE, retryOnNetworkFailure } from './networkRetry.js'
 
 /** The shape every supabase-js call resolves to. */
 export interface DbOutcome {
   data: unknown
-  error: { message: string; code?: string; hint?: string; originalError?: unknown } | null
+  error: { message: string; code?: string; details?: string; hint?: string; originalError?: unknown } | null
   status?: number
 }
 
@@ -12,8 +12,10 @@ export interface DbOutcome {
 const UNIQUE_VIOLATION = '23505'
 
 /**
- * True when supabase-js reports that fetch itself failed. PostgREST then gives status 0, an empty
- * code and the fetch error's name in the message. An abort has the same shape, so it is excluded.
+ * True when supabase-js reports that the connection itself failed. postgrest-js turns ANY thrown error
+ * into status 0 with an empty code (a circular-JSON TypeError, an invalid URL, headers too large), so
+ * status 0 alone is not enough. A cause code decides when there is one (postgrest-js appends it to
+ * `details` as "(ECONNRESET)"); without one, only "fetch failed" or a socket hang-up counts.
  * Storage wraps the thrown error as `originalError`. An error Postgres returned always has a status.
  */
 export function isDbNetworkFailure(res: DbOutcome): boolean {
@@ -21,10 +23,17 @@ export function isDbNetworkFailure(res: DbOutcome): boolean {
   if (!error) return false
   if (error.originalError !== undefined) return isNetworkError(error.originalError)
   if (res.status !== 0 || error.code) return false
-  return !/abort/i.test(`${error.message} ${error.hint ?? ''}`)
+  const causeCode = codeIn(error.details ?? '') ?? codeIn(error.message)
+  if (causeCode !== null) return NETWORK_CODES.has(causeCode)
+  return NETWORK_MESSAGE.test(error.message)
 }
 
 const failureOf = (res: DbOutcome): unknown | null => (isDbNetworkFailure(res) ? res.error?.message ?? 'network failure' : null)
+
+/*
+ * The Supabase waits take no abort signal, on purpose: when a run times out or stops, its final status
+ * writes (updateRun) must still land, so they are retried even after the run's signal has aborted.
+ */
 
 /**
  * A Supabase call that is safe to send twice (an update, an upsert, a delete, a read or an RPC that
@@ -61,7 +70,8 @@ export async function dbInsert<R extends DbOutcome>(
   })
   if (!failedOnNetwork || res.error?.code !== UNIQUE_VIOLATION) return res
   console.error(`[evidence] ${op}: a retry found the rows already saved; reading them back`)
-  const saved = await dbCall(`${op} read back`, readBack, delaysMs)
+  // A plain read: postgrest-js already retries GETs that fail on the network.
+  const saved = await readBack()
   const found = saved.error === null && saved.data !== null && (!Array.isArray(saved.data) || saved.data.length > 0)
   return found ? saved : res
 }

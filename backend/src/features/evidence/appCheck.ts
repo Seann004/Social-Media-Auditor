@@ -367,7 +367,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
 
     let action: AppAction
     try {
-      const decision = await deps.decideStep({ prompt: prompt(), apiKey: deps.apiKey, model: deps.model, signal })
+      const decision = await deps.decideStep({ prompt: prompt(), apiKey: deps.apiKey, model: deps.model, signal, runId: input.run.id })
       meter.add(decision.tokensUsed)
       action = decision.action
       unreadableInARow = 0

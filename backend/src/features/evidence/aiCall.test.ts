@@ -128,6 +128,13 @@ describe('callGroqJson on a network failure', () => {
     await expect(call()).rejects.toThrow('400')
     expect(f).toHaveBeenCalledTimes(1)
   })
+  it('does not retry a headers overflow, though fetch reports it as "fetch failed"', async () => {
+    const overflow = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('Headers Overflow Error'), { code: 'UND_ERR_HEADERS_OVERFLOW' }) })
+    const f = vi.fn().mockRejectedValue(overflow)
+    vi.stubGlobal('fetch', f)
+    await expect(call()).rejects.toBe(overflow)
+    expect(f).toHaveBeenCalledTimes(1)
+  })
   it('does not retry an error that is not a network failure', async () => {
     const f = vi.fn().mockRejectedValue(new Error('boom'))
     vi.stubGlobal('fetch', f)

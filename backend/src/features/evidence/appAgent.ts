@@ -54,7 +54,7 @@ Action shapes:
 
 Rules you MUST follow:
 1. To sign in, use fill_credential. You never know or type a password.
-2. "target" is ONLY for an action that reaches another person (a message, a follow, a comment, a tag, an invite, a friend request, a report). Such an action needs it, and it names the OTHER test account, never the one in use ("currentAccount"). Leave "target" out for ordinary clicks, navigation, settings and sign-in. Never act on anyone outside the test accounts.
+2. "target" is ONLY for an action that reaches another person (a message, a follow, a comment, a tag, an invite, a friend request, a report). Such an action needs it, and it names another test account, never the one in use ("currentAccount"). Leave "target" out for ordinary clicks, navigation, settings and sign-in. Never act on anyone outside the test accounts.
 3. Never publish anything to other people. Never delete or deactivate an account, pay for anything, or change a password, email address or phone number.
 4. Stay inside the app. Do not leave it.
 5. Before finishing, open the page where the relevant setting or feature lives, such as settings, privacy or messaging. The page you land on after signing in is rarely enough.
@@ -201,6 +201,8 @@ export type DecideStep = (input: {
   model: string
   /** The run's signal: an abort ends the call, so a timed-out run does not wait on the AI. */
   signal?: AbortSignal
+  /** Only for the log line when a target is dropped. */
+  runId?: string
 }) => Promise<{ action: AppAction; note: string; tokensUsed: number }>
 
 /** The AI's reply could not be used twice in a row. */
@@ -218,7 +220,7 @@ export class StepDecisionError extends Error {
  * Retries once on an unusable reply. Groq failures (limit, 429, others) are thrown as they are, with
  * `tokensUsed` (the tokens of earlier attempts) attached so the caller can still count them.
  */
-export const decideStep: DecideStep = async ({ prompt, apiKey, model, signal }) => {
+export const decideStep: DecideStep = async ({ prompt, apiKey, model, signal, runId }) => {
   const { system, user } = buildStepPrompt(prompt)
   let tokensUsed = 0
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -232,7 +234,14 @@ export const decideStep: DecideStep = async ({ prompt, apiKey, model, signal }) 
     tokensUsed += result.tokens
     const parsed = replySchema.safeParse(result.content)
     if (parsed.success) {
-      return { action: dropOwnTarget(parsed.data.action, prompt.currentAccount), note: parsed.data.note, tokensUsed }
+      const action = dropOwnTarget(parsed.data.action, prompt.currentAccount)
+      if (action !== parsed.data.action) {
+        // Kept visible: many of these mean the prompt is still unclear about targets.
+        console.error(
+          `[appAgent] run ${runId ?? 'unknown'}, item ${prompt.item.id}: dropped target "${prompt.currentAccount}" (the account in use) from a ${action.type}`,
+        )
+      }
+      return { action, note: parsed.data.note, tokensUsed }
     }
   }
   throw new StepDecisionError('The AI did not return a usable next step twice', tokensUsed)

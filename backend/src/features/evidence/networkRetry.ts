@@ -1,7 +1,10 @@
 import { wait } from '../../lib/groq.js'
 
-/** Error codes of a connection that failed or broke: set by Node on the error or on its cause. */
-const NETWORK_CODES = new Set([
+/**
+ * Error codes of a connection that failed or broke: set by Node on the error or on its cause. Shared by
+ * the Groq and Supabase retries, so both sides agree on what a network failure is.
+ */
+export const NETWORK_CODES: ReadonlySet<string> = new Set([
   'ECONNRESET',
   'ECONNREFUSED',
   'ECONNABORTED',
@@ -27,16 +30,31 @@ function isAbort(err: ErrorLike): boolean {
   return err.name === 'AbortError' || err.code === 'ABORT_ERR'
 }
 
+/** A message that on its own means the connection failed. */
+export const NETWORK_MESSAGE = /^(?:TypeError: )?fetch failed$|socket hang up/i
+
 /**
- * True for an error thrown by fetch itself, before any HTTP status: "fetch failed", a reset or
- * refused connection, a timeout, a socket hang-up. Never true for an abort.
+ * The error code in a text: Node's E... codes and undici's UND_ERR_... codes. A code in brackets, as
+ * postgrest-js appends the cause's code ("(ECONNRESET)"), wins over one in the running text.
+ */
+export function codeIn(text: string): string | null {
+  const bracketed = /\((E[A-Z]{3,}|UND_ERR_[A-Z_]+)\)/.exec(text)
+  if (bracketed) return bracketed[1]
+  return /\b(E[A-Z]{3,}|UND_ERR_[A-Z_]+)\b/.exec(text)?.[1] ?? null
+}
+
+/**
+ * True for an error thrown by fetch itself, before any HTTP status: a reset or refused connection, a
+ * timeout, a socket hang-up, or a "fetch failed" with no other cause. When the error or its cause has a
+ * code, the code decides: "fetch failed" caused by headers too large (UND_ERR_HEADERS_OVERFLOW) is not
+ * a network failure. Never true for an abort.
  */
 export function isNetworkError(value: unknown): boolean {
   const err = asErrorLike(value)
   if (!err || isAbort(err)) return false
   const cause = asErrorLike(err.cause)
-  if (typeof err.code === 'string' && NETWORK_CODES.has(err.code)) return true
-  if (cause && typeof cause.code === 'string' && NETWORK_CODES.has(cause.code)) return true
+  const code = typeof err.code === 'string' && err.code ? err.code : cause && typeof cause.code === 'string' ? cause.code : ''
+  if (code) return NETWORK_CODES.has(code)
   const message = typeof err.message === 'string' ? err.message : ''
   if (err instanceof TypeError && message === 'fetch failed') return true
   return /socket hang up/i.test(message)

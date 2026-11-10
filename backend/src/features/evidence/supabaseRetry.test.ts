@@ -35,6 +35,35 @@ describe('isDbNetworkFailure', () => {
     // A test stand-in with no status is not a network failure.
     expect(isDbNetworkFailure({ data: null, error: { message: 'boom' } })).toBe(false)
   })
+  it('is true when the cause carries a network code, even without "fetch failed"', () => {
+    const refused = { ...networkFailure(), error: { message: 'Error: connect ECONNREFUSED 127.0.0.1:443', details: '', hint: '', code: '' } }
+    expect(isDbNetworkFailure(refused)).toBe(true)
+    const hangUp = { ...networkFailure(), error: { message: 'Error: socket hang up', details: '', hint: '', code: '' } }
+    expect(isDbNetworkFailure(hangUp)).toBe(true)
+  })
+  it('is false for a code bug that postgrest-js also reports as status 0', () => {
+    const circular = {
+      data: null,
+      error: { message: 'TypeError: Converting circular structure to JSON', details: 'TypeError: Converting circular structure to JSON\n    at JSON.stringify', hint: '', code: '' },
+      status: 0,
+    }
+    expect(isDbNetworkFailure(circular)).toBe(false)
+    const badUrl = { data: null, error: { message: 'TypeError: Invalid URL', details: '', hint: '', code: '' }, status: 0 }
+    expect(isDbNetworkFailure(badUrl)).toBe(false)
+  })
+  it('is false for headers too large, though fetch reports it as "fetch failed"', () => {
+    const overflow = {
+      data: null,
+      error: {
+        message: 'TypeError: fetch failed',
+        details: 'TypeError: fetch failed\n\nCaused by: HeadersOverflowError: Headers Overflow Error (UND_ERR_HEADERS_OVERFLOW)',
+        hint: 'HTTP headers exceeded server limits (typically 16KB)',
+        code: '',
+      },
+      status: 0,
+    }
+    expect(isDbNetworkFailure(overflow)).toBe(false)
+  })
   it('is true for a storage failure whose original error is a network failure', () => {
     const original = new TypeError('fetch failed')
     expect(isDbNetworkFailure({ data: null, error: { name: 'StorageUnknownError', message: 'fetch failed', originalError: original } })).toBe(true)
@@ -87,15 +116,35 @@ describe('dbCall', () => {
     await expect(dbCall('upload', broken, NO_WAIT)).rejects.toThrow('bug')
     expect(broken).toHaveBeenCalledTimes(1)
   })
+  it('does not retry a status-0 circular-JSON TypeError or a headers overflow', async () => {
+    const circular = { data: null, error: { message: 'TypeError: Converting circular structure to JSON', details: '', hint: '', code: '' }, status: 0 }
+    const overflow = {
+      data: null,
+      error: { message: 'TypeError: fetch failed', details: 'Caused by: HeadersOverflowError: Headers Overflow Error (UND_ERR_HEADERS_OVERFLOW)', hint: '', code: '' },
+      status: 0,
+    }
+    for (const result of [circular, overflow]) {
+      const run = vi.fn().mockResolvedValue(result)
+      expect(await dbCall('updateRun', run, NO_WAIT)).toBe(result)
+      expect(run).toHaveBeenCalledTimes(1)
+    }
+  })
 })
 
 describe('dbInsert', () => {
-  it('reads the row back when a retry finds the first try was saved', async () => {
+  it('reads the row back directly, once, when a retry finds the first try was saved', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const insert = vi.fn().mockResolvedValueOnce(networkFailure()).mockResolvedValue(duplicate())
     const readBack = vi.fn().mockResolvedValue(ok({ id: 's1' }))
     expect(await dbInsert('addSuggestion', insert, readBack, NO_WAIT)).toEqual(ok({ id: 's1' }))
     expect(insert).toHaveBeenCalledTimes(2)
+    expect(readBack).toHaveBeenCalledTimes(1)
+  })
+  it('leaves retrying the read back to postgrest-js, which already retries GETs', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const insert = vi.fn().mockResolvedValueOnce(networkFailure()).mockResolvedValue(duplicate())
+    const readBack = vi.fn().mockResolvedValue(networkFailure())
+    expect(await dbInsert('addSuggestion', insert, readBack, NO_WAIT)).toEqual(duplicate())
     expect(readBack).toHaveBeenCalledTimes(1)
   })
   it('returns a duplicate as is when no try failed on the network', async () => {
