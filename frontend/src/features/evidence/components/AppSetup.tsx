@@ -43,8 +43,9 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false, 
     setSavedUrl(null)
     try {
       const { app } = await saveAppSource(projectId, appUrl.trim(), lines(domains))
-      setSavedUrl(app.appUrl)
       await onSaved()
+      // Only once all went well, so that "Saved" and an error never show together.
+      setSavedUrl(app.appUrl)
     } catch (err) {
       setSourceError(sentence(err))
     }
