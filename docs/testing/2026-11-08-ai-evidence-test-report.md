@@ -1,0 +1,149 @@
+# SafetyAudit: test report for App evidence and Code repository evidence
+
+**Date:** 8 November 2026
+**Branch:** `feat/ai-evidence-assessment`, commit `49496fc`
+**Tested by:** Claude Code, at the project owner's request
+
+---
+
+## 1. Summary
+
+| Area | Result |
+|---|---|
+| Automated tests (backend, frontend, end-to-end, type checks, build) | **All pass** |
+| Live App run (practice social app, 2 items) | **Works end to end**: no safety rule broken, no password leaked, nothing left changed. **Weakness:** the AI stopped exploring too early, so both items came back "not settled". |
+| Live Code run (Mastodon on GitHub, 3 items) | **Works end to end**: one fixed commit, real code quoted and checked. **Result:** "Users can report…" = **Partially**, with 2 verified quotes. The other 2 items were "not settled", which is correct for Mastodon. **Weakness:** translation files took up many of the code pieces. |
+
+---
+
+## 2. Automated tests
+
+| Check | Result |
+|---|---|
+| Backend unit and integration tests | 2 576 tests. 3 failed in one full run, all timeouts in older page-capture tests while the machine was busy. Run alone, those two files passed 108/108. |
+| Frontend unit tests | 331 / 331 pass |
+| End-to-end browser tests (Playwright) | 7 / 7 pass, including the App flow and the new Code repository flow |
+| Backend type check (`tsc`) | Clean |
+| Frontend type check (`tsc`) | Clean |
+| Frontend production build | Succeeds |
+
+The backend tests include full runs against a built-in practice social app and a fake GitHub. They cover every safety rule, the limits, and attacks such as hostile archives and comments that try to steer the AI.
+
+---
+
+## 3. Live test 1: App evidence (checking inside a web app)
+
+### Setup
+- **Platform:** the built-in practice social app, running on this computer at `http://127.0.0.1:58305`.
+- **Test accounts:**
+
+  | Account | Age group | Age | Handle |
+  |---|---|---|---|
+  | Teen 15 | Under 18 | 15 | `teen15` |
+  | Adult 30 | Adult | 30 | `adult30` |
+
+- **What the practice app really does:**
+  - Teen 15's account is private by default.
+  - Only friends can message Teen 15.
+- **Items checked:**
+  - **P-1** "Accounts of users under 16 are private by default."
+  - **P-2** "Direct messages are off by default for users under 16."
+- **Signed in as:** Demo Auditor, through the real API, with the real Supabase database and real Groq.
+
+### Results
+
+| | |
+|---|---|
+| Run status | **Completed** in about 1 minute |
+| AI tokens used | 13 300 (limit 200 000) |
+| Settings changed and needing to be put back | None |
+| P-1 suggestion | **Not settled** (null), with a "missing evidence" flag |
+| P-2 suggestion | **Not settled** (null), with a "missing evidence" flag |
+| Other 4 items | Their earlier Public-pages suggestions were carried forward unchanged, still marked "pages" |
+
+**Steps recorded for P-2:**
+
+| Step | What happened |
+|---|---|
+| 1 | Refused: tried to open a page before choosing an account (safety rule working). |
+| 2 | Switched to Teen 15, and the login page opened. |
+| 3 | The browser filled in Teen 15's login name. |
+| 4 | The browser filled in Teen 15's password. The AI never saw it. |
+| 5 | Clicked "Sign in", and the home page opened. |
+| 6 | Refused: the AI named Teen 15 as the "target" of a plain link click (safety rule working). |
+| 7 | Clicked "Settings", and the settings page opened. It showed "Private account On". |
+| 8 | The AI finished the check. |
+
+**Steps recorded for P-1:** the AI switched to Teen 15, saw the home page, and finished.
+
+### What worked
+- **Login:** signing in with a test account worked, and the browser typed the password itself.
+- **No password leak:** the password does not appear in any API response or in the server log.
+- **Safety rules:** both refused actions were blocked by the rules, as designed.
+- **Replay:** every step was recorded with its screenshot, ready for the Replay steps view.
+- **Carry-forward:** items that were not picked kept their earlier suggestions.
+- **Groq free-plan limits:** the server hit them several times, waited, retried, and finished.
+
+### Problem found
+**The AI stops exploring too early.**
+- For P-1 it never opened Settings. If it had, it would have seen "Private account On" and could have suggested **Yes**.
+- For P-2 it did not look at the messaging settings, and it did not try having the adult account message the teen.
+
+The safety system worked correctly; the gap is in how the AI is told to explore. A likely fix is a prompt change:
+- don't finish until you have looked at the relevant settings page, or tried the action;
+- for messaging items, use both accounts.
+
+This would cost a few more steps per item.
+
+---
+
+## 4. Live test 2: Code repository evidence
+
+### Setup
+- **Repository:** `https://github.com/mastodon/mastodon` (public), default branch.
+- **Items checked:**
+  - **P-1** "Accounts of users under 16 are private by default."
+  - **P-2** "Direct messages are off by default for users under 16."
+  - **R-1** "Users can report a video, comment or account from the app."
+
+### Results
+
+| | |
+|---|---|
+| Run status | **Completed** in about 3 minutes |
+| Commit read | `4dff13d48694e302d1a161b3d0795284a512b482` (all quotes and links point to it) |
+| AI tokens used | 27 342 (limit 80 000) |
+| R-1 suggestion | **Partially**, high confidence, no flags. "The API can report an account and a comment or post… no evidence that videos specifically can be reported." |
+| P-1 suggestion | **Not settled**: no code makes under-16 accounts private by default. The extra search round ran (6 more pieces). |
+| P-2 suggestion | **Not settled**: no code turns off direct messages for under-16s. |
+
+**R-1 quotes:** both were checked word for word against the real code. They come from `app/controllers/api/v1/reports_controller.rb`:
+- `def create … @report = ReportService.new.call(current_account, reported_account, …)`
+- `def report_params … params.permit(:account_id, :comment, :category, … status_ids: [] …)`
+
+The "Code found" view lists 6 pieces, with the reports controller marked **Quoted**, and a link to the exact lines on GitHub.
+
+### What worked
+- **One fixed version:** the code was downloaded once and read in memory only. Nothing was run, and nothing was saved to disk.
+- **Real, checked quotes:** R-1 got a sensible answer based on real code, and every quote was verified.
+- **Honest answers on P-1 and P-2:** Mastodon really has no under-16 defaults, only a "minimum age" setting. The AI said so instead of guessing.
+- **Extra search round:** it ran for P-1 and stayed within the token limit.
+- **Rate limits:** Groq's limits were hit, waited out, and retried.
+
+### Problems found
+1. **Translation files crowd out real code.** For P-1 and P-2, most pieces were Mastodon's translation files (`config/locales/simple_form.ar.yml`, `.be.yml`, `.bg.yml` and so on). They mention "age" in many languages. They pushed out more useful code, such as account defaults and messaging rules. **Fix:** rank translation files (`config/locales/`, `locales/`, `i18n/`, `*.po`) lower or skip them, and allow at most one piece per folder.
+2. **A wrong-looking flag on "not settled" items.** P-1 and P-2 also got the flag "This item needs evidence the code can't show". The AI marked them as not checkable from code, even though code could show them. This is a minor wording issue.
+
+---
+
+## 5. Things to note
+
+- **`EVIDENCE_SECRET_KEY`.** It is not set in `backend/.env`. For this test a temporary key was given to the server process only, and `.env` was not changed. The key is saved at `scratchpad/testrun/evidence-secret-key.txt`. Add it to `backend/.env` as `EVIDENCE_SECRET_KEY=...` so the two test accounts saved in this test stay usable. Without it, app runs are switched off.
+- **What the test left in the database (the demo project):**
+  - one App run and one Code run;
+  - the practice app address;
+  - two test accounts;
+  - the Mastodon address.
+- **Newest wins.** P-1 and P-2 now show the Code run's suggestions, because it ran last. R-1 shows the Code run's "Partially".
+- **No code files were changed** by testing.
+- **Raw results** (every run, suggestion, step and code piece) are saved as JSON next to this report.
