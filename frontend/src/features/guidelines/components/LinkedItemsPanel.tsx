@@ -3,24 +3,22 @@ import { ArrowsLeftRightIcon as ArrowsLeftRight, SparkleIcon as Sparkle, CheckIc
 import Button from '../../../components/ui/Button'
 import {
   fetchMappings,
-  fetchMappingCoverage,
   generateMappings,
   reviewMapping,
   type ItemMapping,
-  type MappingCoverage,
   type MappingRelation,
   type MappingStatus,
   type MappedItem,
 } from '../../../lib/db'
+import { CONFIDENCE_SECTIONS, groupByConfidence } from './confidenceGroups'
 
 interface Props {
   guidelines: { id: string; name: string; shortName: string }[]
-  isAdmin: boolean
 }
 
 const STATUS_TABS: { key: MappingStatus; label: string }[] = [
   { key: 'suggested', label: 'Awaiting review' },
-  { key: 'confirmed', label: 'Confirmed' },
+  { key: 'confirmed', label: 'Approved' },
   { key: 'rejected', label: 'Rejected' },
 ]
 
@@ -46,9 +44,9 @@ export function ItemSide({ item }: { item: MappedItem }) {
   )
 }
 
-export default function LinkedItemsPanel({ guidelines, isAdmin }: Props) {
-  const [coverage, setCoverage] = useState<MappingCoverage | null>(null)
-  const [mappings, setMappings] = useState<ItemMapping[]>([])
+/** Admin screen: every pair of similar items the AI found, grouped by how sure it was, for the admin to approve or reject. */
+export default function LinkedItemsPanel({ guidelines }: Props) {
+  const [mappings, setMappings] = useState<ItemMapping[] | null>(null)
   const [tab, setTab] = useState<MappingStatus>('suggested')
   const [target, setTarget] = useState('')
   const [running, setRunning] = useState(false)
@@ -58,30 +56,25 @@ export default function LinkedItemsPanel({ guidelines, isAdmin }: Props) {
 
   async function load() {
     try {
-      const [cov, maps] = await Promise.all([fetchMappingCoverage(), isAdmin ? fetchMappings() : Promise.resolve([])])
-      setCoverage(cov)
-      setMappings(maps)
+      setMappings(await fetchMappings())
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load linked items.')
     }
   }
 
-  useEffect(() => { load() }, [isAdmin])
+  useEffect(() => { load() }, [])
 
-  const pairCount = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const p of coverage?.pairs ?? []) {
-      map.set(`${p.guidelineA}|${p.guidelineB}`, p.count)
-      map.set(`${p.guidelineB}|${p.guidelineA}`, p.count)
-    }
-    return map
-  }, [coverage])
+  const counts = useMemo(() => {
+    const out: Record<MappingStatus, number> = { suggested: 0, confirmed: 0, rejected: 0 }
+    for (const m of mappings ?? []) out[m.status]++
+    return out
+  }, [mappings])
 
-  const visible = mappings.filter((m) => m.status === tab)
-  const matrixGuidelines = (coverage?.guidelines ?? []).filter((g) => g.totalItems > 0)
-  const decided = (coverage?.decisions.accepted ?? 0) + (coverage?.decisions.dismissed ?? 0)
-  const reviewed = (coverage?.mappings.confirmed ?? 0) + (coverage?.mappings.rejected ?? 0)
+  const groups = useMemo(
+    () => groupByConfidence((mappings ?? []).filter((m) => m.status === tab)),
+    [mappings, tab],
+  )
 
   async function handleGenerate() {
     if (!target) return
@@ -90,10 +83,9 @@ export default function LinkedItemsPanel({ guidelines, isAdmin }: Props) {
     setError(null)
     try {
       const res = await generateMappings(target)
-      const found = res.suggested > 0
+      setMessage(res.suggested > 0
         ? `Found ${res.suggested} possible link${res.suggested !== 1 ? 's' : ''} across ${res.checked} items.`
-        : `No new links found across ${res.checked} items.`
-      setMessage(found)
+        : `No new links found across ${res.checked} items.`)
       if (res.failedBatches > 0) {
         setError(`${res.failedBatches} batch${res.failedBatches !== 1 ? 'es' : ''} failed, so some items weren't checked. Run Find links again to retry them.`)
       }
@@ -118,199 +110,155 @@ export default function LinkedItemsPanel({ guidelines, isAdmin }: Props) {
     }
   }
 
-  if (coverage === null) {
+  if (mappings === null) {
     return error
       ? <div role="alert" className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg px-4 py-3">{error}</div>
       : <p role="status" className="text-sm text-slate-400 py-10 text-center">Loading linked items…</p>
   }
 
+  const reviewed = counts.confirmed + counts.rejected
+  const shown = groups.high.length + groups.medium.length + groups.low.length
+
   return (
     <div className="space-y-5">
       {error && (
-        <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg px-4 py-3">{error}</div>
+        <div role="alert" className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg px-4 py-3">{error}</div>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl px-5 py-4">
-          <p className="text-sm text-slate-500 font-medium mb-1">Confirmed links</p>
-          <p className="text-2xl font-semibold text-slate-900 tabular-nums">{coverage?.mappings.confirmed ?? 0}</p>
-          <p className="text-xs text-slate-400 mt-1">{coverage?.mappings.suggested ?? 0} awaiting review</p>
+          <p className="text-sm text-slate-500 font-medium mb-1">Awaiting your review</p>
+          <p className="text-2xl font-semibold text-slate-900 tabular-nums">{counts.suggested}</p>
+          <p className="text-xs text-slate-400 mt-1">Found by the AI, not used in audits yet</p>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-xl px-5 py-4">
+          <p className="text-sm text-slate-500 font-medium mb-1">Approved links</p>
+          <p className="text-2xl font-semibold text-slate-900 tabular-nums">{counts.confirmed}</p>
+          <p className="text-xs text-slate-400 mt-1">Shown to auditors when both items are in a project</p>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl px-5 py-4">
           <p className="text-sm text-slate-500 font-medium mb-1">AI match precision</p>
           <p className="text-2xl font-semibold text-slate-900 tabular-nums">
-            {reviewed > 0 ? `${Math.round(((coverage?.mappings.confirmed ?? 0) / reviewed) * 100)}%` : 'n/a'}
+            {reviewed > 0 ? `${Math.round((counts.confirmed / reviewed) * 100)}%` : 'n/a'}
           </p>
-          <p className="text-xs text-slate-400 mt-1">Confirmed out of {reviewed} reviewed</p>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-xl px-5 py-4">
-          <p className="text-sm text-slate-500 font-medium mb-1">Suggestions accepted</p>
-          <p className="text-2xl font-semibold text-slate-900 tabular-nums">
-            {decided > 0 ? `${Math.round(((coverage?.decisions.accepted ?? 0) / decided) * 100)}%` : 'n/a'}
-          </p>
-          <p className="text-xs text-slate-400 mt-1">{coverage?.decisions.accepted ?? 0} of {decided} by auditors</p>
+          <p className="text-xs text-slate-400 mt-1">Approved out of {reviewed} reviewed</p>
         </div>
       </div>
 
-      {matrixGuidelines.length > 1 && (
-        <div className="bg-white border border-slate-200 rounded-xl px-5 py-4">
-          <p className="text-sm font-semibold text-slate-800">Shared requirements</p>
-          <p className="text-xs text-slate-500 mb-4">Confirmed links between frameworks, and how much of each one overlaps with the others.</p>
-          <div className="overflow-x-auto">
-            <table className="text-xs border-collapse">
-              <thead>
-                <tr>
-                  <th className="p-2" />
-                  {matrixGuidelines.map((g) => (
-                    <th key={g.guidelineId} className="p-2 font-semibold text-slate-600 text-left whitespace-nowrap">{g.name}</th>
-                  ))}
-                  <th className="p-2 font-semibold text-slate-600 text-left whitespace-nowrap">Shared</th>
-                </tr>
-              </thead>
-              <tbody>
-                {matrixGuidelines.map((row) => (
-                  <tr key={row.guidelineId} className="border-t border-slate-100">
-                    <th className="p-2 font-semibold text-slate-600 text-left whitespace-nowrap">{row.name}</th>
-                    {matrixGuidelines.map((col) => {
-                      const count = row.guidelineId === col.guidelineId ? null : pairCount.get(`${row.guidelineId}|${col.guidelineId}`) ?? 0
-                      return (
-                        <td key={col.guidelineId} className="p-2 text-center font-mono tabular-nums">
-                          {count === null ? (
-                            <span className="text-slate-300">·</span>
-                          ) : (
-                            <span className={count > 0 ? 'inline-block min-w-[2rem] rounded-md bg-blue-50 text-blue-700 px-1.5 py-0.5' : 'text-slate-300'}>
-                              {count}
-                            </span>
-                          )}
-                        </td>
-                      )
-                    })}
-                    <td className="p-2 font-mono tabular-nums text-slate-600 whitespace-nowrap">
-                      {row.linkedItems}/{row.totalItems} ({Math.round((row.linkedItems / row.totalItems) * 100)}%)
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <div className="bg-white border border-slate-200 rounded-xl px-5 py-4">
+        <p className="text-sm font-semibold text-slate-800">Find links</p>
+        <p className="text-xs text-slate-500 mb-3">
+          This runs by itself when a framework is uploaded. Use it to check an existing framework again. Nothing is used in audits until you approve it below.
+        </p>
+        <div className="flex items-center gap-3 flex-wrap">
+          <label htmlFor="mapping-target" className="sr-only">Framework</label>
+          <select
+            id="mapping-target"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            className="text-sm text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-2 min-w-[240px] focus:outline-none focus:ring-2 focus:ring-blue-300"
+          >
+            <option value="">Choose a framework…</option>
+            {guidelines.map((g) => (
+              <option key={g.id} value={g.id}>{g.shortName || g.name}</option>
+            ))}
+          </select>
+          <Button variant="primary" size="sm" onClick={handleGenerate} disabled={!target || running}>
+            <Sparkle size={13} weight="bold" />
+            {running ? 'Matching… this can take a minute' : 'Find links'}
+          </Button>
         </div>
-      )}
+        {message && <p className="text-xs text-slate-600 mt-3" role="status">{message}</p>}
+      </div>
 
-      {isAdmin && (
-        <div className="bg-white border border-slate-200 rounded-xl px-5 py-4">
-          <p className="text-sm font-semibold text-slate-800">Find links</p>
-          <p className="text-xs text-slate-500 mb-3">
-            The AI compares a framework's items with every other framework. Nothing is used in audits until you confirm it below.
-          </p>
-          <div className="flex items-center gap-3 flex-wrap">
-            <label htmlFor="mapping-target" className="sr-only">Framework</label>
-            <select
-              id="mapping-target"
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              className="text-sm text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-2 min-w-[240px] focus:outline-none focus:ring-2 focus:ring-blue-300"
+      <div>
+        <div className="flex items-center gap-1 mb-3 border-b border-slate-200">
+          {STATUS_TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              aria-pressed={tab === t.key}
+              className={`px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors ${
+                tab === t.key ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
             >
-              <option value="">Choose a framework…</option>
-              {guidelines.map((g) => (
-                <option key={g.id} value={g.id}>{g.shortName || g.name}</option>
-              ))}
-            </select>
-            <Button variant="primary" size="sm" onClick={handleGenerate} disabled={!target || running}>
-              <Sparkle size={13} weight="bold" />
-              {running ? 'Matching… this can take a minute' : 'Find links'}
-            </Button>
-          </div>
-          {message && <p className="text-xs text-slate-600 mt-3" role="status">{message}</p>}
+              {t.label} <span className="font-mono text-slate-400">{counts[t.key]}</span>
+            </button>
+          ))}
         </div>
-      )}
 
-      {isAdmin && (
-        <div>
-          <div className="flex items-center gap-1 mb-3 border-b border-slate-200">
-            {STATUS_TABS.map((t) => {
-              const count = mappings.filter((m) => m.status === t.key).length
+        {shown === 0 ? (
+          <p className="text-sm text-slate-400 py-10 text-center">Nothing here yet.</p>
+        ) : (
+          <div className="space-y-6">
+            {CONFIDENCE_SECTIONS.map(({ level, title, range }) => {
+              const list = groups[level]
+              if (list.length === 0) return null
               return (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => setTab(t.key)}
-                  className={`px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors ${
-                    tab === t.key ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
-                  }`}
-                >
-                  {t.label} <span className="font-mono text-slate-400">{count}</span>
-                </button>
+                <section key={level} aria-label={title}>
+                  <h3 className="text-xs font-semibold text-slate-700 mb-2">
+                    {title} <span className="font-normal text-slate-400">({range})</span>{' '}
+                    <span className="font-mono text-slate-400">{list.length}</span>
+                  </h3>
+                  <div className="space-y-3">
+                    {list.map((m) => (
+                      <PairCard key={m.mappingId} pair={m} busy={busyId === m.mappingId} onReview={handleReview} />
+                    ))}
+                  </div>
+                </section>
               )
             })}
           </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
-          {visible.length === 0 ? (
-            <p className="text-sm text-slate-400 py-10 text-center">Nothing here yet.</p>
-          ) : (
-            <div className="space-y-3">
-              {visible.map((m) => (
-                <div key={m.mappingId} className="bg-white border border-slate-200 rounded-xl px-5 py-4">
-                  <div className="flex flex-col md:flex-row items-stretch gap-3">
-                    <ItemSide item={m.itemA} />
-                    <div className="flex md:flex-col items-center justify-center gap-1 text-slate-400 shrink-0">
-                      <ArrowsLeftRight size={16} />
-                      <span className="text-2xs font-semibold uppercase tracking-wide">{m.relation}</span>
-                    </div>
-                    <ItemSide item={m.itemB} />
-                  </div>
+function PairCard({ pair: m, busy, onReview }: {
+  pair: ItemMapping
+  busy: boolean
+  onReview: (m: ItemMapping, status: MappingStatus, relation?: MappingRelation) => void
+}) {
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl px-5 py-4">
+      <div className="flex flex-col md:flex-row items-stretch gap-3">
+        <ItemSide item={m.itemA} />
+        <div className="flex md:flex-col items-center justify-center gap-1 text-slate-400 shrink-0">
+          <ArrowsLeftRight size={16} />
+          <span className="text-2xs font-semibold uppercase tracking-wide">{m.relation === 'equivalent' ? 'same' : 'partial'}</span>
+        </div>
+        <ItemSide item={m.itemB} />
+      </div>
 
-                  <div className="flex items-center gap-3 mt-3 flex-wrap">
-                    <p className="flex-1 min-w-0 basis-60 text-xs text-slate-500">
-                      {m.rationale || 'No reason given.'}
-                      {m.confidence !== null && (
-                        <span className="ml-2 font-mono text-slate-400">{Math.round(m.confidence * 100)}% sure</span>
-                      )}
-                    </p>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {!(m.status === 'confirmed' && m.relation === 'equivalent') && (
-                        <Button
-                          variant="success"
-                          size="xs"
-                          disabled={busyId === m.mappingId}
-                          onClick={() => handleReview(m, 'confirmed', 'equivalent')}
-                        >
-                          <Check size={12} weight="bold" />
-                          Same requirement
-                        </Button>
-                      )}
-                      {!(m.status === 'confirmed' && m.relation === 'partial') && (
-                        <Button
-                          variant="secondary"
-                          size="xs"
-                          disabled={busyId === m.mappingId}
-                          onClick={() => handleReview(m, 'confirmed', 'partial')}
-                        >
-                          Partly overlaps
-                        </Button>
-                      )}
-                      {m.status !== 'rejected' && (
-                        <Button
-                          variant="danger-outline"
-                          size="xs"
-                          disabled={busyId === m.mappingId}
-                          onClick={() => handleReview(m, 'rejected')}
-                        >
-                          <XIcon size={12} weight="bold" />
-                          Not related
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+      <div className="flex items-center gap-3 mt-3 flex-wrap">
+        <p className="flex-1 min-w-0 basis-60 text-xs text-slate-500">
+          {m.rationale || 'No reason given.'}
+          {m.confidence !== null && (
+            <span className="ml-2 font-mono text-slate-400">{Math.round(m.confidence * 100)}% sure</span>
+          )}
+        </p>
+        <div className="flex items-center gap-2 flex-wrap">
+          {!(m.status === 'confirmed' && m.relation === 'equivalent') && (
+            <Button variant="success" size="xs" disabled={busy} onClick={() => onReview(m, 'confirmed', 'equivalent')}>
+              <Check size={12} weight="bold" />
+              Same requirement
+            </Button>
+          )}
+          {!(m.status === 'confirmed' && m.relation === 'partial') && (
+            <Button variant="secondary" size="xs" disabled={busy} onClick={() => onReview(m, 'confirmed', 'partial')}>
+              Partly overlaps
+            </Button>
+          )}
+          {m.status !== 'rejected' && (
+            <Button variant="danger-outline" size="xs" disabled={busy} onClick={() => onReview(m, 'rejected')}>
+              <XIcon size={12} weight="bold" />
+              Not related
+            </Button>
           )}
         </div>
-      )}
-
-      {!isAdmin && coverage && coverage.pairs.length === 0 && (
-        <p className="text-sm text-slate-400 py-10 text-center">No confirmed links between frameworks yet.</p>
-      )}
+      </div>
     </div>
   )
 }

@@ -9,7 +9,6 @@ let nextId = 0
 const ID_COLUMN: Record<string, string> = {
   Item_Mapping: 'mappingId',
   Suggestion_Decision: 'decisionId',
-  Project_Mapping_Decision: 'decisionId',
   Audit_Result: 'resultId',
 }
 

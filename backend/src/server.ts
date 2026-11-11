@@ -283,10 +283,6 @@ app.post('/api/projects/:id/guidelines', requireAuth, requireRole('head_auditor'
     }
     await db.syncProjectGuidelines(req.params.id, guidelineIds)
     res.json({ success: true })
-    // Link only the guidelines this project uses; already-linked pairs are skipped.
-    mapping.generateMappingsForProject(req.params.id, askGroq)
-      .then((r) => console.log(`Mapped project ${req.params.id}: ${r.suggested} suggested links`))
-      .catch((err) => console.error('Project mapping failed:', err))
   } catch (error) {
     sendError(res, error)
   }
@@ -316,6 +312,11 @@ app.post('/api/guidelines', requireAuth, requireRole('admin'), async (req, res) 
     }
     await db.createGuideline({ guideline, items })
     res.status(201).json({ success: true })
+
+    // Compare the new items with every other guideline in the background. The upload never waits for this or fails because of it.
+    mapping.generateMappingsForGuideline(guideline.guidelineId, askGroq)
+      .then((r) => console.log(`Mapped ${guideline.guidelineName}: ${r.suggested} suggested links`))
+      .catch((err) => console.error('Auto mapping failed:', err))
   } catch (error) {
     sendError(res, error)
   }

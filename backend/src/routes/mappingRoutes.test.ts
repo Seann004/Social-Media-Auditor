@@ -66,12 +66,8 @@ function seed() {
       { itemId: g1a, checklistId: 'gc1', category: 'Age', itemDescription: 'Age verification restricts minors from adult content' },
       { itemId: g2a, checklistId: 'gc2', category: 'Age', itemDescription: 'Age assurance restricts children from adult content' },
       { itemId: g3a, checklistId: 'gc3', category: 'Age', itemDescription: 'Age assurance for teenagers matches the risk' },
-      { itemId: p2c, checklistId: 'pc1', category: 'Age', originalItemId: g1a },
-      { itemId: p2a, checklistId: 'pc2', category: 'Age', originalItemId: g2a },
-    ],
-    Guideline: [
-      { guidelineId: id(61), projectId: P2, originalGuidelineId: G1 },
-      { guidelineId: id(62), projectId: P2, originalGuidelineId: G2 },
+      { itemId: p2c, checklistId: 'pc1', category: 'Age', originalItemId: g1a, itemDescription: 'Age verification restricts minors' },
+      { itemId: p2a, checklistId: 'pc2', category: 'Age', originalItemId: g2a, itemDescription: 'Age assurance restricts children' },
     ],
     Audit_Project: [
       { projectId: P2, projectTitle: 'TikTok 2026', headAuditorId: HEAD, smPlatform: 'tiktok', submissionStatus: 'not_submitted' },
@@ -79,7 +75,7 @@ function seed() {
     ],
     Project_Member: [{ projectId: P2, userId: AUD }],
     Item_Mapping: [
-      { mappingId: M1, itemIdA: g1a, itemIdB: g2a, relation: 'equivalent', confidence: 0.9, rationale: 'same duty', status: 'suggested', createdAt: '2026-01-01T00:00:00Z' },
+      { mappingId: M1, itemIdA: g1a, itemIdB: g2a, relation: 'equivalent', confidence: 0.9, rationale: 'same duty', status: 'confirmed', createdAt: '2026-01-01T00:00:00Z' },
       { mappingId: M_OUTSIDE, itemIdA: g2a, itemIdB: g3a, relation: 'partial', confidence: 0.6, rationale: 'overlap', status: 'suggested', createdAt: '2026-01-02T00:00:00Z' },
     ],
     Audit_Result: [
@@ -87,7 +83,6 @@ function seed() {
     ],
     Checklist_Resolution: [],
     Suggestion_Decision: [],
-    Project_Mapping_Decision: [],
   })
 }
 
@@ -101,122 +96,144 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
-describe('admin routes', () => {
-  it('lists links for an admin only', async () => {
-    const app = makeApp()
-    expect((await request(app).get('/api/mappings').set('Authorization', as.admin)).status).toBe(200)
-    expect((await request(app).get('/api/mappings').set('Authorization', as.head)).status).toBe(403)
-    expect((await request(app).get('/api/mappings')).status).toBe(401)
-  })
-
-  it('shows coverage to any signed-in user', async () => {
-    const res = await request(makeApp()).get('/api/mappings/coverage').set('Authorization', as.aud)
-    expect(res.status).toBe(200)
-    expect(res.body.mappings).toEqual({ suggested: 2, confirmed: 0, rejected: 0 })
-  })
-
-  it('lets an admin confirm a shared link', async () => {
-    const res = await request(makeApp()).patch(`/api/mappings/${M1}`).set('Authorization', as.admin).send({ status: 'confirmed', relation: 'equivalent' })
-    expect(res.status).toBe(200)
-    expect(tables.Item_Mapping.find((m) => m.mappingId === M1)).toMatchObject({ status: 'confirmed', reviewedBy: ADMIN })
-  })
-
-  it('refuses a head auditor on the shared review route', async () => {
-    const res = await request(makeApp()).patch(`/api/mappings/${M1}`).set('Authorization', as.head).send({ status: 'confirmed' })
-    expect(res.status).toBe(403)
-  })
-
-  it('rejects a bad status, a bad relation and a bad id', async () => {
-    const app = makeApp()
-    expect((await request(app).patch(`/api/mappings/${M1}`).set('Authorization', as.admin).send({ status: 'maybe' })).status).toBe(400)
-    expect((await request(app).patch(`/api/mappings/${M1}`).set('Authorization', as.admin).send({ status: 'confirmed', relation: 'same' })).status).toBe(400)
-    expect((await request(app).patch('/api/mappings/not-a-uuid').set('Authorization', as.admin).send({ status: 'confirmed' })).status).toBe(404)
-  })
-
-  it('lets an admin run the AI for one guideline against the whole library', async () => {
+describe('POST /guidelines/:id/mappings/generate (admin only)', () => {
+  it('lets an admin compare a guideline with all the others and saves the pairs as suggested', async () => {
     tables.Item_Mapping = []
     const res = await request(makeApp()).post(`/api/guidelines/${G1}/mappings/generate`).set('Authorization', as.admin)
     expect(res.status).toBe(200)
     expect(res.body.suggested).toBe(1)
-    expect((await request(makeApp()).post(`/api/guidelines/${G1}/mappings/generate`).set('Authorization', as.head)).status).toBe(403)
-  })
-})
-
-describe('project link routes', () => {
-  it('lists a project\'s links for its own head auditor', async () => {
-    const res = await request(makeApp()).get(`/api/projects/${P2}/mappings`).set('Authorization', as.head)
-    expect(res.status).toBe(200)
-    expect(res.body.map((m: { mappingId: string }) => m.mappingId)).toEqual([M1])
+    expect(tables.Item_Mapping).toEqual([expect.objectContaining({ status: 'suggested', confidence: 0.9 })])
   })
 
-  it('keeps links outside the project out of the list', async () => {
-    const res = await request(makeApp()).get(`/api/projects/${P2}/mappings`).set('Authorization', as.head)
-    expect(res.body.map((m: { mappingId: string }) => m.mappingId)).not.toContain(M_OUTSIDE)
-  })
-
-  it('refuses another head auditor, an auditor and a stranger', async () => {
-    const app = makeApp()
-    expect((await request(app).get(`/api/projects/${P2}/mappings`).set('Authorization', as.headOther)).status).toBe(403)
-    expect((await request(app).get(`/api/projects/${P2}/mappings`).set('Authorization', as.aud)).status).toBe(403)
-    expect((await request(app).get(`/api/projects/${P2}/mappings`)).status).toBe(401)
-  })
-
-  it('answers 404 for a project that does not exist or is not an id', async () => {
-    const app = makeApp()
-    expect((await request(app).get(`/api/projects/${id(99)}/mappings`).set('Authorization', as.head)).status).toBe(404)
-    expect((await request(app).get('/api/projects/nope/mappings').set('Authorization', as.head)).status).toBe(404)
-  })
-
-  it('records the head auditor\'s decision for this project and leaves the shared link alone', async () => {
-    const res = await request(makeApp()).patch(`/api/projects/${P2}/mappings/${M1}`).set('Authorization', as.head).send({ status: 'confirmed', relation: 'equivalent' })
-    expect(res.status).toBe(200)
-    expect(tables.Project_Mapping_Decision).toEqual([expect.objectContaining({ projectId: P2, mappingId: M1, status: 'confirmed', decidedBy: HEAD })])
-    expect(tables.Item_Mapping.find((m) => m.mappingId === M1)!.status).toBe('suggested')
-  })
-
-  it('refuses to decide a link that is outside the project', async () => {
-    const res = await request(makeApp()).patch(`/api/projects/${P2}/mappings/${M_OUTSIDE}`).set('Authorization', as.head).send({ status: 'confirmed' })
-    expect(res.status).toBe(404)
-    expect(tables.Project_Mapping_Decision).toEqual([])
-  })
-
-  it('refuses another head auditor deciding for this project', async () => {
-    const res = await request(makeApp()).patch(`/api/projects/${P2}/mappings/${M1}`).set('Authorization', as.headOther).send({ status: 'confirmed' })
-    expect(res.status).toBe(403)
-    expect(tables.Project_Mapping_Decision).toEqual([])
-  })
-
-  it('rejects a bad status, relation or link id', async () => {
-    const app = makeApp()
-    expect((await request(app).patch(`/api/projects/${P2}/mappings/${M1}`).set('Authorization', as.head).send({ status: 'nope' })).status).toBe(400)
-    expect((await request(app).patch(`/api/projects/${P2}/mappings/${M1}`).set('Authorization', as.head).send({ status: 'confirmed', relation: 'x' })).status).toBe(400)
-    expect((await request(app).patch(`/api/projects/${P2}/mappings/bad`).set('Authorization', as.head).send({ status: 'confirmed' })).status).toBe(404)
-  })
-
-  it('lets the head auditor ask the AI to find links for the project only', async () => {
+  it('sends the AI the items of the other guidelines, not only those in a project', async () => {
     tables.Item_Mapping = []
-    const res = await request(makeApp()).post(`/api/projects/${P2}/mappings/generate`).set('Authorization', as.head)
-    expect(res.status).toBe(200)
-    expect(res.body.suggested).toBe(1)
-    const sent = ask.mock.calls.map(([, u]) => u).join(' ')
-    expect(sent).not.toMatch(/teenagers/)
-    expect((await request(makeApp()).post(`/api/projects/${P2}/mappings/generate`).set('Authorization', as.headOther)).status).toBe(403)
+    await request(makeApp()).post(`/api/guidelines/${G1}/mappings/generate`).set('Authorization', as.admin)
+    expect(ask.mock.calls.map(([, u]) => u).join(' ')).toMatch(/teenagers/)
+  })
+
+  it('refuses auditors, head auditors and anyone signed out', async () => {
+    const app = makeApp()
+    for (const who of [as.aud, as.head]) {
+      expect((await request(app).post(`/api/guidelines/${G1}/mappings/generate`).set('Authorization', who)).status).toBe(403)
+    }
+    expect((await request(app).post(`/api/guidelines/${G1}/mappings/generate`)).status).toBe(401)
+    expect((await request(app).post('/api/guidelines/nope/mappings/generate').set('Authorization', as.admin)).status).toBe(400)
+    expect(ask).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 for a guideline without items', async () => {
+    const res = await request(makeApp()).post(`/api/guidelines/${id(98)}/mappings/generate`).set('Authorization', as.admin)
+    expect(res.status).toBe(404)
   })
 
   it('answers 502 with a readable message when the AI fails', async () => {
     tables.Item_Mapping = []
     ask.mockRejectedValue(new Error('Groq down'))
-    const res = await request(makeApp()).post(`/api/projects/${P2}/mappings/generate`).set('Authorization', as.head)
+    const res = await request(makeApp()).post(`/api/guidelines/${G1}/mappings/generate`).set('Authorization', as.admin)
     expect(res.status).toBe(502)
     expect(res.body.error).toMatch(/AI matching failed/)
+  })
+
+  it('answers 409 while the same guideline is already being checked, then allows it again', async () => {
+    tables.Item_Mapping = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    ask.mockImplementation(async () => { await gate; return { matches: [] } })
+    const app = makeApp()
+
+    const first = request(app).post(`/api/guidelines/${G1}/mappings/generate`).set('Authorization', as.admin).then((r) => r)
+    await vi.waitFor(() => expect(ask).toHaveBeenCalled())
+    const second = await request(app).post(`/api/guidelines/${G1}/mappings/generate`).set('Authorization', as.admin)
+    expect(second.status).toBe(409)
+
+    release()
+    expect((await first).status).toBe(200)
+    expect((await request(app).post(`/api/guidelines/${G1}/mappings/generate`).set('Authorization', as.admin)).status).toBe(200)
+  })
+})
+
+describe('GET /mappings (admin only)', () => {
+  it('lists every pair with both items, most confident first', async () => {
+    const res = await request(makeApp()).get('/api/mappings').set('Authorization', as.admin)
+    expect(res.status).toBe(200)
+    expect(res.body.map((m: { mappingId: string }) => m.mappingId)).toEqual([M1, M_OUTSIDE])
+    expect(res.body[0]).toMatchObject({ confidence: 0.9, itemA: { guidelineName: 'ONSA' }, itemB: { guidelineName: 'UKCC' } })
+  })
+
+  it('can be limited to one guideline', async () => {
+    const res = await request(makeApp()).get(`/api/mappings?guidelineId=${G3}`).set('Authorization', as.admin)
+    expect(res.body.map((m: { mappingId: string }) => m.mappingId)).toEqual([M_OUTSIDE])
+    expect((await request(makeApp()).get('/api/mappings?guidelineId=x').set('Authorization', as.admin)).status).toBe(400)
+  })
+
+  it('refuses everyone but an admin', async () => {
+    const app = makeApp()
+    expect((await request(app).get('/api/mappings').set('Authorization', as.head)).status).toBe(403)
+    expect((await request(app).get('/api/mappings').set('Authorization', as.aud)).status).toBe(403)
+    expect((await request(app).get('/api/mappings')).status).toBe(401)
+  })
+})
+
+describe('PATCH /mappings/:id (admin approves or rejects)', () => {
+  it('records the decision and who made it', async () => {
+    const res = await request(makeApp()).patch(`/api/mappings/${M_OUTSIDE}`).set('Authorization', as.admin).send({ status: 'confirmed', relation: 'equivalent' })
+    expect(res.status).toBe(200)
+    const row = tables.Item_Mapping.find((m) => m.mappingId === M_OUTSIDE)!
+    expect(row).toMatchObject({ status: 'confirmed', relation: 'equivalent', reviewedBy: ADMIN })
+    expect(row.reviewedAt).toBeTruthy()
+  })
+
+  it('refuses everyone but an admin and leaves the pair alone', async () => {
+    const app = makeApp()
+    expect((await request(app).patch(`/api/mappings/${M_OUTSIDE}`).set('Authorization', as.head).send({ status: 'confirmed' })).status).toBe(403)
+    expect((await request(app).patch(`/api/mappings/${M_OUTSIDE}`).set('Authorization', as.aud).send({ status: 'confirmed' })).status).toBe(403)
+    expect(tables.Item_Mapping.find((m) => m.mappingId === M_OUTSIDE)!.status).toBe('suggested')
+  })
+
+  it('rejects a bad id, status or relation, and answers 404 for an unknown pair', async () => {
+    const app = makeApp()
+    const patch = (path: string, body: object) => request(app).patch(path).set('Authorization', as.admin).send(body)
+    expect((await patch('/api/mappings/nope', { status: 'confirmed' })).status).toBe(400)
+    expect((await patch(`/api/mappings/${M1}`, { status: 'maybe' })).status).toBe(400)
+    expect((await patch(`/api/mappings/${M1}`, { status: 'confirmed', relation: 'same' })).status).toBe(400)
+    expect((await patch(`/api/mappings/${id(97)}`, { status: 'confirmed' })).status).toBe(404)
+  })
+})
+
+describe('the old project button is gone', () => {
+  it('no longer answers on it', async () => {
+    const app = makeApp()
+    expect((await request(app).post(`/api/projects/${P2}/similar-items`).set('Authorization', as.aud)).status).toBe(404)
+  })
+})
+
+describe('GET /projects/:id/similar-items', () => {
+  it('lists the approved pairs inside the project for its auditor and its head auditor', async () => {
+    const app = makeApp()
+    for (const who of [as.aud, as.head]) {
+      const res = await request(app).get(`/api/projects/${P2}/similar-items`).set('Authorization', who)
+      expect(res.status).toBe(200)
+      expect(res.body.map((m: { mappingId: string }) => m.mappingId)).toEqual([M1])
+      expect(res.body[0]).toMatchObject({ projectItemIdA: p2c, projectItemIdB: p2a })
+    }
+  })
+
+  it('leaves out pairs that are not approved', async () => {
+    const row = tables.Item_Mapping.find((m) => m.mappingId === M1)!
+    for (const status of ['suggested', 'rejected']) {
+      row.status = status
+      const res = await request(makeApp()).get(`/api/projects/${P2}/similar-items`).set('Authorization', as.aud)
+      expect(res.body).toEqual([])
+    }
+  })
+
+  it('refuses people who are not on the project', async () => {
+    expect((await request(makeApp()).get(`/api/projects/${P2}/similar-items`).set('Authorization', as.audOutsider)).status).toBe(403)
+    expect((await request(makeApp()).get(`/api/projects/${P2}/similar-items`)).status).toBe(401)
   })
 })
 
 describe('suggestion routes', () => {
-  beforeEach(() => {
-    tables.Item_Mapping[0].status = 'confirmed'
-  })
-
   it('shows suggestions to a member of the project and hides them from outsiders', async () => {
     const app = makeApp()
     const ok = await request(app).get(`/api/projects/${P2}/suggestions`).set('Authorization', as.aud)

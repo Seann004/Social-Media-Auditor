@@ -41,7 +41,7 @@ import ScoreRing from '../../audits/components/ScoreRing'
 import { useEvidence } from '../../evidence/useEvidence'
 import EvidencePanel from '../../evidence/components/EvidencePanel'
 import ItemSuggestion from '../../evidence/components/ItemSuggestion'
-import ProjectLinksPanel from '../components/ProjectLinksPanel'
+import SimilarItemsNotice from '../components/SimilarItemsNotice'
 import OverrideDialog from '../../evidence/components/OverrideDialog'
 import FlaggedFilterToggle from '../../evidence/components/FlaggedFilterToggle'
 import ProvenanceBadge from '../../evidence/components/ProvenanceBadge'
@@ -1301,7 +1301,9 @@ helpText: newItemHelp.trim() || undefined,
 
         </div>
 
-        {isHeadAuditor && project && id && <ProjectLinksPanel projectId={id} />}
+        {(isHeadAuditor || isAuditor) && project && id && (
+          <SimilarItemsNotice projectId={id} />
+        )}
 
         {loadError && (
           <div role="alert" className="mt-3 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700">
@@ -2129,6 +2131,9 @@ helpText: newItemHelp.trim() || undefined,
                                       {s.evidenceCount > 0 && ` · ${s.evidenceCount} photo${s.evidenceCount > 1 ? 's' : ''}`}
                                       {s.otherSources > 0 && ` · ${s.otherSources} more audit${s.otherSources > 1 ? 's' : ''}`}
                                     </p>
+                                    {s.sourceItemText && (
+                                      <p className="text-xs text-slate-600 mt-1.5 line-clamp-3 break-words">Earlier item: {s.sourceItemText}</p>
+                                    )}
                                     {s.findings && (
                                       <p className="text-xs text-slate-600 mt-1.5 line-clamp-2 italic break-words">"{s.findings}"</p>
                                     )}

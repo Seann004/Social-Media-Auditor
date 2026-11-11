@@ -16,6 +16,7 @@ vi.mock('../../../lib/db', async (orig) => ({
   activateProject: vi.fn(),
   fetchEvidenceForItems: vi.fn(async () => []),
   fetchAnswerSuggestions: vi.fn(),
+  fetchSimilarItems: vi.fn(async () => []),
   acceptAnswerSuggestions: vi.fn(),
   fetchProjectReliability: vi.fn(async () => ({ kappa: null, sharedItems: 0, raterPair: null })),
 }))
@@ -36,7 +37,7 @@ import AuditPage from './AuditPage'
 const SUGGESTION: db.AnswerSuggestion = {
   itemId: 'i1', guidelineId: 'g1', suggestedStatus: 'compliant', relation: 'equivalent',
   sourceProjectId: 'p1', sourceProjectTitle: 'Same audit', sourceGuideline: 'UKCC', sourceItemId: 'x1',
-  sourceItemCode: '7.3', findings: 'Seen at sign-up', evidenceCount: 0, answeredAt: '2026-03-01T00:00:00Z', otherSources: 0,
+  sourceItemCode: '7.3', sourceItemText: 'Age verification restricts minors', findings: 'Seen at sign-up', evidenceCount: 0, answeredAt: '2026-03-01T00:00:00Z', otherSources: 0,
 }
 
 function setup(status: 'draft' | 'in_progress') {
@@ -70,6 +71,13 @@ beforeEach(() => {
 })
 
 describe('reusing an answer from earlier audits', () => {
+  it("shows what the earlier item said, so the auditor can check the match", async () => {
+    setup('in_progress')
+    render(tree())
+    const row = await within(rowOf('Item one')).findByRole('button', { name: 'Use answer' })
+    expect(within(row.closest('div[class*="rounded-lg"]') as HTMLElement).getByText(/Age verification restricts minors/)).toBeInTheDocument()
+  })
+
   it('refreshes the project figures, like any other saved answer', async () => {
     setup('in_progress')
     render(tree())

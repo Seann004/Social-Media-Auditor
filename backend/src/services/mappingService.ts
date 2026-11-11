@@ -165,9 +165,15 @@ function itemText(item: GlobalItem): string {
   return [item.itemName, item.itemDescription, (item.verbatimClauseText ?? '').slice(0, 300)].filter(Boolean).join(' ')
 }
 
-/** The prompt's S1/C2 labels mean nothing to a reader, so say what they stand for. */
+/** The prompt's S1/C2 labels and its "source" and "candidate" words mean nothing to a reader, so say what they stand for. */
 function plainReason(reason: string): string {
-  return reason.replace(/\bS\d+\b/g, 'this item').replace(/\bC\d+\b/g, 'the other item')
+  const plain = reason
+    .replace(/\bS\d+\b/g, 'this item')
+    .replace(/\bC\d+\b/g, 'the other item')
+    .replace(/\b(?:the )?source item\b/gi, 'this item')
+    .replace(/\b(?:the )?candidate(?: item)?\b/gi, 'the other item')
+    .trim()
+  return plain.charAt(0).toUpperCase() + plain.slice(1)
 }
 
 function orderPair(x: string, y: string): [string, string] {
@@ -183,16 +189,17 @@ Each source item comes with a few candidate items from other guidelines. Decide 
 - "partial": they overlap, but one is broader, narrower or adds extra conditions.
 - Leave a candidate out if it only shares a topic. Most source items have zero or one real match.
 - Only use "equivalent" when you are confident; when unsure, use "partial".
+- "confidence" is a number from 0 to 1 for how sure you are that the pair really is a match. Use 0.9 or more only when the wording and scope are essentially the same, 0.5 to 0.8 when they clearly overlap but differ in scope, and below 0.5 for a weak or doubtful link. Do not give every pair the same number.
 - In "reason", never mention the S1 or C2 style labels; say "this item" and "the other item" instead.
 
 Return JSON only:
 {"matches":[{"source":"S1","candidate":"C2","relation":"equivalent","confidence":0.85,"reason":"one short sentence"}]}`
 
-export async function generateMappingsForGuideline(guidelineId: string, ask: AskModel, scopeGuidelineIds?: string[]) {
+/** Compares every item of one guideline with the items of all the other guidelines. New pairs are saved as "suggested" for an admin to review. */
+export async function generateMappingsForGuideline(guidelineId: string, ask: AskModel) {
   const all = await fetchGlobalItems()
-  const scope = scopeGuidelineIds ? new Set(scopeGuidelineIds) : null
   const own = all.filter((i) => i.guidelineId === guidelineId)
-  const others = all.filter((i) => i.guidelineId !== guidelineId && (!scope || scope.has(i.guidelineId)))
+  const others = all.filter((i) => i.guidelineId !== guidelineId)
   if (own.length === 0) throw new MappingNotFoundError('Guideline not found or it has no checklist items.')
   if (others.length === 0) return { checked: own.length, suggested: 0, failedBatches: 0 }
 
@@ -287,94 +294,60 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
   return { checked: own.length, suggested, failedBatches }
 }
 
-interface ProjectDecision {
-  projectId: string
-  mappingId: string
-  status: 'confirmed' | 'rejected'
-  relation: MappingRelation | null
+interface ProjectItem {
+  itemId: string
+  originalItemId: string
 }
 
-async function fetchProjectDecisions(projectId: string): Promise<ProjectDecision[]> {
-  return fetchAllRows<ProjectDecision>((from, to) => supabase
-    .from('Project_Mapping_Decision')
-    .select('projectId, mappingId, status, relation')
-    .eq('projectId', projectId)
-    .order('decisionId')
+/** This project's own checklist items that point back to a library item. Switched-off categories and items the project added itself are left out. */
+async function fetchProjectLibraryItems(projectId: string): Promise<ProjectItem[]> {
+  const { data: checklists, error } = await supabase.from('Checklist').select('checklistId').eq('projectId', projectId)
+  if (error) throw error
+  const checklistIds = ((checklists ?? []) as { checklistId: string }[]).map((c) => c.checklistId)
+  if (checklistIds.length === 0) return []
+  return fetchAllIn<ProjectItem>(checklistIds, (ids, from, to) => supabase
+    .from('Checklist_Item')
+    .select('itemId, originalItemId')
+    .in('checklistId', ids)
+    .not('category', 'like', '__deactivated__%')
+    .not('originalItemId', 'is', null)
+    .order('itemId')
     .range(from, to))
 }
 
-/** A project's own decision wins; without one the shared status and relation apply. */
-function effectiveLink(m: Pick<MappingRow, 'status' | 'relation'>, decision?: ProjectDecision) {
-  if (!decision) return { status: m.status, relation: m.relation }
-  return { status: decision.status as MappingStatus, relation: decision.relation ?? m.relation }
+/** All pairs (optionally those touching one guideline) with both items described, most confident first. For the admin review screen. */
+export async function fetchMappings(guidelineId?: string) {
+  const [rows, items] = await Promise.all([fetchMappingRows(), fetchGlobalItems()])
+  const byId = new Map(items.map((i) => [i.itemId.toLowerCase(), i]))
+  return rows
+    .map((m) => ({
+      mappingId: m.mappingId,
+      relation: m.relation,
+      confidence: m.confidence,
+      rationale: m.rationale,
+      status: m.status,
+      createdAt: m.createdAt,
+      reviewedAt: m.reviewedAt,
+      itemA: describeItem(byId.get(m.itemIdA.toLowerCase())),
+      itemB: describeItem(byId.get(m.itemIdB.toLowerCase())),
+    }))
+    .filter((m) => m.itemA && m.itemB)
+    .filter((m) => !guidelineId || m.itemA!.guidelineId === guidelineId || m.itemB!.guidelineId === guidelineId)
+    .sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1) || b.createdAt.localeCompare(a.createdAt))
 }
 
-async function fetchProjectMasterGuidelineIds(projectId: string): Promise<string[]> {
+/** The admin's decision on one pair. Only confirmed pairs are shown to auditors. */
+export async function reviewMapping(mappingId: string, status: MappingStatus, relation: MappingRelation | undefined, userId: string) {
+  const values: Record<string, unknown> = { status, reviewedBy: userId, reviewedAt: new Date().toISOString() }
+  if (relation) values.relation = relation
   const { data, error } = await supabase
-    .from('Guideline')
-    .select('originalGuidelineId')
-    .eq('projectId', projectId)
+    .from('Item_Mapping')
+    .update(values)
+    .eq('mappingId', mappingId)
+    .select('mappingId, status, relation')
   if (error) throw error
-  const ids = ((data ?? []) as { originalGuidelineId: string | null }[])
-    .map((g) => g.originalGuidelineId)
-    .filter((id): id is string => !!id)
-  return Array.from(new Set(ids))
-}
-
-/** Links only the items of the guidelines assigned to this project, never the whole library. */
-export async function generateMappingsForProject(projectId: string, ask: AskModel) {
-  const guidelineIds = await fetchProjectMasterGuidelineIds(projectId)
-  const total = { checked: 0, suggested: 0, failedBatches: 0 }
-  if (guidelineIds.length < 2) return total
-
-  let runs = 0
-  let failedRuns = 0
-  let lastError: unknown = null
-  for (const guidelineId of guidelineIds) {
-    try {
-      const result = await generateMappingsForGuideline(guidelineId, ask, guidelineIds)
-      runs++
-      total.checked += result.checked
-      total.suggested += result.suggested
-      total.failedBatches += result.failedBatches
-    } catch (error) {
-      if (error instanceof MappingNotFoundError) continue
-      runs++
-      failedRuns++
-      lastError = error
-    }
-  }
-  if (runs > 0 && failedRuns === runs) {
-    throw lastError instanceof MappingFailedError ? lastError : new MappingFailedError('AI matching failed for this project.')
-  }
-  return total
-}
-
-export async function fetchProjectMappings(projectId: string) {
-  const [guidelineIds, decisions] = await Promise.all([fetchProjectMasterGuidelineIds(projectId), fetchProjectDecisions(projectId)])
-  const inProject = new Set(guidelineIds)
-  const byMapping = new Map(decisions.map((d) => [d.mappingId, d]))
-  const all = await fetchMappings()
-  return all
-    .filter((m) => inProject.has(m.itemA!.guidelineId) && inProject.has(m.itemB!.guidelineId))
-    .map((m) => ({ ...m, ...effectiveLink(m, byMapping.get(m.mappingId)) }))
-}
-
-/** Records this project's decision only. The shared link is never changed from a project. */
-export async function reviewProjectMapping(projectId: string, mappingId: string, status: MappingStatus, relation: MappingRelation | undefined, userId: string): Promise<void> {
-  const allowed = await fetchProjectMappings(projectId)
-  if (!allowed.some((m) => m.mappingId === mappingId)) throw new MappingNotFoundError()
-
-  if (status === 'suggested') {
-    const { error } = await supabase.from('Project_Mapping_Decision').delete().eq('projectId', projectId).eq('mappingId', mappingId)
-    if (error) throw error
-    return
-  }
-  const { error } = await supabase.from('Project_Mapping_Decision').upsert(
-    { projectId, mappingId, status, relation: relation ?? null, decidedBy: userId, decidedAt: new Date().toISOString() },
-    { onConflict: 'projectId,mappingId' },
-  )
-  if (error) throw error
+  if (!data || data.length === 0) throw new MappingNotFoundError()
+  return data[0]
 }
 
 function describeItem(item: GlobalItem | undefined) {
@@ -391,11 +364,18 @@ function describeItem(item: GlobalItem | undefined) {
   }
 }
 
-export async function fetchMappings(guidelineId?: string) {
+/** The pairs an admin approved that are both in this project, with the project's own item ids. */
+export async function fetchProjectSimilarItems(projectId: string) {
+  const projectItems = await fetchProjectLibraryItems(projectId)
+  const projectItemByLibraryItem = new Map(projectItems.map((i) => [i.originalItemId.toLowerCase(), i.itemId]))
+  if (projectItemByLibraryItem.size === 0) return []
+
   const [rows, items] = await Promise.all([fetchMappingRows(), fetchGlobalItems()])
   const byId = new Map(items.map((i) => [i.itemId.toLowerCase(), i]))
 
   return rows
+    .filter((m) => m.status === 'confirmed')
+    .filter((m) => projectItemByLibraryItem.has(m.itemIdA.toLowerCase()) && projectItemByLibraryItem.has(m.itemIdB.toLowerCase()))
     .map((m) => ({
       mappingId: m.mappingId,
       relation: m.relation,
@@ -403,74 +383,13 @@ export async function fetchMappings(guidelineId?: string) {
       rationale: m.rationale,
       status: m.status,
       createdAt: m.createdAt,
-      reviewedAt: m.reviewedAt,
+      projectItemIdA: projectItemByLibraryItem.get(m.itemIdA.toLowerCase())!,
+      projectItemIdB: projectItemByLibraryItem.get(m.itemIdB.toLowerCase())!,
       itemA: describeItem(byId.get(m.itemIdA.toLowerCase())),
       itemB: describeItem(byId.get(m.itemIdB.toLowerCase())),
     }))
     .filter((m) => m.itemA && m.itemB)
-    .filter((m) => !guidelineId || m.itemA!.guidelineId === guidelineId || m.itemB!.guidelineId === guidelineId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-}
-
-export async function reviewMapping(mappingId: string, status: MappingStatus, relation: MappingRelation | undefined, userId: string): Promise<void> {
-  const updates: Record<string, unknown> = { status, reviewedBy: userId, reviewedAt: new Date().toISOString() }
-  if (relation) updates.relation = relation
-  const { data, error } = await supabase
-    .from('Item_Mapping')
-    .update(updates)
-    .eq('mappingId', mappingId)
-    .select('mappingId')
-  if (error) throw error
-  if (!data || data.length === 0) throw new MappingNotFoundError()
-}
-
-export async function fetchCoverage() {
-  const [rows, items, decisions] = await Promise.all([
-    fetchMappingRows(),
-    fetchGlobalItems(),
-    fetchAllRows<{ decision: string }>((from, to) => supabase
-      .from('Suggestion_Decision').select('decision').order('decisionId').range(from, to)),
-  ])
-  const byId = new Map(items.map((i) => [i.itemId.toLowerCase(), i]))
-
-  const guidelines = new Map<string, { guidelineId: string; name: string; totalItems: number; linkedItems: Set<string> }>()
-  for (const i of items) {
-    if (!guidelines.has(i.guidelineId)) {
-      guidelines.set(i.guidelineId, { guidelineId: i.guidelineId, name: i.shortName || i.guidelineName, totalItems: 0, linkedItems: new Set() })
-    }
-    guidelines.get(i.guidelineId)!.totalItems++
-  }
-
-  const pairs = new Map<string, number>()
-  const mappingCounts = { suggested: 0, confirmed: 0, rejected: 0 }
-  for (const m of rows) {
-    mappingCounts[m.status]++
-    if (m.status !== 'confirmed') continue
-    const a = byId.get(m.itemIdA.toLowerCase())
-    const b = byId.get(m.itemIdB.toLowerCase())
-    if (!a || !b) continue
-    guidelines.get(a.guidelineId)?.linkedItems.add(a.itemId)
-    guidelines.get(b.guidelineId)?.linkedItems.add(b.itemId)
-    const key = [a.guidelineId, b.guidelineId].sort().join('|')
-    pairs.set(key, (pairs.get(key) ?? 0) + 1)
-  }
-
-  const decisionCounts = { accepted: 0, dismissed: 0 }
-  for (const d of decisions) {
-    if (d.decision === 'accepted' || d.decision === 'dismissed') decisionCounts[d.decision]++
-  }
-
-  return {
-    guidelines: Array.from(guidelines.values())
-      .map((g) => ({ guidelineId: g.guidelineId, name: g.name, totalItems: g.totalItems, linkedItems: g.linkedItems.size }))
-      .sort((a, b) => a.name.localeCompare(b.name)),
-    pairs: Array.from(pairs, ([key, count]) => {
-      const [guidelineA, guidelineB] = key.split('|')
-      return { guidelineA, guidelineB, count }
-    }),
-    mappings: mappingCounts,
-    decisions: decisionCounts,
-  }
 }
 
 export interface AnswerSuggestion {
@@ -483,6 +402,7 @@ export interface AnswerSuggestion {
   sourceGuideline: string
   sourceItemId: string
   sourceItemCode: string | null
+  sourceItemText: string | null
   findings: string | null
   evidenceCount: number
   answeredAt: string
@@ -544,7 +464,7 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
     .range(from, to))
   if (items.length === 0) return []
 
-  const [answeredRows, dismissedRows, mappings, projectDecisions] = await Promise.all([
+  const [answeredRows, dismissedRows, mappings] = await Promise.all([
     fetchAllRows<{ itemId: string }>((from, to) => supabase
       .from('Audit_Result').select('itemId')
       .eq('projectId', projectId).eq('userId', userId)
@@ -554,16 +474,14 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
       .eq('projectId', projectId).eq('userId', userId).eq('decision', 'dismissed')
       .order('decisionId').range(from, to)),
     fetchMappingRows(),
-    fetchProjectDecisions(projectId),
   ])
-  const decisionByMapping = new Map(projectDecisions.map((d) => [d.mappingId, d]))
   const answered = new Set(answeredRows.map((r) => r.itemId))
   const dismissed = new Set(dismissedRows.map((r) => `${r.itemId}|${r.sourceItemId}`))
 
   const links = new Map<string, { otherId: string; relation: MappingRelation }[]>()
   for (const m of mappings) {
-    const { status, relation } = effectiveLink(m, decisionByMapping.get(m.mappingId))
-    if (status !== 'confirmed') continue
+    if (m.status !== 'confirmed') continue
+    const relation = m.relation
     const a = m.itemIdA.toLowerCase()
     const b = m.itemIdB.toLowerCase()
     if (!links.has(a)) links.set(a, [])
@@ -595,9 +513,9 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
   if (checklistInfo.size === 0) return []
 
   const [sourceItems, results, resolutions] = await Promise.all([
-    fetchAllIn<{ itemId: string; checklistId: string; itemCode: string | null; reference: string | null; originalItemId: string }>(Array.from(checklistInfo.keys()), (ids, from, to) => supabase
+    fetchAllIn<{ itemId: string; checklistId: string; itemCode: string | null; reference: string | null; originalItemId: string; itemDescription: string | null }>(Array.from(checklistInfo.keys()), (ids, from, to) => supabase
       .from('Checklist_Item')
-      .select('itemId, checklistId, itemCode, reference, originalItemId')
+      .select('itemId, checklistId, itemCode, reference, originalItemId, itemDescription')
       .in('checklistId', ids)
       .not('category', 'like', '__deactivated__%')
       .not('originalItemId', 'is', null)
@@ -646,6 +564,7 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
       sourceGuideline: info.guideline,
       sourceItemId: si.itemId,
       sourceItemCode: si.itemCode || si.reference,
+      sourceItemText: si.itemDescription ?? null,
       findings: agreeing.map((r) => r.findings).find((f) => f && f.trim()) ?? null,
       evidenceCount: agreeing.reduce((sum, r) => sum + (r.evidenceCount ?? 0), 0),
       answeredAt: rows.reduce((latest, r) => (r.timeSubmitted > latest ? r.timeSubmitted : latest), rows[0].timeSubmitted),

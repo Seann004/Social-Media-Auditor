@@ -51,11 +51,11 @@ Social-Media-Auditor/
 │   ├── e2e/                    ← Browser end-to-end tests (Playwright, network stubbed)
 │   └── playwright.config.ts
 └── backend/                    ← Express REST API
-    ├── supabase/migrations/    ← SQL to run by hand, in order (001 to 006)
+    ├── supabase/migrations/    ← SQL to run by hand, in order (001 to 005)
     └── src/
         ├── server.ts           ← All API routes
         ├── features/evidence/  ← AI evidence assessment: capture, assessment, decisions, routes
-        ├── routes/             ← Cross-guideline link and answer reuse routes
+        ├── routes/             ← Similar items and answer reuse routes
         ├── services/
         │   ├── dbService.ts    ← Supabase queries + RPC calls
         │   └── mappingService.ts ← Cross-guideline links and answer reuse
@@ -195,26 +195,27 @@ Color thresholds: **≥ 80%** emerald · **≥ 60%** amber · **< 60%** rose
 
 ---
 
-## Reusing answers across guidelines
+## Finding similar items and reusing answers
 
-Different guidelines often ask the same thing in different words. The app links such items so an answer given once can be offered again.
+Different guidelines often ask the same thing in different words. The app finds those items, an admin approves them, and auditors can then reuse an answer already given.
 
 **How it works**
-1. **Links are found per project.** When a head auditor saves a project's guidelines, the AI compares only the items of **those** guidelines and proposes links: *same requirement* or *partly overlaps*. Each pair is matched once and shared.
-2. **The project's head auditor decides.** In the audit page, **Review linked requirements** lists the links for that project. A decision applies to **that project only**, so one project never changes another. A link with no decision falls back to the shared status an admin may have set.
-3. **Auditors reuse answers.** Items with a confirmed link show **from earlier audits**. *Use answer* copies the status, findings and evidence photos. Only *same requirement* links are reused in one click. Answers come from the same project's other guidelines (the auditor's own answers) and from earlier **approved** projects on the same platform.
+1. **Upload.** When an admin uploads a guideline and its checklist items are saved, the AI compares every new item with the items of all the other guidelines in the database. This runs in the background, so the upload is never held up. Each pair it finds is saved in Supabase (`Item_Mapping`) as *awaiting review*, with *same requirement* or *partly overlaps* and a **confidence score** from the AI.
+2. **Admin review.** Guidelines page, admin only, **Linked items** tab. Pairs are grouped by confidence: **High** (80% and above), **Medium** (50% to 79%) and **Low** (under 50%), the most confident first in each group. The admin chooses *Same requirement*, *Partly overlaps* or *Not related* for each pair. Only approved pairs are used anywhere else. **Find links** re-checks one guideline, for example one uploaded before this feature existed.
+3. **Auditors.** When two approved-similar items are both chosen for a project, the audit page shows a message listing them. When an auditor has answered one item of a pair, the other item shows **from earlier audits** with the earlier item's text. *Use answer* copies the status, findings and evidence photos; *Dismiss* hides it. *Same requirement* pairs can be reused in one click ("Use all"); *partly overlaps* pairs are shown for the auditor to check. Answers come from the same project's other guidelines (the auditor's own answers) and from earlier **approved** projects on the same platform.
 
 **Who can do what**
 
 | Action | Role |
 |---|---|
-| Run the AI across one whole guideline, review shared links, see the library-wide Linked items tab | Admin |
-| See, find and decide the links of a project | That project's head auditor |
+| See the pairs, approve or reject them, run **Find links** | Admin |
+| See the message about approved pairs in a project | Auditor or head auditor on that project |
 | Accept or dismiss a reused answer | Auditor on that project |
 
 **Setup**
-- Run `backend/supabase/migrations/004_cross_guideline_mapping.sql`, `005_mapping_fixes.sql` and `006_project_mapping_decision.sql` in the Supabase SQL editor, in order.
+- Run `backend/supabase/migrations/004_cross_guideline_mapping.sql` and `005_mapping_fixes.sql` in the Supabase SQL editor, in order.
 - `MAPPING_GROQ_MODEL` picks the model that matches items (default `openai/gpt-oss-120b`). It is separate from `GROQ_MODEL` and must be a model your Groq account can use.
+- Each upload sends the new items to Groq in batches, so a large guideline can take several minutes and uses tokens. A pair already saved is not asked about again, and a rejected pair stays rejected.
 
 ---
 

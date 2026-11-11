@@ -2,11 +2,11 @@ import { Router, type Response } from 'express'
 import * as db from '../services/dbService.js'
 import * as mapping from '../services/mappingService.js'
 import { requireAuth, requireRole } from '../middleware/auth.js'
-import { requireProjectAccess, requireProjectOwner } from '../middleware/projectAccess.js'
+import { requireProjectAccess } from '../middleware/projectAccess.js'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MAX_ACCEPT_ITEMS = 500
-const STATUSES = ['suggested', 'confirmed', 'rejected']
+const REVIEW_STATUSES = ['confirmed', 'rejected', 'suggested']
 const RELATIONS = ['equivalent', 'partial']
 
 interface Deps {
@@ -31,30 +31,22 @@ function sendError(res: Response, error: unknown) {
   res.status(500).json({ error: error instanceof Error ? error.message : (error as any)?.message || JSON.stringify(error) })
 }
 
-/** Returns an error message for a bad review body, or null when it is fine. */
-function reviewBodyProblem(body: { status?: unknown; relation?: unknown }): string | null {
-  if (typeof body.status !== 'string' || !STATUSES.includes(body.status)) {
-    return 'status must be suggested, confirmed or rejected.'
-  }
-  if (body.relation !== undefined && (typeof body.relation !== 'string' || !RELATIONS.includes(body.relation))) {
-    return 'relation must be equivalent or partial.'
-  }
-  return null
-}
-
 /**
- * Cross-guideline links and answer reuse. Admins manage the shared links; a project's head auditor
- * decides which links that project uses; auditors reuse answers. Needs the app's JSON body parser.
+ * Finding similar checklist items, and reusing answers between them.
+ *
+ * When a guideline is uploaded the AI compares its items with all the others and saves the pairs with a
+ * confidence score. An admin approves or rejects each pair. Auditors on a project only see approved pairs,
+ * and can reuse answers between them. Needs the app's JSON body parser.
  */
 export function createMappingRouter({ ask }: Deps): Router {
   const router = Router()
+  const onProject = [requireAuth, requireRole('head_auditor', 'auditor'), requireProjectAccess('id')]
+  // One check per guideline at a time: the AI call is slow and costs tokens, so a second press waits.
+  const checking = new Set<string>()
 
-  // ----- shared links (admin) -----
-
-  router.post('/guidelines/:id/mappings/generate', requireAuth, requireRole('admin'), async (req, res) => {
+  router.get('/projects/:id/similar-items', ...onProject, async (req, res) => {
     try {
-      if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: 'Guideline not found.' })
-      res.json(await mapping.generateMappingsForGuideline(req.params.id, ask))
+      res.json(await mapping.fetchProjectSimilarItems(req.params.id))
     } catch (error) {
       sendError(res, error)
     }
@@ -63,15 +55,10 @@ export function createMappingRouter({ ask }: Deps): Router {
   router.get('/mappings', requireAuth, requireRole('admin'), async (req, res) => {
     try {
       const guidelineId = typeof req.query.guidelineId === 'string' ? req.query.guidelineId : undefined
+      if (guidelineId !== undefined && !UUID_RE.test(guidelineId)) {
+        return res.status(400).json({ error: 'guidelineId must be a valid id.' })
+      }
       res.json(await mapping.fetchMappings(guidelineId))
-    } catch (error) {
-      sendError(res, error)
-    }
-  })
-
-  router.get('/mappings/coverage', requireAuth, async (_req, res) => {
-    try {
-      res.json(await mapping.fetchCoverage())
     } catch (error) {
       sendError(res, error)
     }
@@ -79,47 +66,35 @@ export function createMappingRouter({ ask }: Deps): Router {
 
   router.patch('/mappings/:id', requireAuth, requireRole('admin'), async (req, res) => {
     try {
-      if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: 'Mapping not found.' })
-      const problem = reviewBodyProblem(req.body ?? {})
-      if (problem) return res.status(400).json({ error: problem })
-      await mapping.reviewMapping(req.params.id, req.body.status, req.body.relation, req.user!.userId)
-      res.json({ success: true })
+      const { status, relation } = req.body ?? {}
+      if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid mapping id.' })
+      if (!REVIEW_STATUSES.includes(status)) {
+        return res.status(400).json({ error: 'status must be confirmed, rejected or suggested.' })
+      }
+      if (relation !== undefined && !RELATIONS.includes(relation)) {
+        return res.status(400).json({ error: 'relation must be equivalent or partial.' })
+      }
+      res.json(await mapping.reviewMapping(req.params.id, status, relation, req.user!.userId))
     } catch (error) {
       sendError(res, error)
     }
   })
 
-  // ----- this project's links (head auditor of the project) -----
-
-  router.get('/projects/:id/mappings', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
+  router.post('/guidelines/:id/mappings/generate', requireAuth, requireRole('admin'), async (req, res) => {
+    const guidelineId = req.params.id
+    if (!UUID_RE.test(guidelineId)) return res.status(400).json({ error: 'Invalid guideline id.' })
+    if (checking.has(guidelineId)) {
+      return res.status(409).json({ error: 'This guideline is already being checked. Wait for it to finish.' })
+    }
+    checking.add(guidelineId)
     try {
-      res.json(await mapping.fetchProjectMappings(req.params.id))
+      res.json(await mapping.generateMappingsForGuideline(guidelineId, ask))
     } catch (error) {
       sendError(res, error)
+    } finally {
+      checking.delete(guidelineId)
     }
   })
-
-  router.post('/projects/:id/mappings/generate', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
-    try {
-      res.json(await mapping.generateMappingsForProject(req.params.id, ask))
-    } catch (error) {
-      sendError(res, error)
-    }
-  })
-
-  router.patch('/projects/:id/mappings/:mappingId', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
-    try {
-      if (!UUID_RE.test(req.params.mappingId)) return res.status(404).json({ error: 'Mapping not found.' })
-      const problem = reviewBodyProblem(req.body ?? {})
-      if (problem) return res.status(400).json({ error: problem })
-      await mapping.reviewProjectMapping(req.params.id, req.params.mappingId, req.body.status, req.body.relation, req.user!.userId)
-      res.json({ success: true })
-    } catch (error) {
-      sendError(res, error)
-    }
-  })
-
-  // ----- answer reuse (auditors) -----
 
   router.get('/projects/:id/suggestions', requireAuth, requireProjectAccess('id'), async (req, res) => {
     try {

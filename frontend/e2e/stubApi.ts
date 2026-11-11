@@ -508,6 +508,7 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
     // The rest of the audit page: Head Auditor resolutions, answers from earlier audits, photos per auditor, agreement.
     if (method === 'GET' && path === `/projects/${PROJECT_ID}/resolutions`) return json(route, [])
     if (method === 'GET' && path === `/projects/${PROJECT_ID}/suggestions`) return json(route, [])
+    if (method === 'GET' && path === `/projects/${PROJECT_ID}/similar-items`) return json(route, [])
     if (method === 'GET' && path === `/projects/${PROJECT_ID}/evidence`) {
       const wanted = (url.searchParams.get('itemIds') ?? '').split(',')
       return json(route, wanted.flatMap((itemId) => {

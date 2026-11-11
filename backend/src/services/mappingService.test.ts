@@ -30,7 +30,7 @@ function seed(extra: Partial<Record<string, Row[]>> = {}) {
       { itemId: 'g2a', checklistId: 'gc2', category: 'Age', itemDescription: 'Age assurance restricts children from accessing adult content', itemName: null, itemCode: 'U-1', reference: null, verbatimClauseText: null },
       { itemId: 'g2b', checklistId: 'gc2', category: 'Privacy', itemDescription: 'Geolocation sharing is switched off by default', itemName: null, itemCode: 'U-2', reference: null, verbatimClauseText: null },
       // P1 (already audited) and P2 (being audited) copies, pointing back at the master items
-      { itemId: 'p1a', checklistId: 'pc1', category: 'Age', itemCode: 'O-1', reference: null, originalItemId: 'g1a' },
+      { itemId: 'p1a', checklistId: 'pc1', category: 'Age', itemCode: 'O-1', reference: null, originalItemId: 'g1a', itemDescription: 'Age verification restricts minors' },
       { itemId: 'p2a', checklistId: 'pc2', category: 'Age', itemCode: 'U-1', reference: null, originalItemId: 'g2a' },
       { itemId: 'p2b', checklistId: 'pc2', category: 'Privacy', itemCode: 'U-2', reference: null, originalItemId: 'g2b' },
     ],
@@ -131,8 +131,18 @@ describe('generateMappingsForGuideline', () => {
     })
     await mapping.generateMappingsForGuideline('G1', ask)
     const reason = tables.Item_Mapping[0].rationale as string
-    expect(reason).toBe('the other item focuses on risk while this item asks about certainty.')
+    expect(reason).toBe('The other item focuses on risk while this item asks about certainty.')
     expect(reason).not.toMatch(/\b[SC]\d+\b/)
+  })
+
+  it("also turns 'the source item' and 'the candidate' into plain words, and starts the sentence with a capital", async () => {
+    const ask = vi.fn(async (_system: string, user: string) => {
+      const payload = JSON.parse(user) as { source: string; candidates: { candidate: string; text: string }[] }[]
+      const c = payload[0].candidates.find((x) => /age assurance/i.test(x.text))!
+      return { matches: [{ source: payload[0].source, candidate: c.candidate, relation: 'partial', confidence: 0.6, reason: 'the source item asks for visibility while the candidate only asks for policies.' }] }
+    })
+    await mapping.generateMappingsForGuideline('G1', ask)
+    expect(tables.Item_Mapping[0].rationale).toBe('This item asks for visibility while the other item only asks for policies.')
   })
 
   it('tells the model not to use the labels in its reason', async () => {
@@ -183,17 +193,6 @@ describe('resolveMappingModel', () => {
   })
 })
 
-describe('reviewMapping', () => {
-  it('records the reviewer and can change the relation', async () => {
-    await mapping.reviewMapping('m1', 'confirmed', 'partial', 'admin-1')
-    expect(tables.Item_Mapping[0]).toMatchObject({ status: 'confirmed', relation: 'partial', reviewedBy: 'admin-1' })
-  })
-
-  it('throws MappingNotFoundError for an unknown mapping', async () => {
-    await expect(mapping.reviewMapping('zzz', 'rejected', undefined, 'admin-1')).rejects.toThrow(mapping.MappingNotFoundError)
-  })
-})
-
 describe('fetchProjectSuggestions', () => {
   it('suggests the answer from an approved earlier project through a confirmed link', async () => {
     const out = await mapping.fetchProjectSuggestions('P2', USER)
@@ -209,11 +208,18 @@ describe('fetchProjectSuggestions', () => {
     expect(ids).not.toContain('p2b')
   })
 
-  it('ignores links that are still awaiting review or were rejected', async () => {
-    for (const status of ['suggested', 'rejected']) {
-      tables.Item_Mapping[0].status = status
-      expect(await mapping.fetchProjectSuggestions('P2', USER)).toEqual([])
-    }
+  it('offers answers only through links the admin approved', async () => {
+    tables.Item_Mapping[0].status = 'suggested'
+    expect(await mapping.fetchProjectSuggestions('P2', USER)).toEqual([])
+    tables.Item_Mapping[0].status = 'rejected'
+    expect(await mapping.fetchProjectSuggestions('P2', USER)).toEqual([])
+    tables.Item_Mapping[0].status = 'confirmed'
+    expect(await mapping.fetchProjectSuggestions('P2', USER)).toHaveLength(1)
+  })
+
+  it("shows what the earlier item said, so the auditor can check the match", async () => {
+    const [s] = await mapping.fetchProjectSuggestions('P2', USER)
+    expect(s.sourceItemText).toBe('Age verification restricts minors')
   })
 
   it('suggests nothing once the project is submitted for review', async () => {
@@ -337,162 +343,134 @@ function addThirdGuideline() {
   tables.Checklist_Item.push({ itemId: 'g3a', checklistId: 'gc3', category: 'Age', itemDescription: G3_TEXT, itemName: null, itemCode: 'E-1', reference: null, verbatimClauseText: null })
 }
 
-function attachGuidelines(projectId: string, masterIds: string[]) {
-  tables.Guideline = [
-    ...(tables.Guideline ?? []).filter((g) => g.projectId !== projectId),
-    ...masterIds.map((originalGuidelineId) => ({ guidelineId: `clone-${projectId}-${originalGuidelineId}`, projectId, originalGuidelineId })),
-  ]
-}
-
 function candidateTexts(ask: ReturnType<typeof askMatchingAge>): string[] {
   return ask.mock.calls.flatMap(([, user]) => (JSON.parse(user) as { candidates: { text: string }[] }[]).flatMap((p) => p.candidates.map((c) => c.text)))
 }
 
-describe('generateMappingsForGuideline with a scope', () => {
+function giveProjectBothGuidelines() {
+  // P2 holds copies of items from G1 (p2c) and G2 (p2a, p2b), all pointing back to the library
+  tables.Checklist.push({ checklistId: 'pc2b', guidelineId: 'G1', projectId: 'P2', Guideline: { guidelineName: 'ONSA Code', shortName: 'ONSA' } })
+  tables.Checklist_Item.push({ itemId: 'p2c', checklistId: 'pc2b', category: 'Age', itemCode: 'O-1', reference: null, originalItemId: 'g1a', itemDescription: 'Age verification restricts minors' })
+}
+
+describe('generateMappingsForGuideline against every other guideline', () => {
   beforeEach(() => { tables.Item_Mapping = [] })
 
-  it('compares only against the guidelines it is told to', async () => {
+  it('offers the model items from all the other guidelines, whether or not a project uses them', async () => {
     addThirdGuideline()
     const ask = askMatchingAge()
-    await mapping.generateMappingsForGuideline('G1', ask, ['G2'])
+    await mapping.generateMappingsForGuideline('G1', ask)
     const texts = candidateTexts(ask)
     expect(texts).toContain('Age assurance restricts children from accessing adult content')
-    expect(texts).not.toContain(G3_TEXT)
-    expect(tables.Item_Mapping.map((m) => `${m.itemIdA}|${m.itemIdB}`)).toEqual(['g1a|g2a'])
+    expect(texts).toContain(G3_TEXT)
   })
 
-  it('returns zero suggestions when the scope holds no other guideline', async () => {
-    const ask = askMatchingAge()
-    expect(await mapping.generateMappingsForGuideline('G1', ask, [])).toEqual({ checked: 1, suggested: 0, failedBatches: 0 })
-    expect(ask).not.toHaveBeenCalled()
+  it('compares all of the new guideline\'s own items', async () => {
+    tables.Checklist_Item.push({ itemId: 'g1z', checklistId: 'gc1', category: 'Age', itemDescription: 'Age assurance restricts children from adult content online', itemName: null, itemCode: 'O-9', reference: null, verbatimClauseText: null })
+    const result = await mapping.generateMappingsForGuideline('G1', askMatchingAge())
+    expect(result.checked).toBe(2)
   })
-})
 
-describe('generateMappingsForProject', () => {
-  beforeEach(() => { tables.Item_Mapping = [] })
-
-  it('links the items of the guidelines assigned to the project, and nothing else', async () => {
+  it('saves every new pair as suggested, with its confidence, for an admin to review', async () => {
     addThirdGuideline()
-    attachGuidelines('P2', ['G1', 'G2'])
-    const ask = askMatchingAge()
-    const result = await mapping.generateMappingsForProject('P2', ask)
-    expect(result.suggested).toBe(1)
-    expect(candidateTexts(ask)).not.toContain(G3_TEXT)
-    expect(tables.Item_Mapping.map((m) => `${m.itemIdA}|${m.itemIdB}`)).toEqual(['g1a|g2a'])
+    await mapping.generateMappingsForGuideline('G1', askMatchingAge('partial', 0.4))
+    expect(tables.Item_Mapping.length).toBeGreaterThan(0)
+    for (const row of tables.Item_Mapping) expect(row).toMatchObject({ status: 'suggested', confidence: 0.4, relation: 'partial' })
   })
 
-  it('does not call the AI when the project has a single guideline', async () => {
-    attachGuidelines('P2', ['G2'])
+  it('asks the model to spread its confidence scores', () => {
     const ask = askMatchingAge()
-    expect(await mapping.generateMappingsForProject('P2', ask)).toEqual({ checked: 0, suggested: 0, failedBatches: 0 })
-    expect(ask).not.toHaveBeenCalled()
-  })
-
-  it('does not ask again about pairs that were already linked', async () => {
-    attachGuidelines('P2', ['G1', 'G2'])
-    await mapping.generateMappingsForProject('P2', askMatchingAge())
-    const ask = askMatchingAge()
-    const second = await mapping.generateMappingsForProject('P2', ask)
-    expect(ask).not.toHaveBeenCalled()
-    expect(second.suggested).toBe(0)
-  })
-
-  it('throws MappingFailedError when the AI fails for every guideline', async () => {
-    attachGuidelines('P2', ['G1', 'G2'])
-    const ask = vi.fn(async () => { throw new Error('Groq down') })
-    await expect(mapping.generateMappingsForProject('P2', ask)).rejects.toThrow(mapping.MappingFailedError)
+    return mapping.generateMappingsForGuideline('G1', ask).then(() => {
+      expect(ask.mock.calls[0][0]).toMatch(/confidence/i)
+      expect(ask.mock.calls[0][0]).toMatch(/0\.9/)
+    })
   })
 })
 
-describe('fetchProjectMappings', () => {
-  it('returns links between the project guidelines', async () => {
-    attachGuidelines('P2', ['G1', 'G2'])
-    const out = await mapping.fetchProjectMappings('P2')
-    expect(out.map((m) => m.mappingId)).toEqual(['m1'])
-  })
-
-  it('leaves out links that involve a guideline the project does not use', async () => {
-    addThirdGuideline()
-    attachGuidelines('P2', ['G2', 'G3'])
-    expect(await mapping.fetchProjectMappings('P2')).toEqual([])
-  })
-})
-
-describe('reviewProjectMapping', () => {
+describe('fetchMappings (admin review list)', () => {
   beforeEach(() => {
-    attachGuidelines('P2', ['G1', 'G2'])
-    tables.Item_Mapping[0].status = 'suggested'
-  })
-
-  it('records the decision for this project only and leaves the shared link untouched', async () => {
-    await mapping.reviewProjectMapping('P2', 'm1', 'confirmed', 'equivalent', 'head-1')
-    expect(tables.Project_Mapping_Decision).toEqual([
-      expect.objectContaining({ projectId: 'P2', mappingId: 'm1', status: 'confirmed', relation: 'equivalent', decidedBy: 'head-1' }),
-    ])
-    expect(tables.Item_Mapping[0]).toMatchObject({ status: 'suggested' })
-    expect(tables.Item_Mapping[0].reviewedBy).toBeUndefined()
-  })
-
-  it('changes an earlier decision instead of adding a second one', async () => {
-    await mapping.reviewProjectMapping('P2', 'm1', 'confirmed', 'equivalent', 'head-1')
-    await mapping.reviewProjectMapping('P2', 'm1', 'rejected', undefined, 'head-1')
-    expect(tables.Project_Mapping_Decision).toHaveLength(1)
-    expect(tables.Project_Mapping_Decision[0]).toMatchObject({ status: 'rejected', relation: null })
-  })
-
-  it('puts a link back to awaiting review by removing the decision', async () => {
-    await mapping.reviewProjectMapping('P2', 'm1', 'confirmed', 'equivalent', 'head-1')
-    await mapping.reviewProjectMapping('P2', 'm1', 'suggested', undefined, 'head-1')
-    expect(tables.Project_Mapping_Decision).toEqual([])
-  })
-
-  it('refuses a link that belongs to guidelines outside the project', async () => {
     addThirdGuideline()
-    attachGuidelines('P2', ['G2', 'G3'])
-    await expect(mapping.reviewProjectMapping('P2', 'm1', 'confirmed', undefined, 'head-1')).rejects.toThrow(mapping.MappingNotFoundError)
-    expect(tables.Project_Mapping_Decision ?? []).toEqual([])
+    tables.Item_Mapping = [
+      { mappingId: 'low', itemIdA: 'g1a', itemIdB: 'g3a', relation: 'partial', confidence: 0.3, rationale: 'weak', status: 'suggested', createdAt: '2026-01-03T00:00:00Z' },
+      { mappingId: 'none', itemIdA: 'g2a', itemIdB: 'g3a', relation: 'partial', confidence: null, rationale: null, status: 'suggested', createdAt: '2026-01-04T00:00:00Z' },
+      { mappingId: 'high', itemIdA: 'g1a', itemIdB: 'g2a', relation: 'equivalent', confidence: 0.95, rationale: 'same', status: 'suggested', createdAt: '2026-01-01T00:00:00Z' },
+    ]
+  })
+
+  it('puts the most confident pair first and pairs without a score last', async () => {
+    expect((await mapping.fetchMappings()).map((m) => m.mappingId)).toEqual(['high', 'low', 'none'])
+  })
+
+  it('describes both items of each pair', async () => {
+    const [first] = await mapping.fetchMappings()
+    expect(first.itemA!.guidelineName).toBe('ONSA')
+    expect(first.itemB!.guidelineName).toBe('UKCC')
+  })
+
+  it('can be limited to the pairs that touch one guideline', async () => {
+    expect((await mapping.fetchMappings('G3')).map((m) => m.mappingId).sort()).toEqual(['low', 'none'])
+  })
+
+  it('leaves out a pair whose item no longer exists', async () => {
+    tables.Item_Mapping.push({ mappingId: 'orphan', itemIdA: 'g1a', itemIdB: 'gone', relation: 'partial', confidence: 0.5, status: 'suggested', createdAt: '2026-01-05T00:00:00Z' })
+    expect((await mapping.fetchMappings()).map((m) => m.mappingId)).not.toContain('orphan')
   })
 })
 
-describe("a project's own decisions decide which links it uses", () => {
-  beforeEach(() => { attachGuidelines('P2', ['G1', 'G2']) })
-
-  it('shows the project decision instead of the shared status', async () => {
-    tables.Project_Mapping_Decision = [{ decisionId: 'd1', projectId: 'P2', mappingId: 'm1', status: 'rejected', relation: null, decidedBy: 'head-1' }]
-    const [link] = await mapping.fetchProjectMappings('P2')
-    expect(link.status).toBe('rejected')
+describe('reviewMapping (admin decision)', () => {
+  it('stores the status, the reviewer and the time', async () => {
+    await mapping.reviewMapping('m1', 'rejected', undefined, 'admin-1')
+    expect(tables.Item_Mapping[0]).toMatchObject({ status: 'rejected', reviewedBy: 'admin-1', relation: 'equivalent' })
+    expect(tables.Item_Mapping[0].reviewedAt).toBeTruthy()
   })
 
-  it('shows the shared status when the project has not decided', async () => {
-    const [link] = await mapping.fetchProjectMappings('P2')
-    expect(link.status).toBe('confirmed')
+  it('can change the relation at the same time', async () => {
+    await mapping.reviewMapping('m1', 'confirmed', 'partial', 'admin-1')
+    expect(tables.Item_Mapping[0]).toMatchObject({ status: 'confirmed', relation: 'partial' })
   })
 
-  it("does not let another project's decision change this one", async () => {
-    tables.Project_Mapping_Decision = [{ decisionId: 'd1', projectId: 'OTHER', mappingId: 'm1', status: 'rejected', relation: null, decidedBy: 'head-9' }]
-    const [link] = await mapping.fetchProjectMappings('P2')
-    expect(link.status).toBe('confirmed')
+  it('throws MappingNotFoundError for an unknown pair', async () => {
+    await expect(mapping.reviewMapping('nope', 'confirmed', undefined, 'admin-1')).rejects.toThrow(mapping.MappingNotFoundError)
   })
 
-  it('offers an answer through a link this project confirmed, even though the shared link is only suggested', async () => {
+  it('keeps a rejected pair rejected when the guideline is checked again', async () => {
+    tables.Item_Mapping[0].status = 'rejected'
+    await mapping.generateMappingsForGuideline('G1', askMatchingAge())
+    expect(tables.Item_Mapping).toHaveLength(1)
+    expect(tables.Item_Mapping[0].status).toBe('rejected')
+  })
+})
+
+describe('fetchProjectSimilarItems', () => {
+  beforeEach(() => { giveProjectBothGuidelines() })
+
+  it("lists the approved pairs whose two items are both in the project, with the project's own item ids", async () => {
+    const [pair] = await mapping.fetchProjectSimilarItems('P2')
+    expect(pair).toMatchObject({ mappingId: 'm1', relation: 'equivalent', projectItemIdA: 'p2c', projectItemIdB: 'p2a' })
+    expect(pair.itemA!.text).toBe('Age verification restricts minors from accessing adult content')
+    expect(pair.itemB!.guidelineName).toBe('UKCC')
+  })
+
+  it('leaves out a pair when one item is not in the project', async () => {
+    addThirdGuideline()
+    tables.Item_Mapping = [{ mappingId: 'm9', itemIdA: 'g2a', itemIdB: 'g3a', relation: 'partial', status: 'confirmed', createdAt: '2026-01-02T00:00:00Z' }]
+    expect(await mapping.fetchProjectSimilarItems('P2')).toEqual([])
+  })
+
+  it('leaves out a pair when the project switched an item off', async () => {
+    tables.Checklist_Item.find((i) => i.itemId === 'p2a')!.category = '__deactivated__Age'
+    expect(await mapping.fetchProjectSimilarItems('P2')).toEqual([])
+  })
+
+  it('leaves out pairs the admin has not approved, and rejected ones', async () => {
     tables.Item_Mapping[0].status = 'suggested'
-    expect(await mapping.fetchProjectSuggestions('P2', USER)).toEqual([])
-    tables.Project_Mapping_Decision = [{ decisionId: 'd1', projectId: 'P2', mappingId: 'm1', status: 'confirmed', relation: null, decidedBy: 'head-1' }]
-    const out = await mapping.fetchProjectSuggestions('P2', USER)
-    expect(out).toHaveLength(1)
-    expect(out[0]).toMatchObject({ itemId: 'p2a', relation: 'equivalent' })
+    expect(await mapping.fetchProjectSimilarItems('P2')).toEqual([])
+    tables.Item_Mapping[0].status = 'rejected'
+    expect(await mapping.fetchProjectSimilarItems('P2')).toEqual([])
   })
 
-  it('offers nothing through a shared link this project rejected', async () => {
-    tables.Project_Mapping_Decision = [{ decisionId: 'd1', projectId: 'P2', mappingId: 'm1', status: 'rejected', relation: null, decidedBy: 'head-1' }]
-    expect(await mapping.fetchProjectSuggestions('P2', USER)).toEqual([])
-  })
-
-  it('uses the relation the project chose, so a partial choice is never accepted in bulk', async () => {
-    tables.Project_Mapping_Decision = [{ decisionId: 'd1', projectId: 'P2', mappingId: 'm1', status: 'confirmed', relation: 'partial', decidedBy: 'head-1' }]
-    const out = await mapping.fetchProjectSuggestions('P2', USER)
-    expect(out[0].relation).toBe('partial')
-    expect(await mapping.acceptSuggestions('P2', USER, ['p2a'])).toEqual([])
+  it("does not show another project's pairs", async () => {
+    expect(await mapping.fetchProjectSimilarItems('P1')).toEqual([])
   })
 })
 
@@ -500,8 +478,7 @@ describe('fetchProjectSuggestions inside the same project', () => {
   // The project itself holds both guidelines; no earlier approved project exists.
   beforeEach(() => {
     tables.Audit_Project[0].submissionStatus = 'draft'
-    tables.Checklist.push({ checklistId: 'pc2b', guidelineId: 'G1', projectId: 'P2', Guideline: { guidelineName: 'ONSA Code', shortName: 'ONSA' } })
-    tables.Checklist_Item.push({ itemId: 'p2c', checklistId: 'pc2b', category: 'Age', itemCode: 'O-1', reference: null, originalItemId: 'g1a' })
+    giveProjectBothGuidelines()
     tables.Audit_Result.push({ resultId: 'r7', projectId: 'P2', itemId: 'p2c', userId: USER, result: 'non_compliant', findings: 'No age gate', evidenceCount: 0, timeSubmitted: '2026-05-02T00:00:00Z' })
   })
 

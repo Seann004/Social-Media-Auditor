@@ -20,6 +20,7 @@ vi.mock('../../../lib/db', async (orig) => ({
   saveEvidenceImages: vi.fn(),
   fetchEvidenceForItems: vi.fn(async () => []),
   fetchAnswerSuggestions: vi.fn(async () => []),
+  fetchSimilarItems: vi.fn(async () => []),
   fetchProjectReliability: vi.fn(async () => ({ kappa: null, sharedItems: 0, raterPair: null })),
 }))
 vi.mock('../../evidence/api', async (orig) => ({
