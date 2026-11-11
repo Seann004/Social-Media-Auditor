@@ -4,9 +4,11 @@ import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import * as db from './services/dbService.js'
 import * as mapping from './services/mappingService.js'
+import { createMappingRouter } from './routes/mappingRoutes.js'
 import { supabase } from './config/supabase.js'
 import { requireAuth, requireRole, optionalAuth, signToken } from './middleware/auth.js'
 import { requireProjectAccess, requireProjectOwner, requireChecklistItemProjectAccess, filterAccessibleProjectIds, isProjectMember } from './middleware/projectAccess.js'
+import { createEvidenceModule } from './features/evidence/index.js'
 
 if (!process.env.JWT_SECRET) {
   console.error('FATAL: JWT_SECRET is not set. Refusing to start because every request would silently fail auth.')
@@ -29,8 +31,6 @@ app.use(cors({
     callback(new CorsRejectedError('Not allowed by CORS'))
   },
 }))
-app.use(express.json({ limit: '20mb' }))
-app.use(express.urlencoded({ limit: '20mb', extended: true }))
 
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -39,6 +39,15 @@ const generalLimiter = rateLimit({
   legacyHeaders: false,
 })
 app.use('/api', generalLimiter)
+
+// AI evidence assessment. Mounted before the global parser: its routes carry their own small body
+// limits and error handling, and none of its middleware may run for the older routes below.
+// Its routes accept the token from POST /api/auth/login (JWT_SECRET); without a usable secret they answer 503.
+const evidence = createEvidenceModule(process.env)
+app.use('/api', ...evidence.routers)
+
+app.use(express.json({ limit: '20mb' }))
+app.use(express.urlencoded({ limit: '20mb', extended: true }))
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -61,11 +70,8 @@ function sendError(res: express.Response, error: unknown) {
   if (error instanceof db.GuidelineHasAnswersError) {
     return res.status(409).json({ error: error.message })
   }
-  if (error instanceof db.ResultNotFoundError || error instanceof mapping.SuggestionNotFoundError || error instanceof mapping.MappingNotFoundError) {
+  if (error instanceof db.ResultNotFoundError) {
     return res.status(404).json({ error: error.message })
-  }
-  if (error instanceof mapping.MappingFailedError) {
-    return res.status(502).json({ error: error.message })
   }
   console.error(error)
   if (error && typeof error === 'object' && 'code' in error && 'details' in error) {
@@ -205,6 +211,8 @@ app.post('/api/projects/:id/activate', requireAuth, requireProjectAccess('id'), 
 app.delete('/api/projects/:id', requireAuth, requireRole('head_auditor'), requireProjectOwner('id'), async (req, res) => {
   try {
     await db.deleteProject(req.params.id)
+    // Best effort and never rejects, so the answer does not wait for it.
+    void evidence.removeProjectScreenshots(req.params.id)
     res.json({ success: true })
   } catch (error) {
     sendError(res, error)
@@ -304,6 +312,8 @@ app.post('/api/guidelines', requireAuth, requireRole('admin'), async (req, res) 
     }
     await db.createGuideline({ guideline, items })
     res.status(201).json({ success: true })
+
+    // Compare the new items with every other guideline in the background. The upload never waits for this or fails because of it.
     mapping.generateMappingsForGuideline(guideline.guidelineId, askGroq)
       .then((r) => console.log(`Mapped ${guideline.guidelineName}: ${r.suggested} suggested links`))
       .catch((err) => console.error('Auto mapping failed:', err))
@@ -640,7 +650,7 @@ You MUST return your output in JSON format matching this EXACT schema:
 {
   "items": [
     {
-      "id": "A unique string ID based on reference, e.g. ci_1_24_1",
+      "id": "A unique string ID based on reference",
       "category": "Category Name",
       "text": "Detailed check question...",
       "severity": "critical|major|minor",
@@ -881,7 +891,7 @@ async function askGroq(systemPrompt: string, userPrompt: string): Promise<any> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify({
-      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+      model: mapping.resolveMappingModel(process.env),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -895,88 +905,7 @@ async function askGroq(systemPrompt: string, userPrompt: string): Promise<any> {
   return JSON.parse(data.choices?.[0]?.message?.content || '{}')
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-app.post('/api/guidelines/:id/mappings/generate', requireAuth, requireRole('admin'), async (req, res) => {
-  try {
-    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: 'Guideline not found.' })
-    const result = await mapping.generateMappingsForGuideline(req.params.id, askGroq)
-    res.json(result)
-  } catch (error) {
-    sendError(res, error)
-  }
-})
-
-app.get('/api/mappings', requireAuth, requireRole('admin'), async (req, res) => {
-  try {
-    const guidelineId = typeof req.query.guidelineId === 'string' ? req.query.guidelineId : undefined
-    res.json(await mapping.fetchMappings(guidelineId))
-  } catch (error) {
-    sendError(res, error)
-  }
-})
-
-app.get('/api/mappings/coverage', requireAuth, async (req, res) => {
-  try {
-    res.json(await mapping.fetchCoverage())
-  } catch (error) {
-    sendError(res, error)
-  }
-})
-
-app.patch('/api/mappings/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  try {
-    const { status, relation } = req.body
-    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: 'Mapping not found.' })
-    if (!['suggested', 'confirmed', 'rejected'].includes(status)) {
-      return res.status(400).json({ error: 'status must be suggested, confirmed or rejected.' })
-    }
-    if (relation !== undefined && !['equivalent', 'partial'].includes(relation)) {
-      return res.status(400).json({ error: 'relation must be equivalent or partial.' })
-    }
-    await mapping.reviewMapping(req.params.id, status, relation, req.user!.userId)
-    res.json({ success: true })
-  } catch (error) {
-    sendError(res, error)
-  }
-})
-
-app.get('/api/projects/:id/suggestions', requireAuth, requireProjectAccess('id'), async (req, res) => {
-  try {
-    res.json(await mapping.fetchProjectSuggestions(req.params.id, req.user!.userId))
-  } catch (error) {
-    sendError(res, error)
-  }
-})
-
-const MAX_ACCEPT_ITEMS = 500
-
-app.post('/api/projects/:id/suggestions/accept', requireAuth, requireRole('auditor'), requireProjectAccess('id'), async (req, res) => {
-  try {
-    const { itemIds } = req.body
-    if (!Array.isArray(itemIds) || itemIds.length === 0 || itemIds.length > MAX_ACCEPT_ITEMS
-      || !itemIds.every((i) => typeof i === 'string' && UUID_RE.test(i))) {
-      return res.status(400).json({ error: `itemIds must be a list of 1 to ${MAX_ACCEPT_ITEMS} item ids.` })
-    }
-    const accepted = await mapping.acceptSuggestions(req.params.id, req.user!.userId, itemIds)
-    res.json({ accepted })
-  } catch (error) {
-    sendError(res, error)
-  }
-})
-
-app.post('/api/projects/:id/suggestions/dismiss', requireAuth, requireRole('auditor'), requireProjectAccess('id'), async (req, res) => {
-  try {
-    const { itemId, sourceItemId } = req.body
-    if (typeof itemId !== 'string' || typeof sourceItemId !== 'string') {
-      return res.status(400).json({ error: 'itemId and sourceItemId are required.' })
-    }
-    await mapping.dismissSuggestion(req.params.id, req.user!.userId, itemId, sourceItemId)
-    res.json({ success: true })
-  } catch (error) {
-    sendError(res, error)
-  }
-})
+app.use('/api', createMappingRouter({ ask: askGroq }))
 
 app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (res.headersSent) return next(err)
@@ -992,4 +921,5 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`)
+  evidence.start().catch((error) => console.error('Evidence module start-up failed:', error))
 })

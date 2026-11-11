@@ -193,6 +193,7 @@ export default function GuidelinesPage() {
         </motion.div>
       )}
 
+      {isAdmin && (
       <div className="mb-5 inline-flex rounded-lg border border-slate-200 bg-white p-1">
         {([['frameworks', 'Frameworks'], ['links', 'Linked items']] as const).map(([key, label]) => (
           <button
@@ -208,9 +209,10 @@ export default function GuidelinesPage() {
           </button>
         ))}
       </div>
+      )}
 
-      {view === 'links' ? (
-        <LinkedItemsPanel guidelines={activeGuidelines} isAdmin={isAdmin} />
+      {isAdmin && view === 'links' ? (
+        <LinkedItemsPanel guidelines={activeGuidelines} />
       ) : (
       <>
       <div className="mb-5 flex items-center gap-3 flex-wrap">

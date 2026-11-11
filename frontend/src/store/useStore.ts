@@ -151,6 +151,14 @@ interface StoreState {
 
   login: (userId: string, name: string, role: UserRole, token: string) => void
   logout: () => void
+  /** Puts an answer the server applied into `responses`. Null findings keep what is stored. */
+  applyServerAnswer: (
+    projectId: string,
+    itemId: string,
+    answer: { status: ChecklistItemStatus; findings: string | null },
+  ) => void
+  /** After an answer is stored (by setResponse or a decision): refresh the compliance map and move a draft project to in_progress. */
+  refreshAfterAnswer: (projectId: string) => Promise<void>
   register: (email: string, name: string, role: UserRole, password?: string) => Promise<void>
   initFromDb: () => Promise<void>
 
@@ -239,6 +247,38 @@ export const useStore = create<StoreState>()(
   },
 
   logout: () => set({ isAuthenticated: false, authToken: null, currentUserId: '', projects: [], responses: {}, allResponses: {}, resolutions: {}, checklistItems: [], complianceMap: {}, projectItemCounts: {}, dbError: null }),
+
+  applyServerAnswer: (projectId, itemId, answer) =>
+    set((state) => {
+      const key = rkey(projectId, itemId)
+      const { currentUserId } = state
+      const existingRows = state.allResponses[key] ?? []
+      const mine = existingRows.find((r) => r.auditorId === currentUserId)
+      const shown = state.responses[key]
+      // The server puts the result on every auditor's row of the item; the findings it returns are the deciding auditor's.
+      const base: AuditResponse | undefined = mine ?? (existingRows.length === 0 ? shown : undefined)
+      const myRow: AuditResponse = base
+        ? { ...base, status: answer.status, findings: answer.findings ?? base.findings }
+        : {
+            id: `r_${Date.now()}`,
+            projectId,
+            checklistItemId: itemId,
+            status: answer.status,
+            findings: answer.findings ?? undefined,
+            auditorId: currentUserId,
+            updatedAt: new Date().toISOString().split('T')[0],
+          }
+      const others = existingRows
+        .filter((r) => r.auditorId !== currentUserId)
+        .map((r) => ({ ...r, status: answer.status }))
+      // Mine first, so that it is the row shown when the dates tie.
+      const rows = [myRow, ...others]
+      const reconciled = reconcileResponse(rows, state.resolutions[key]?.status) ?? myRow
+      return {
+        allResponses: { ...state.allResponses, [key]: rows },
+        responses: { ...state.responses, [key]: reconciled },
+      }
+    }),
 
   register: async (email, name, role, password) => {
     const id = window.crypto.randomUUID()
@@ -619,31 +659,37 @@ export const useStore = create<StoreState>()(
     }
 
     try {
-      const myGen = (complianceRequestGen[projectId] ?? 0) + 1
-      complianceRequestGen[projectId] = myGen
-      const updated = await db.fetchProjectComplianceSummary([projectId])
-      if (updated[projectId] !== undefined && complianceRequestGen[projectId] === myGen) {
-        set((state) => ({
-          complianceMap: { ...state.complianceMap, [projectId]: updated[projectId].percentage },
-          projectItemCounts: {
-            ...state.projectItemCounts,
-            [projectId]: { answered: updated[projectId].answered, total: updated[projectId].total },
-          },
-        }))
-      }
-
-      const { projects } = get()
-      const proj = projects.find((p) => p.id === projectId)
-      if (proj?.status === 'draft') {
-        await db.activateProject(projectId)
-        set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id === projectId ? { ...p, status: 'in_progress' as AuditStatus } : p
-          ),
-        }))
-      }
+      await get().refreshAfterAnswer(projectId)
     } catch (err) {
       console.error('[setResponse] Answer saved, but refreshing the project summary failed:', err)
+    }
+  },
+
+  refreshAfterAnswer: async (projectId) => {
+    // Refresh the compliance summary; a newer request for the same project wins over an older one.
+    const myGen = (complianceRequestGen[projectId] ?? 0) + 1
+    complianceRequestGen[projectId] = myGen
+    const updated = await db.fetchProjectComplianceSummary([projectId])
+    if (updated[projectId] !== undefined && complianceRequestGen[projectId] === myGen) {
+      set((state) => ({
+        complianceMap: { ...state.complianceMap, [projectId]: updated[projectId].percentage },
+        projectItemCounts: {
+          ...state.projectItemCounts,
+          [projectId]: { answered: updated[projectId].answered, total: updated[projectId].total },
+        },
+      }))
+    }
+
+    // Auto-advance project from draft → in_progress the moment the first response is saved
+    const { projects } = get()
+    const proj = projects.find((p) => p.id === projectId)
+    if (proj?.status === 'draft') {
+      await db.activateProject(projectId)
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === projectId ? { ...p, status: 'in_progress' as AuditStatus } : p
+        ),
+      }))
     }
   },
 

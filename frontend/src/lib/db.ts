@@ -1,7 +1,7 @@
 import type { AuditStatus, ChecklistItemStatus, Platform, Severity, SubmissionStatus, UserRole } from '../types'
 import { useStore } from '../store/useStore'
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
+export const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api'
 
 export interface DbProject {
   projectId: string
@@ -143,6 +143,8 @@ export async function login(email: string, hashedPassword: string): Promise<{
     body: JSON.stringify({ email, password: hashedPassword }),
   })
 }
+
+// ─── Projects ─────────────────────────────────────────────────────────────────
 
 export async function fetchUserProjects(_userId: string): Promise<DbProject[]> {
   return request<DbProject[]>('/projects')
@@ -498,6 +500,7 @@ export interface MappedItem {
   clause: string | null
 }
 
+/** A pair of similar checklist items from two guidelines, with the AI's confidence and the admin's decision. */
 export interface ItemMapping {
   mappingId: string
   relation: MappingRelation
@@ -510,11 +513,16 @@ export interface ItemMapping {
   itemB: MappedItem
 }
 
-export interface MappingCoverage {
-  guidelines: { guidelineId: string; name: string; totalItems: number; linkedItems: number }[]
-  pairs: { guidelineA: string; guidelineB: string; count: number }[]
-  mappings: Record<MappingStatus, number>
-  decisions: { accepted: number; dismissed: number }
+/** An admin-approved pair whose two items are both in one project. */
+export interface SimilarPair {
+  mappingId: string
+  relation: MappingRelation
+  confidence: number | null
+  rationale: string | null
+  projectItemIdA: string
+  projectItemIdB: string
+  itemA: MappedItem
+  itemB: MappedItem
 }
 
 export interface AnswerSuggestion {
@@ -527,6 +535,7 @@ export interface AnswerSuggestion {
   sourceGuideline: string
   sourceItemId: string
   sourceItemCode: string | null
+  sourceItemText: string | null
   findings: string | null
   evidenceCount: number
   answeredAt: string
@@ -549,8 +558,8 @@ export async function reviewMapping(mappingId: string, status: MappingStatus, re
   })
 }
 
-export async function fetchMappingCoverage(): Promise<MappingCoverage> {
-  return request<MappingCoverage>('/mappings/coverage')
+export async function fetchSimilarItems(projectId: string): Promise<SimilarPair[]> {
+  return request<SimilarPair[]>(`/projects/${projectId}/similar-items`)
 }
 
 export async function fetchAnswerSuggestions(projectId: string): Promise<AnswerSuggestion[]> {

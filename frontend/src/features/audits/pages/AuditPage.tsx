@@ -38,6 +38,18 @@ import StatusBadge from '../../audits/components/StatusBadge'
 import SeverityBadge from '../../audits/components/SeverityBadge'
 import AuditorAvatar from '../../../components/ui/AuditorAvatar'
 import ScoreRing from '../../audits/components/ScoreRing'
+import { useEvidence } from '../../evidence/useEvidence'
+import EvidencePanel from '../../evidence/components/EvidencePanel'
+import ItemSuggestion from '../../evidence/components/ItemSuggestion'
+import SimilarItemsNotice from '../components/SimilarItemsNotice'
+import OverrideDialog from '../../evidence/components/OverrideDialog'
+import FlaggedFilterToggle from '../../evidence/components/FlaggedFilterToggle'
+import ProvenanceBadge from '../../evidence/components/ProvenanceBadge'
+import { categoryKey, flaggedCountsByCategory, isFlagged } from '../../evidence/state'
+import { pageUpdateAfterDecision } from '../../evidence/decidedAnswer'
+import type { AppliedAnswer } from '../../evidence/types'
+import { useResponseFlow } from '../../evidence/useResponseFlow'
+import { textOnBlur } from '../textOnBlur'
 import ChecklistItemDetailModal from '../../audits/components/ChecklistItemDetailModal'
 import Button from '../../../components/ui/Button'
 import Modal from '../../../components/ui/Modal'
@@ -142,6 +154,7 @@ function AuditPageContent() {
   const isHeadAuditor = currentUser?.role === 'head_auditor'
   const isAuditor = currentUser?.role === 'auditor'
   const isAdmin = currentUser?.role === 'admin'
+  const aiEvidence = useEvidence(id ?? '', { enabled: Boolean(id) && (isAuditor || isHeadAuditor) })
 
   const projectGuidelines = useMemo(
     () => guidelines.filter((g) => project?.guidelineIds.includes(g.id)),
@@ -398,6 +411,15 @@ function AuditPageContent() {
     () => checklistItems.filter((ci) => responses[`${id}__${ci.id}`]?.status === 'needs_review'),
     [checklistItems, responses, id],
   )
+  const [onlyFlaggedByAi, setOnlyFlaggedByAi] = useState(false)
+  const flaggedByAiCounts = useMemo(
+    () => flaggedCountsByCategory(aiEvidence.suggestionsByItem.values(), checklistItems),
+    [aiEvidence.suggestionsByItem, checklistItems],
+  )
+  const flaggedByAiIn = (guidelineId: string, category: string) => flaggedByAiCounts.get(categoryKey(guidelineId, category)) ?? 0
+  const hasSuggestions = aiEvidence.suggestionsByItem.size > 0
+  // The AI-review filter only narrows what is listed; scores, progress and Submit do not use it
+  const filteringByAi = onlyFlaggedByAi && hasSuggestions
   const [showFlaggedList, setShowFlaggedList] = useState(false)
   const [flaggedNavTarget, setFlaggedNavTarget] = useState<{ itemId: string; guidelineId: string; category: string } | null>(null)
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null)
@@ -405,6 +427,7 @@ function AuditPageContent() {
 
   function goToItem(item: ChecklistItem) {
     setShowFlaggedList(false)
+    setOnlyFlaggedByAi(false) // the target may not be one the AI flagged
     setActiveTab('checklist')
     setFlaggedNavTarget({ itemId: item.id, guidelineId: item.guidelineId, category: item.category })
     if (item.guidelineId !== activeGuidelineTab) {
@@ -550,6 +573,15 @@ function AuditPageContent() {
     try {
       const accepted = await acceptAnswerSuggestions(id, itemIds)
       applyAcceptedAnswers(accepted)
+      if (accepted.length > 0) {
+        try {
+          // Same as any saved answer: refresh the score and move a draft project to in progress.
+          await useStore.getState().refreshAfterAnswer(id)
+        } catch (err) {
+          // The answers are saved; only the score and project status are stale until the next load.
+          console.error('[AuditPage] Could not refresh compliance after reusing answers:', err)
+        }
+      }
       if (accepted.length < itemIds.length) {
         setSuggestionError(accepted.length === 0
           ? 'Nothing was reused. Those items already have an answer.'
@@ -577,6 +609,58 @@ function AuditPageContent() {
     } finally {
       setSuggestionBusy(null)
     }
+  }
+
+  // Accept / override of AI suggestions (card and answer buttons). Only an auditor decides, and not on a locked audit.
+  const auditLocked = project?.submissionStatus === 'pending_review' || project?.submissionStatus === 'approved'
+  // Blur saves still running: a decision waits for them, so none lands after it and brings the old answer back.
+  const pendingSaves = useRef(new Set<Promise<unknown>>())
+  function trackSave<T>(save: Promise<T>): Promise<T> {
+    pendingSaves.current.add(save)
+    const forget = () => { pendingSaves.current.delete(save) }
+    save.then(forget, forget)
+    return save
+  }
+  const responseFlow = useResponseFlow({
+    projectId: id ?? '',
+    canDecide: isAuditor && !auditLocked,
+    evidence: aiEvidence,
+    getUnsavedFindings: (itemId) => {
+      const typed = findingsValues[itemId]
+      return typed !== undefined && typed !== (responses[`${id}__${itemId}`]?.findings ?? '') ? typed : undefined
+    },
+    getUnsavedNotes: (itemId) => {
+      const typed = noteValues[itemId]
+      // The notes box shows this auditor's own row.
+      const mine = (allResponses[`${id}__${itemId}`] ?? []).find((r) => r.auditorId === currentUserId)
+      return typed !== undefined && typed !== (mine?.notes ?? '') ? typed : undefined
+    },
+    settleSaves: async () => { await Promise.allSettled([...pendingSaves.current]) },
+    onDecided: handleDecided,
+  })
+
+  // The store, compliance and evidence panel are updated by the flow; this is the page's own state.
+  /** Answer buttons are off on a locked audit, and while a decision for the item is posting. */
+  function answersDisabled(itemId: string): boolean {
+    return auditLocked || responseFlow.isBusy(itemId)
+  }
+
+  function handleDecided(itemId: string, answer: AppliedAnswer, decision: 'accepted' | 'overridden') {
+    const update = pageUpdateAfterDecision(answer, decision)
+    const { findings, images } = update
+    if (findings !== undefined) setFindingsValues((prev) => ({ ...prev, [itemId]: findings }))
+    // Photos are shown per auditor, so read the item's rows back instead of using the merged list the server returned.
+    if (images !== undefined) reloadItemEvidence(itemId)
+  }
+
+  function reloadItemEvidence(itemId: string) {
+    if (!id) return
+    fetchEvidenceForItems(id, [itemId]).then((rows) => {
+      setEvidence((prev) => ({
+        ...prev,
+        [itemId]: rows.filter((row) => row.itemId === itemId).flatMap((row) => row.images.map((img) => ({ auditorId: row.userId, ...img }))),
+      }))
+    }).catch(() => setEvidenceError("Couldn't reload the photos for this item."))
   }
 
   function handleImageClick(itemId: string) {
@@ -685,7 +769,13 @@ function AuditPageContent() {
 
   const headAuditor = users.find((u) => u.id === project.headAuditorId)
   const auditors = project.auditorIds.map((uid) => users.find((u) => u.id === uid)).filter(Boolean) as typeof users
-  const categoryItems = guidelineItems.filter((ci) => ci.category === selectedCategory)
+  const itemsInCategory = guidelineItems.filter((ci) => ci.category === selectedCategory)
+  const categoryItems = filteringByAi
+    ? itemsInCategory.filter((ci) => {
+        const suggestion = aiEvidence.suggestionsByItem.get(ci.id)
+        return suggestion !== undefined && isFlagged(suggestion)
+      })
+    : itemsInCategory
 
   const projectOriginalGuidelineIds = (project.guidelineIds ?? []).map((gid) => {
     const g = guidelines.find((x) => x.id === gid)
@@ -718,6 +808,7 @@ function AuditPageContent() {
 
   async function handleResponseClick(itemId: string, guidelineId: string, status: ChecklistItemStatus) {
     if (answersLocked) return
+    if (await responseFlow.handleClick(itemId, status)) return
     const current = getMyResponse(itemId)
     const notes = noteValues[itemId] ?? current?.notes ?? ''
     setResponseError(null)
@@ -747,13 +838,13 @@ function AuditPageContent() {
   async function handleNotesBlur(itemId: string, guidelineId: string) {
     if (answersLocked) return
     const current = getMyResponse(itemId)
-    const notes = noteValues[itemId] ?? ''
+    const notes = textOnBlur(noteValues[itemId], current?.notes)
     if (!current || current.status === 'not_started') return
     const key = `${itemId}__notes`
     setFieldSaveState((prev) => ({ ...prev, [key]: 'saving' }))
     setFieldSaveError((prev) => ({ ...prev, [key]: '' }))
     try {
-      await setResponse(id!, itemId, guidelineId, current.status, notes)
+      await trackSave(setResponse(id!, itemId, guidelineId, current.status, notes))
       markSaved(key)
     } catch {
       setFieldSaveState((prev) => ({ ...prev, [key]: 'error' }))
@@ -763,12 +854,12 @@ function AuditPageContent() {
 
   async function handleFindingsBlur(itemId: string) {
     if (answersLocked) return
-    const findings = findingsValues[itemId] ?? ''
+    const findings = textOnBlur(findingsValues[itemId], getMyResponse(itemId)?.findings)
     const key = `${itemId}__findings`
     setFieldSaveState((prev) => ({ ...prev, [key]: 'saving' }))
     setFieldSaveError((prev) => ({ ...prev, [key]: '' }))
     try {
-      await saveFindings(id!, itemId, findings)
+      await trackSave(saveFindings(id!, itemId, findings))
       markSaved(key)
     } catch {
       setFieldSaveState((prev) => ({ ...prev, [key]: 'error' }))
@@ -1210,6 +1301,10 @@ helpText: newItemHelp.trim() || undefined,
 
         </div>
 
+        {(isHeadAuditor || isAuditor) && project && id && (
+          <SimilarItemsNotice projectId={id} />
+        )}
+
         {loadError && (
           <div role="alert" className="mt-3 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700">
             <WarningCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
@@ -1376,6 +1471,17 @@ helpText: newItemHelp.trim() || undefined,
         )}
       </AnimatePresence>
 
+      {responseFlow.dialogProps && <OverrideDialog {...responseFlow.dialogProps} />}
+
+      <EvidencePanel
+        projectId={project.id}
+        role={currentUser?.role ?? 'admin'}
+        evidence={aiEvidence}
+        locked={project.submissionStatus === 'pending_review' || project.submissionStatus === 'approved'}
+        checklistItems={checklistItems}
+      />
+
+      {/* Tab bar (head auditor: Checklist / Guidelines / Scope) */}
       {isHeadAuditor && (
         <div className="flex items-center gap-0 border-b border-slate-200 bg-white px-3 md:px-8 overflow-x-auto scrollbar-none">
           {[
@@ -1584,9 +1690,10 @@ helpText: newItemHelp.trim() || undefined,
                 <optgroup key={section.sectionName} label={`${sIdx + 1}. ${section.sectionName}`}>
                   {section.subcategories.map((sub, subIdx) => {
                     const cs = sub.catScore
+                    const flaggedByAi = flaggedByAiIn(sub.guidelineId, sub.originalCategory)
                     return (
                       <option key={sub.originalCategory} value={sub.originalCategory}>
-                        {sIdx + 1}.{subIdx + 1} {sub.subcategoryName}{!sub.enabled && isHeadAuditor ? ' (Deactivated)' : cs.applicable > 0 ? ` (${cs.percentage.toFixed(0)}%)` : ''}
+                        {sIdx + 1}.{subIdx + 1} {sub.subcategoryName}{!sub.enabled && isHeadAuditor ? ' (Deactivated)' : cs.applicable > 0 ? ` (${cs.percentage.toFixed(0)}%)` : ''}{flaggedByAi > 0 ? ` (${flaggedByAi} flagged by AI)` : ''}
                       </option>
                     )
                   })}
@@ -1636,6 +1743,7 @@ helpText: newItemHelp.trim() || undefined,
                         <ul className="pl-2 space-y-1 border-l border-slate-200 ml-1.5 list-none">
                           {section.subcategories.map((sub, subIdx) => {
                             const active = sub.originalCategory === selectedCategory
+                            const flaggedByAi = flaggedByAiIn(sub.guidelineId, sub.originalCategory)
                             const completionPct = sub.catScore.total > 0
                               ? (sub.catScore.answered / sub.catScore.total) * 100
                               : 0
@@ -1683,7 +1791,15 @@ helpText: newItemHelp.trim() || undefined,
                                   <button type="button" onClick={() => setSelectedCategory(sub.originalCategory)}
                                     aria-current={active ? 'true' : undefined}
                                     className={['flex-1 text-left py-2 pr-2.5 text-slate-600 rounded-lg focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-600', isHeadAuditor ? 'pl-1' : 'pl-2.5', !sub.enabled && isHeadAuditor ? 'opacity-50' : ''].join(' ')}>
-                                    <p className={`text-xs leading-tight mb-0.5 ${active ? 'text-slate-800 font-semibold' : 'text-slate-600 font-medium'}`}>{sIdx + 1}.{subIdx + 1} {sub.subcategoryName}</p>
+                                    <div className="flex items-center justify-between mb-0.5">
+                                      <p className={`text-xs leading-tight ${active ? 'text-slate-800 font-semibold' : 'text-slate-600 font-medium'}`}>{sIdx + 1}.{subIdx + 1} {sub.subcategoryName}</p>
+                                      {flaggedByAi > 0 && (
+                                        <span aria-label={`${flaggedByAi} flagged by AI`} title="Suggestions needing human review"
+                                          className="ml-auto mr-1 rounded-full bg-blue-50 px-1.5 text-[10px] font-medium text-blue-700 tabular-nums">
+                                          {flaggedByAi}
+                                        </span>
+                                      )}
+                                    </div>
                                     {sub.enabled && (
                                       <div className="flex items-center gap-1.5">
                                         <div className="relative h-0.5 flex-1 bg-slate-100 rounded-full overflow-hidden">
@@ -1725,7 +1841,8 @@ helpText: newItemHelp.trim() || undefined,
                         : 'Select a category'}
                     </h2>
                     <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-xs text-slate-400 font-sans tabular-nums">{categoryItems.length} item{categoryItems.length !== 1 ? 's' : ''}</span>
+                      {hasSuggestions && <FlaggedFilterToggle active={filteringByAi} onToggle={() => setOnlyFlaggedByAi((on) => !on)} />}
+                      <span className="text-xs text-slate-400 font-sans tabular-nums">{itemsInCategory.length} item{itemsInCategory.length !== 1 ? 's' : ''}</span>
                       {isHeadAuditor && !answersLocked && selectedCategory && (
                         <Button variant="primary" size="xs" onClick={() => { setAddItemError(null); setShowAddItemModal(true) }}>
                           <Plus size={12} weight="bold" /> Add Item
@@ -1796,6 +1913,12 @@ helpText: newItemHelp.trim() || undefined,
                     <Button variant="secondary" size="sm" className="mt-3 mx-auto" onClick={() => reload()}>
                       Retry
                     </Button>
+                  </div>
+                ) : categoryItems.length === 0 && filteringByAi && itemsInCategory.length > 0 ? (
+                  <div className="py-12 text-center">
+                    <p className="text-slate-500 text-sm">No flagged suggestions in this category.</p>
+                    <button type="button" onClick={() => setOnlyFlaggedByAi(false)}
+                      className="mt-2 text-xs font-medium text-blue-600 hover:text-blue-700">Show all items</button>
                   </div>
                 ) : categoryItems.length === 0 ? (
                   <div className="py-12 text-center">
@@ -1979,6 +2102,16 @@ helpText: newItemHelp.trim() || undefined,
                             </div>
                           )}
 
+                          {!isEditing && (
+                            <ItemSuggestion
+                              itemId={ci.id}
+                              flow={responseFlow}
+                              suggestion={aiEvidence.suggestionsByItem.get(ci.id)}
+                              decision={aiEvidence.decisionsByItem.get(ci.id) ?? null}
+                              currentStatus={resp?.status}
+                            />
+                          )}
+
                           {suggestionsEnabled && !isEditing && suggestedIds.has(ci.id) && (() => {
                             const s = suggestions[ci.id]
                             const exact = s.relation === 'equivalent'
@@ -1998,6 +2131,9 @@ helpText: newItemHelp.trim() || undefined,
                                       {s.evidenceCount > 0 && ` · ${s.evidenceCount} photo${s.evidenceCount > 1 ? 's' : ''}`}
                                       {s.otherSources > 0 && ` · ${s.otherSources} more audit${s.otherSources > 1 ? 's' : ''}`}
                                     </p>
+                                    {s.sourceItemText && (
+                                      <p className="text-xs text-slate-600 mt-1.5 line-clamp-3 break-words">Earlier item: {s.sourceItemText}</p>
+                                    )}
                                     {s.findings && (
                                       <p className="text-xs text-slate-600 mt-1.5 line-clamp-2 italic break-words">"{s.findings}"</p>
                                     )}
@@ -2031,12 +2167,12 @@ helpText: newItemHelp.trim() || undefined,
                                   const isActive = currentStatus === value
                                   return (
                                     <motion.button key={value} type="button" whileTap={{ scale: 0.97 }}
-                                      disabled={answersLocked}
+                                      disabled={answersDisabled(ci.id)}
                                       aria-pressed={isActive}
                                       onClick={() => handleResponseClick(ci.id, ci.guidelineId, value)}
                                       className={['flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold ring-1 transition-all',
                                         'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600',
-                                        isActive ? `${active} shadow-sm` : inactive, answersLocked ? 'opacity-50 cursor-not-allowed' : ''].join(' ')}>
+                                        isActive ? `${active} shadow-sm` : inactive, answersDisabled(ci.id) ? 'opacity-50 cursor-not-allowed' : ''].join(' ')}>
                                       <Icon size={15} weight={isActive ? 'fill' : 'regular'} /> {label}
                                     </motion.button>
                                   )
@@ -2044,7 +2180,7 @@ helpText: newItemHelp.trim() || undefined,
                               </div>
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <motion.button type="button" whileTap={{ scale: 0.97 }}
-                                  disabled={answersLocked}
+                                  disabled={answersDisabled(ci.id)}
                                   aria-pressed={currentStatus === 'needs_review'}
                                   onClick={() => handleResponseClick(ci.id, ci.guidelineId, 'needs_review')}
                                   className={['flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors',
@@ -2052,7 +2188,7 @@ helpText: newItemHelp.trim() || undefined,
                                     currentStatus === 'needs_review'
                                       ? 'bg-amber-500 text-white'
                                       : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50',
-                                    answersLocked ? 'opacity-50 cursor-not-allowed' : '',
+                                    answersDisabled(ci.id) ? 'opacity-50 cursor-not-allowed' : '',
                                   ].join(' ')}>
                                   <Flag size={13} weight={currentStatus === 'needs_review' ? 'fill' : 'regular'} /> Flag
                                 </motion.button>
@@ -2136,6 +2272,7 @@ helpText: newItemHelp.trim() || undefined,
                                 {groupStatus === 'needs_review' && <Flag size={12} weight="fill" />}
                                 {STATUS_LABELS[groupStatus]}
                               </span>
+                              <ProvenanceBadge decision={aiEvidence.decisionsByItem.get(ci.id) ?? null} currentStatus={groupStatus} />
                             </div>
                           )}
 
@@ -2152,7 +2289,7 @@ helpText: newItemHelp.trim() || undefined,
                                 value={findingsValues[ci.id] ?? getResponse(ci.id)?.findings ?? ''}
                                 onChange={(e) => setFindingsValues((prev) => ({ ...prev, [ci.id]: e.target.value }))}
                                 onBlur={isAuditor ? () => handleFindingsBlur(ci.id) : undefined}
-                                readOnly={answersLocked || !isAuditor}
+                                readOnly={answersLocked || !isAuditor || responseFlow.isBusy(ci.id)}
                                 placeholder={isAuditor ? 'Describe what you observed on the platform…' : 'No findings recorded.'}
                                 rows={2}
                                 className={['w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600', answersLocked || !isAuditor ? 'opacity-70' : ''].join(' ')}
@@ -2178,7 +2315,7 @@ helpText: newItemHelp.trim() || undefined,
                                   <textarea id={`notes-${ci.id}`} value={currentNotes}
                                     onChange={(e) => setNoteValues((prev) => ({ ...prev, [ci.id]: e.target.value }))}
                                     onBlur={() => handleNotesBlur(ci.id, ci.guidelineId)}
-                                    readOnly={answersLocked}
+                                    readOnly={answersLocked || responseFlow.isBusy(ci.id)}
                                     placeholder="Record evidence references or remediation notes…" rows={2}
                                     className={['w-full text-sm text-slate-700 placeholder:text-slate-300 bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-transparent leading-relaxed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600', answersLocked ? 'opacity-70 cursor-not-allowed' : ''].join(' ')} />
                                   {fieldSaveError[`${ci.id}__notes`] && (

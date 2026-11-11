@@ -1,0 +1,486 @@
+import { randomUUID } from 'node:crypto'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { PROMPT_VERSION, SUPABASE_READ_PAGE_SIZE } from './config.js'
+import type {
+  EvidencePermission,
+  EvidenceRepository,
+  EvidenceSource,
+  NewDecision,
+  NewPage,
+  NewPassage,
+  NewRun,
+  NewSuggestion,
+  RunPatch,
+  ScreenshotStore,
+} from './repository.js'
+import type {
+  CapturedPage,
+  Decision,
+  EvidenceRun,
+  PageSummary,
+  Passage,
+  Suggestion,
+  SuggestionQuote,
+} from './types.js'
+import { dbCall, dbInsert } from './supabaseRetry.js'
+
+const BUCKET = 'evidence-screenshots'
+const ACTIVE = ['queued', 'capturing', 'assessing']
+const RESULT = ['completed', 'partial']
+const LIST_PAGE_SIZE = 100
+const PAGE_SUMMARY_COLUMNS = 'id, url, finalUrl, httpStatus, accessStatus, accessDetail, title, screenshotPath, capturedAt'
+const REMOVE_CHUNK = 100
+
+interface DbResult<T> {
+  data: T | null
+  error: { message: string; code?: string } | null
+}
+
+/** Postgres: invalid text representation, as when an id that is not a uuid is compared with a uuid column. */
+const INVALID_TEXT_REPRESENTATION = '22P02'
+
+/** Like unwrap, for a read by id: an id Postgres cannot cast cannot match a row, so it is no row. */
+function unwrapById<T>(op: string, res: DbResult<T>): T | null {
+  if (res.error?.code === INVALID_TEXT_REPRESENTATION) return null
+  return unwrap(op, res)
+}
+
+/** Throws with the operation name when Supabase reports an error. */
+function unwrap<T>(op: string, res: DbResult<T>): T | null {
+  if (res.error) throw new Error(`${op}: ${res.error.message}`)
+  return res.data
+}
+
+function required<T>(op: string, res: DbResult<T>): NonNullable<T> {
+  const data = unwrap(op, res)
+  if (data === null || data === undefined) throw new Error(`${op}: no row returned`)
+  return data as NonNullable<T>
+}
+
+// Rows use the same camelCase names as our types; only nullable columns need mapping.
+type Row = Record<string, any>
+
+/**
+ * Every row of a read, one page at a time, because PostgREST quietly stops at its row cap. The read
+ * must have a total order, or a row can fall between two pages. A page that fails fails the whole read.
+ */
+async function readAllRows(op: string, readPage: (from: number, to: number) => PromiseLike<DbResult<Row[]>>): Promise<Row[]> {
+  const rows: Row[] = []
+  for (let from = 0; ; from += SUPABASE_READ_PAGE_SIZE) {
+    const page = unwrap(op, await readPage(from, from + SUPABASE_READ_PAGE_SIZE - 1)) ?? []
+    rows.push(...page)
+    if (page.length < SUPABASE_READ_PAGE_SIZE) return rows
+  }
+}
+
+const byId = (a: Row, b: Row): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+
+function toRun(row: Row): EvidenceRun {
+  return {
+    ...(row as EvidenceRun),
+    capturedInRunId: row.capturedInRunId ?? row.id,
+    promptVersion: row.promptVersion ?? '',
+    unassessedCategories: row.unassessedCategories ?? [],
+    source: row.source ?? 'pages',
+    checkedItemIds: row.checkedItemIds ?? [],
+    uncheckedItemIds: row.uncheckedItemIds ?? [],
+    currentItemId: row.currentItemId ?? null,
+    currentStep: row.currentStep ?? 0,
+  }
+}
+
+function toQuote(row: Row): SuggestionQuote {
+  return {
+    id: row.id,
+    passageId: row.passageId ?? null,
+    pageId: row.pageId ?? null,
+    quoteText: row.quoteText,
+    verified: row.verified,
+    highlightScreenshotPath: row.highlightScreenshotPath ?? null,
+  }
+}
+
+function toSuggestion(row: Row, quotes: Row[]): Suggestion {
+  return {
+    id: row.id,
+    runId: row.runId,
+    projectId: row.projectId,
+    itemId: row.itemId,
+    suggestedResult: row.suggestedResult ?? null,
+    reason: row.reason,
+    confidence: row.confidence,
+    flags: row.flags ?? [],
+    passageIdsSent: row.passageIdsSent ?? [],
+    originSuggestionId: row.originSuggestionId ?? null,
+    source: row.source ?? 'pages',
+    quotes: quotes.map(toQuote),
+  }
+}
+
+function toPassage(row: Row): Passage {
+  return { id: row.id, pageId: row.pageId, position: row.position, kind: row.kind, text: row.text }
+}
+
+export function createSupabaseRepository(admin: SupabaseClient): EvidenceRepository {
+  async function latestWhere(
+    op: string,
+    projectId: string,
+    statuses?: string[],
+  ): Promise<EvidenceRun | null> {
+    let q = admin.from('Evidence_Run').select('*').eq('projectId', projectId)
+    if (statuses) q = q.in('status', statuses)
+    const row = unwrap(op, await q.order('createdAt', { ascending: false }).limit(1).maybeSingle())
+    return row ? toRun(row) : null
+  }
+
+  async function quotesFor(op: string, suggestionIds: string[]): Promise<Row[]> {
+    if (suggestionIds.length === 0) return []
+    return readAllRows(op, (from, to) =>
+      admin.from('AI_Suggestion_Quote').select('*').in('suggestionId', suggestionIds).order('id').range(from, to),
+    )
+  }
+
+  return {
+    async saveSource(projectId, startUrls, userId) {
+      const row = required(
+        'saveSource',
+        await admin
+          .from('Evidence_Source')
+          .insert({ projectId, startUrls, createdBy: userId })
+          .select('*')
+          .single(),
+      )
+      return row as EvidenceSource
+    },
+    async getSource(projectId) {
+      const row = unwrap(
+        'getSource',
+        await admin
+          .from('Evidence_Source')
+          .select('*')
+          .eq('projectId', projectId)
+          .order('createdAt', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      )
+      return (row as EvidenceSource | null) ?? null
+    },
+
+    async getPermission(projectId) {
+      const row = unwrap(
+        'getPermission',
+        await admin
+          .from('Evidence_Permission')
+          .select('*')
+          .eq('projectId', projectId)
+          .order('recordedAt', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      )
+      return (row as EvidencePermission | null) ?? null
+    },
+    async setPermission(projectId, granted, note, userId) {
+      const row = required(
+        'setPermission',
+        await admin
+          .from('Evidence_Permission')
+          .insert({ projectId, granted, note, recordedBy: userId })
+          .select('*')
+          .single(),
+      )
+      return row as EvidencePermission
+    },
+
+    async createRun(input: NewRun) {
+      const id = randomUUID()
+      const run = {
+        id,
+        projectId: input.projectId,
+        startedBy: input.startedBy,
+        scope: input.scope,
+        capturedInRunId: input.capturedInRunId ?? id,
+        categoriesTotal: input.categoriesTotal ?? 0,
+        pagesTotal: input.pagesTotal ?? 0,
+        promptVersion: input.promptVersion ?? PROMPT_VERSION,
+        source: input.source ?? 'pages',
+        checkedItemIds: input.checkedItemIds ?? [],
+      }
+      const row = required(
+        'createRun',
+        await dbInsert(
+          'createRun',
+          () => admin.from('Evidence_Run').insert(run).select('*').single(),
+          () => admin.from('Evidence_Run').select('*').eq('id', id).single(),
+        ),
+      )
+      return toRun(row)
+    },
+    async updateRun(id, patch: RunPatch) {
+      const row = required(
+        'updateRun',
+        await dbCall('updateRun', () => admin.from('Evidence_Run').update(patch).eq('id', id).select('*').single()),
+      )
+      return toRun(row)
+    },
+    async getRun(id) {
+      const row = unwrapById('getRun', await admin.from('Evidence_Run').select('*').eq('id', id).maybeSingle())
+      return row ? toRun(row) : null
+    },
+    latestRun: (projectId) => latestWhere('latestRun', projectId),
+    latestResultRun: (projectId) => latestWhere('latestResultRun', projectId, RESULT),
+    async countRunsSince(projectId, iso) {
+      const res = await admin
+        .from('Evidence_Run')
+        .select('id', { count: 'exact', head: true })
+        .eq('projectId', projectId)
+        .gte('createdAt', iso)
+      if (res.error) throw new Error(`countRunsSince: ${res.error.message}`)
+      return res.count ?? 0
+    },
+    activeRun: (projectId) => latestWhere('activeRun', projectId, ACTIVE),
+    async markInterruptedRuns() {
+      const rows = unwrap(
+        'markInterruptedRuns',
+        await dbCall('markInterruptedRuns', () =>
+          admin
+            .from('Evidence_Run')
+            .update({ status: 'failed', error: 'server restarted', finishedAt: new Date().toISOString() })
+            .in('status', ACTIVE)
+            .select('id'),
+        ),
+      )
+      return rows?.length ?? 0
+    },
+
+    async addPage(runId, page: NewPage) {
+      const id = randomUUID()
+      const row = required(
+        'addPage',
+        await dbInsert(
+          'addPage',
+          () => admin.from('Evidence_Page').insert({ ...page, id, runId }).select('*').single(),
+          () => admin.from('Evidence_Page').select('*').eq('id', id).single(),
+        ),
+      )
+      return row as CapturedPage
+    },
+    async listPages(capturedInRunId) {
+      const rows = unwrap(
+        'listPages',
+        await admin
+          .from('Evidence_Page')
+          .select('*')
+          .eq('runId', capturedInRunId)
+          .order('capturedAt', { ascending: true }),
+      )
+      return (rows ?? []) as CapturedPage[]
+    },
+    async listPageSummaries(capturedInRunId) {
+      const rows = unwrap(
+        'listPageSummaries',
+        await admin
+          .from('Evidence_Page')
+          .select(PAGE_SUMMARY_COLUMNS)
+          .eq('runId', capturedInRunId)
+          .order('capturedAt', { ascending: true }),
+      )
+      return (rows ?? []) as PageSummary[]
+    },
+    async getPage(id) {
+      const row = unwrapById('getPage', await admin.from('Evidence_Page').select('*').eq('id', id).maybeSingle())
+      return (row as CapturedPage | null) ?? null
+    },
+
+    async addPassages(pageId, passages: NewPassage[]) {
+      if (passages.length === 0) return []
+      const toInsert = passages.map((p) => ({ id: randomUUID(), pageId, position: p.position, kind: p.kind, text: p.text }))
+      const ids = toInsert.map((p) => p.id)
+      const rows = required(
+        'addPassages',
+        await dbInsert(
+          'addPassages',
+          () => admin.from('Evidence_Passage').insert(toInsert).select('id, pageId, position, kind, text'),
+          () => admin.from('Evidence_Passage').select('id, pageId, position, kind, text').in('id', ids),
+        ),
+      )
+      return rows.map(toPassage).sort((a, b) => a.position - b.position)
+    },
+    async listPassagesOfPages(pageIds) {
+      if (pageIds.length === 0) return []
+      const rows = await readAllRows('listPassagesOfPages', (from, to) =>
+        admin
+          .from('Evidence_Passage')
+          .select('id, pageId, position, kind, text')
+          .in('pageId', pageIds)
+          .order('pageId')
+          .order('position')
+          .range(from, to),
+      )
+      const rank = new Map(pageIds.map((id, i) => [id, i]))
+      return rows
+        .map(toPassage)
+        .sort((a, b) => (rank.get(a.pageId) ?? 0) - (rank.get(b.pageId) ?? 0) || a.position - b.position)
+    },
+    async getPageSummaries(ids) {
+      if (ids.length === 0) return []
+      const rows = unwrap('getPageSummaries', await admin.from('Evidence_Page').select(PAGE_SUMMARY_COLUMNS).in('id', ids))
+      return (rows ?? []) as PageSummary[]
+    },
+    async searchPassages(capturedInRunId, query, limit) {
+      const rows = unwrap(
+        'searchPassages',
+        await dbCall('searchPassages', () =>
+          admin.rpc('search_evidence_passages', {
+            p_run_id: capturedInRunId,
+            p_query: query,
+            p_limit: limit,
+          }),
+        ),
+      )
+      return ((rows ?? []) as Row[]).map(toPassage)
+    },
+
+    async addSuggestion(input: NewSuggestion) {
+      const id = randomUUID()
+      const suggestion = {
+        id,
+        runId: input.runId,
+        projectId: input.projectId,
+        itemId: input.itemId,
+        suggestedResult: input.suggestedResult,
+        reason: input.reason,
+        confidence: input.confidence,
+        flags: input.flags,
+        passageIdsSent: input.passageIdsSent,
+        originSuggestionId: input.originSuggestionId ?? null,
+        source: input.source ?? 'pages',
+      }
+      // Ids chosen here, so a retry after a lost reply cannot save the suggestion or its quotes twice.
+      const suggestionRow: Row = required(
+        'addSuggestion',
+        await dbInsert(
+          'addSuggestion',
+          () => admin.from('AI_Suggestion').insert(suggestion).select('*').single(),
+          () => admin.from('AI_Suggestion').select('*').eq('id', id).single(),
+        ),
+      )
+      if (input.quotes.length === 0) return toSuggestion(suggestionRow, [])
+
+      const quotes = input.quotes.map((q) => ({ ...q, id: randomUUID(), suggestionId: suggestionRow.id }))
+      const quoteIds = quotes.map((q) => q.id)
+      const quoteRes = await dbInsert(
+        'addSuggestion quotes',
+        () => admin.from('AI_Suggestion_Quote').insert(quotes).select('*'),
+        () => admin.from('AI_Suggestion_Quote').select('*').in('id', quoteIds),
+      )
+      if (quoteRes.error || !quoteRes.data) {
+        const message = quoteRes.error?.message ?? 'no rows returned'
+        // No transaction in the client: remove the half-written suggestion before failing.
+        const cleanup = await dbCall('addSuggestion cleanup', () => admin.from('AI_Suggestion').delete().eq('id', suggestionRow.id))
+        if (cleanup.error) {
+          console.error(`addSuggestion: could not remove suggestion ${suggestionRow.id}: ${cleanup.error.message}`)
+        }
+        throw new Error(`addSuggestion quotes: ${message}`)
+      }
+      return toSuggestion(suggestionRow, [...quoteRes.data].sort(byId))
+    },
+    async listSuggestions(runId) {
+      const rows: Row[] =
+        unwrap(
+          'listSuggestions',
+          await admin.from('AI_Suggestion').select('*').eq('runId', runId).order('createdAt', { ascending: true }),
+        ) ?? []
+      const quotes = await quotesFor('listSuggestions quotes', rows.map((r: Row) => r.id))
+      return rows.map((r: Row) => toSuggestion(r, quotes.filter((q) => q.suggestionId === r.id)))
+    },
+    async getSuggestion(id) {
+      const row: Row | null = unwrapById('getSuggestion', await admin.from('AI_Suggestion').select('*').eq('id', id).maybeSingle())
+      if (!row) return null
+      return toSuggestion(row, await quotesFor('getSuggestion quotes', [row.id]))
+    },
+    async getSuggestionSummaries(ids) {
+      if (ids.length === 0) return {}
+      const rows: Row[] = unwrap('getSuggestionSummaries', await admin.from('AI_Suggestion').select('id, suggestedResult, originSuggestionId').in('id', ids)) ?? []
+      return Object.fromEntries(
+        rows.map((r) => [r.id, { suggestedResult: r.suggestedResult ?? null, originSuggestionId: r.originSuggestionId ?? null }]),
+      )
+    },
+    async getSuggestionRunIds(ids) {
+      if (ids.length === 0) return {}
+      const rows = await readAllRows('getSuggestionRunIds', (from, to) =>
+        admin.from('AI_Suggestion').select('id, runId').in('id', ids).order('id').range(from, to),
+      )
+      return Object.fromEntries(rows.map((r) => [r.id, r.runId]))
+    },
+    async getQuote(id) {
+      const row = unwrapById(
+        'getQuote',
+        await admin.from('AI_Suggestion_Quote').select('*').eq('id', id).maybeSingle(),
+      )
+      return row ? toQuote(row) : null
+    },
+
+    async addDecision(input: NewDecision) {
+      const row = required(
+        'addDecision',
+        await admin.from('AI_Suggestion_Decision').insert(input).select('*').single(),
+      )
+      return row as Decision
+    },
+    async listDecisions(projectId) {
+      const rows = await readAllRows('listDecisions', (from, to) =>
+        admin
+          .from('AI_Suggestion_Decision')
+          .select('*')
+          .eq('projectId', projectId)
+          .order('decidedAt', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      )
+      return rows as Decision[]
+    },
+  }
+}
+
+export function createSupabaseScreenshotStore(admin: SupabaseClient): ScreenshotStore {
+  /** Storage listing is not recursive: collect files, then descend into folders. */
+  async function collectFiles(prefix: string): Promise<string[]> {
+    const found: string[] = []
+    for (let offset = 0; ; offset += LIST_PAGE_SIZE) {
+      const { data, error } = await admin.storage
+        .from(BUCKET)
+        .list(prefix, { limit: LIST_PAGE_SIZE, offset })
+      if (error) throw new Error(`removeProject list ${prefix}: ${error.message}`)
+      const entries = data ?? []
+      for (const entry of entries) {
+        const path = `${prefix}/${entry.name}`
+        // Folders have no id and no metadata.
+        if (entry.id === null || entry.id === undefined) found.push(...(await collectFiles(path)))
+        else found.push(path)
+      }
+      if (entries.length < LIST_PAGE_SIZE) return found
+    }
+  }
+
+  return {
+    async upload(path, jpeg) {
+      // upsert: sending it twice writes the same file.
+      const { error } = await dbCall(`upload ${path}`, () =>
+        admin.storage.from(BUCKET).upload(path, jpeg, { contentType: 'image/jpeg', upsert: true }),
+      )
+      if (error) throw new Error(`upload ${path}: ${error.message}`)
+    },
+    async signedUrl(path, seconds) {
+      const { data, error } = await admin.storage.from(BUCKET).createSignedUrl(path, seconds)
+      if (error || !data) throw new Error(`signedUrl ${path}: ${error?.message ?? 'no url returned'}`)
+      return data.signedUrl
+    },
+    async removeProject(projectId) {
+      const paths = await collectFiles(projectId)
+      for (let i = 0; i < paths.length; i += REMOVE_CHUNK) {
+        const { error } = await admin.storage.from(BUCKET).remove(paths.slice(i, i + REMOVE_CHUNK))
+        if (error) throw new Error(`removeProject remove: ${error.message}`)
+      }
+    },
+  }
+}
