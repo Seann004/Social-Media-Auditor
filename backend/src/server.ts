@@ -4,6 +4,9 @@ import cors from 'cors'
 import rateLimit from 'express-rate-limit'
 import * as db from './services/dbService.js'
 import * as mapping from './services/mappingService.js'
+import { askMappingModel } from './services/mappingAi.js'
+import { createUsageRouter } from './routes/usageRoutes.js'
+import { recordAiUsage } from './lib/aiUsage.js'
 import { createMappingRouter } from './routes/mappingRoutes.js'
 import { supabase } from './config/supabase.js'
 import { requireAuth, requireRole, optionalAuth, signToken } from './middleware/auth.js'
@@ -686,6 +689,7 @@ You MUST return your output in JSON format matching this EXACT schema:
     const data = await response.json() as any
     const content = data.choices?.[0]?.message?.content
 
+    recordAiUsage('extraction', model, data.usage)
     const parsed = JSON.parse(content || '{}')
     res.json({ items: parsed.items || [], _aiUsed: true })
 
@@ -843,6 +847,7 @@ You MUST return your output in JSON format matching this EXACT schema:
     const data = await response.json() as any
     const content = data.choices?.[0]?.message?.content
 
+    recordAiUsage('extraction', model, data.usage)
     const parsed = JSON.parse(content || '{}')
     res.json({ ...parsed, _aiUsed: true })
 
@@ -884,28 +889,10 @@ You MUST return your output in JSON format matching this EXACT schema:
   }
 })
 
-async function askGroq(systemPrompt: string, userPrompt: string): Promise<any> {
-  const apiKey = process.env.GROQ_API_KEY
-  if (!apiKey) throw new Error('GROQ_API_KEY is not configured on the backend server')
-  const response = await groqFetchWithRetry('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: mapping.resolveMappingModel(process.env),
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-    }),
-  })
-  if (!response.ok) throw new Error(`Groq API error: ${await response.text()}`)
-  const data = await response.json() as any
-  return JSON.parse(data.choices?.[0]?.message?.content || '{}')
-}
+const askGroq = (systemPrompt: string, userPrompt: string) => askMappingModel(systemPrompt, userPrompt)
 
 app.use('/api', createMappingRouter({ ask: askGroq }))
+app.use('/api', createUsageRouter())
 
 app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (res.headersSent) return next(err)

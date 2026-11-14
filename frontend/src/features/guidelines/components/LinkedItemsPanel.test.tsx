@@ -115,6 +115,26 @@ describe('LinkedItemsPanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not save/i)
   })
 
+  it('lists the frameworks that have no saved pairs, so a failed automatic check is noticed', async () => {
+    m.list.mockResolvedValue([pair('p1', 0.9)])
+    render(<LinkedItemsPanel guidelines={[
+      { id: 'ONSA', name: 'ONSA Code', shortName: 'ONSA' },
+      { id: 'UKCC', name: 'UK Code', shortName: 'UKCC' },
+      { id: 'EDPB', name: 'EDPB Audit', shortName: 'EDPB' },
+    ]} />)
+    const note = await screen.findByRole('note')
+    expect(note).toHaveTextContent('EDPB')
+    expect(note).not.toHaveTextContent('ONSA')
+    expect(note).not.toHaveTextContent('UKCC')
+  })
+
+  it('shows no such note when every framework has pairs', async () => {
+    m.list.mockResolvedValue([pair('p1', 0.9)])
+    render(<LinkedItemsPanel guidelines={[{ id: 'ONSA', name: 'ONSA Code', shortName: 'ONSA' }, { id: 'UKCC', name: 'UK Code', shortName: 'UKCC' }]} />)
+    await screen.findByText('A text p1')
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
   it('runs Find links for the chosen framework', async () => {
     m.list.mockResolvedValue([])
     m.generate.mockResolvedValue({ checked: 12, suggested: 3, failedBatches: 0 })

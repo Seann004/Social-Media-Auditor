@@ -78,6 +78,14 @@ describe('reusing an answer from earlier audits', () => {
     expect(within(row.closest('div[class*="rounded-lg"]') as HTMLElement).getByText(/Age verification restricts minors/)).toBeInTheDocument()
   })
 
+  it('has no button that reuses every answer at once', async () => {
+    setup('in_progress')
+    render(tree())
+    await within(rowOf('Item one')).findByRole('button', { name: 'Use answer' })
+    await userEvent.click(screen.getByRole('button', { name: /from earlier audits/i }))
+    expect(screen.queryByRole('button', { name: /use all/i })).not.toBeInTheDocument()
+  })
+
   it('refreshes the project figures, like any other saved answer', async () => {
     setup('in_progress')
     render(tree())

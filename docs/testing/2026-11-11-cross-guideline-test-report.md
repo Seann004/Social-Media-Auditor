@@ -95,7 +95,7 @@ The card on the linked item, with the earlier item's text so the auditor can che
 | Cost and time | Every upload sends the new items to Groq in batches (about 30 seconds for 6 items). A large guideline can take several minutes and many tokens. It runs in the background. |
 | No pairs for guidelines uploaded earlier | Existing guidelines have no saved pairs (the old ones were deleted at the owner's request). The admin runs **Find links** once per guideline. |
 | Quality | The AI's confidence is its own estimate, not a measured accuracy. In this run it gave 0.9 and above to pairs that really are the same, and 0.78 to a pair that was broader on one side, which suggests it is useful, but one run is a small sample. The admin's decision is the check. |
-| **Use all** | Still copies every *same requirement* answer at once for an auditor. Pairs are admin-approved, but it could be removed if that is too trusting. |
+| **Use all** | Removed on 14 November. An auditor now reuses answers one item at a time. |
 | Old table | `Project_Mapping_Decision` is no longer used. It can be dropped: `drop table "Project_Mapping_Decision";` |
 | Head auditors | They see the message but cannot accept or dismiss a reused answer (auditor only). |
 

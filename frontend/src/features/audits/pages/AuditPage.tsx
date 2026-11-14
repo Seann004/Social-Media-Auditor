@@ -515,9 +515,6 @@ function AuditPageContent() {
     [checklistItems, suggestions, allResponses, id, currentUserId],
   )
   const suggestedIds = new Set(suggestedItems.map((ci) => ci.id))
-  const exactMatchIds = suggestedItems
-    .filter((ci) => suggestions[ci.id].relation === 'equivalent' && suggestions[ci.id].suggestedStatus !== 'not_applicable')
-    .map((ci) => ci.id)
 
   function applyAcceptedAnswers(accepted: AcceptedAnswer[]) {
     if (!id || accepted.length === 0) return
@@ -1257,21 +1254,6 @@ helpText: newItemHelp.trim() || undefined,
                       transition={{ duration: 0.15 }}
                       className="absolute left-0 top-full mt-1.5 w-80 max-h-80 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-lg z-20 py-1.5"
                     >
-                      {exactMatchIds.length > 0 && (
-                        <div className="px-3 pt-1 pb-2 border-b border-slate-100 mb-1">
-                          <Button
-                            variant="primary"
-                            size="xs"
-                            className="w-full"
-                            disabled={suggestionBusy !== null}
-                            onClick={() => handleAcceptSuggestions(exactMatchIds)}
-                          >
-                            {suggestionBusy === 'all' && <Spinner size={12} className="animate-spin" />}
-                            Use all {exactMatchIds.length} matching answer{exactMatchIds.length !== 1 ? 's' : ''}
-                          </Button>
-                          <p className="text-2xs text-slate-400 mt-1.5">Partly related and N/A answers are left for you to check one by one.</p>
-                        </div>
-                      )}
                       {suggestedItems.map((item) => {
                         const s = suggestions[item.id]
                         return (

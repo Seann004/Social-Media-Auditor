@@ -843,80 +843,50 @@ isDeleted: !checklists.some((c) => c.projectId === null),
 
 
 export async function deleteGuideline(guidelineId: string): Promise<void> {
-
-
-
-
-  
-
-
   const { data: globalChecklist, error: clError } = await supabase
-
     .from('Checklist')
-
     .select('checklistId')
-
     .eq('guidelineId', guidelineId)
-
     .is('projectId', null)
-
     .single()
 
-    
+  // A guideline whose checklist is already gone (an interrupted upload, an earlier delete) still has its own row to remove.
+  if (clError && clError.code !== 'PGRST116') throw clError
 
-  if (clError) {
+  if (globalChecklist) {
+    const checklistId = (globalChecklist as any).checklistId
 
-    if (clError.code === 'PGRST116') return
+    const { data: items, error: itemFetchError } = await supabase
+      .from('Checklist_Item')
+      .select('itemId')
+      .eq('checklistId', checklistId)
+    if (itemFetchError) throw itemFetchError
 
-    throw clError
+    const itemIds = ((items ?? []) as { itemId: string }[]).map((i) => i.itemId)
+    if (itemIds.length > 0) {
+      const { error: arError } = await supabase.from('Audit_Result').delete().in('itemId', itemIds)
+      if (arError) throw arError
+    }
 
+    const { error: ciError } = await supabase.from('Checklist_Item').delete().eq('checklistId', checklistId)
+    if (ciError) throw ciError
+
+    const { error: cdError } = await supabase.from('Checklist').delete().eq('checklistId', checklistId)
+    if (cdError) throw cdError
   }
 
+  // Project checklists made from this guideline keep pointing at it, so its row stays while any of them exist.
+  const { data: stillUsed, error: usedError } = await supabase
+    .from('Checklist')
+    .select('checklistId')
+    .eq('guidelineId', guidelineId)
+    .limit(1)
+  if (usedError) throw usedError
+  if ((stillUsed ?? []).length > 0) return
 
-
-  const checklistId = (globalChecklist as any).checklistId
-
-
-
-
-  const { data: items, error: itemFetchError } = await supabase
-
-    .from('Checklist_Item')
-
-    .select('itemId')
-
-    .eq('checklistId', checklistId)
-
-  if (itemFetchError) throw itemFetchError
-
-  const itemIds = ((items ?? []) as { itemId: string }[]).map((i) => i.itemId)
-
-  if (itemIds.length > 0) {
-
-    const { error: arError } = await supabase.from('Audit_Result').delete().in('itemId', itemIds)
-
-    if (arError) throw arError
-
-  }
-
-
-
-
-  const { error: ciError } = await supabase.from('Checklist_Item').delete().eq('checklistId', checklistId)
-
-  if (ciError) throw ciError
-
-
-
-
-  const { error: cdError } = await supabase.from('Checklist').delete().eq('checklistId', checklistId)
-
-  if (cdError) throw cdError
-
+  const { error: gError } = await supabase.from('Guideline').delete().eq('guidelineId', guidelineId)
+  if (gError) throw gError
 }
-
-
-
 
 export async function fetchGuidelineItems(guidelineId: string): Promise<DbChecklistItem[]> {
   const { data: clData, error: clError } = await supabase

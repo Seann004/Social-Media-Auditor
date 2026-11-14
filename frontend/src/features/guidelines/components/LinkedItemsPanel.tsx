@@ -117,6 +117,8 @@ export default function LinkedItemsPanel({ guidelines }: Props) {
   }
 
   const reviewed = counts.confirmed + counts.rejected
+  const linkedGuidelineIds = new Set(mappings.flatMap((m) => [m.itemA.guidelineId, m.itemB.guidelineId]))
+  const withoutLinks = guidelines.filter((g) => !linkedGuidelineIds.has(g.id))
   const shown = groups.high.length + groups.medium.length + groups.low.length
 
   return (
@@ -144,6 +146,13 @@ export default function LinkedItemsPanel({ guidelines }: Props) {
           <p className="text-xs text-slate-400 mt-1">Approved out of {reviewed} reviewed</p>
         </div>
       </div>
+
+      {withoutLinks.length > 0 && (
+        <div role="note" className="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-4 py-3">
+          No linked items are saved yet for: <span className="font-semibold">{withoutLinks.map((g) => g.shortName || g.name).join(', ')}</span>.
+          The automatic check may still be running, may have failed, or may have found nothing. Choose a framework below and press Find links to check it again.
+        </div>
+      )}
 
       <div className="bg-white border border-slate-200 rounded-xl px-5 py-4">
         <p className="text-sm font-semibold text-slate-800">Find links</p>

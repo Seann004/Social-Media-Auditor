@@ -48,6 +48,7 @@ class FakeQuery implements PromiseLike<{ data: any; error: any }> {
   }
   order() { return this }
   range(from: number, to: number) { this.window = [from, to]; return this }
+  limit(count: number) { this.window = [0, count - 1]; return this }
   single() { this.wantsOne = true; return this }
   maybeSingle() { this.wantsOne = true; this.lenient = true; return this }
 
@@ -103,7 +104,7 @@ class FakeQuery implements PromiseLike<{ data: any; error: any }> {
     if (this.window) hit = hit.slice(this.window[0], this.window[1] + 1)
     if (this.wantsOne) {
       if (hit.length > 1) return { data: null, error: { message: 'more than one row' } }
-      return { data: hit[0] ?? null, error: hit.length === 0 && !this.lenient ? { message: 'no single row' } : null }
+      return { data: hit[0] ?? null, error: hit.length === 0 && !this.lenient ? { code: 'PGRST116', message: 'no single row' } : null }
     }
     return { data: hit, error: null }
   }

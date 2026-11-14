@@ -202,7 +202,7 @@ Different guidelines often ask the same thing in different words. The app finds 
 **How it works**
 1. **Upload.** When an admin uploads a guideline and its checklist items are saved, the AI compares every new item with the items of all the other guidelines in the database. This runs in the background, so the upload is never held up. Each pair it finds is saved in Supabase (`Item_Mapping`) as *awaiting review*, with *same requirement* or *partly overlaps* and a **confidence score** from the AI.
 2. **Admin review.** Guidelines page, admin only, **Linked items** tab. Pairs are grouped by confidence: **High** (80% and above), **Medium** (50% to 79%) and **Low** (under 50%), the most confident first in each group. The admin chooses *Same requirement*, *Partly overlaps* or *Not related* for each pair. Only approved pairs are used anywhere else. **Find links** re-checks one guideline, for example one uploaded before this feature existed.
-3. **Auditors.** When two approved-similar items are both chosen for a project, the audit page shows a message listing them. When an auditor has answered one item of a pair, the other item shows **from earlier audits** with the earlier item's text. *Use answer* copies the status, findings and evidence photos; *Dismiss* hides it. *Same requirement* pairs can be reused in one click ("Use all"); *partly overlaps* pairs are shown for the auditor to check. Answers come from the same project's other guidelines (the auditor's own answers) and from earlier **approved** projects on the same platform.
+3. **Auditors.** When two approved-similar items are both chosen for a project, the audit page shows a message listing them. When an auditor has answered one item of a pair, the other item shows **from earlier audits** with the earlier item's text. *Use answer* copies the status, findings and evidence photos; *Dismiss* hides it. Answers are reused one item at a time (there is no "use all" button); *partly overlaps* pairs are shown for the auditor to check and have no one-click button. Answers come from the same project's other guidelines (the auditor's own answers) and from earlier **approved** projects on the same platform.
 
 **Who can do what**
 
@@ -215,6 +215,8 @@ Different guidelines often ask the same thing in different words. The app finds 
 **Setup**
 - Run `backend/supabase/migrations/004_cross_guideline_mapping.sql` and `005_mapping_fixes.sql` in the Supabase SQL editor, in order.
 - `MAPPING_GROQ_MODEL` picks the model that matches items (default `openai/gpt-oss-120b`). It is separate from `GROQ_MODEL` and must be a model your Groq account can use.
+- If the connection to Groq fails, the matching call is tried again up to 3 more times after short waits (2, 5 and 10 seconds).
+- `GET /api/admin/ai-usage` (admin only) shows the tokens used per AI feature and model since the server started, and every call writes an `[ai-usage]` line to the log, so the real cost of a test round can be added up.
 - Each upload sends the new items to Groq in batches, so a large guideline can take several minutes and uses tokens. A pair already saved is not asked about again, and a rejected pair stays rejected.
 
 ---

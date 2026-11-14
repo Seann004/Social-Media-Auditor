@@ -1,4 +1,5 @@
 import { groqFetchWithRetry } from '../../lib/groq.js'
+import { recordAiUsage } from '../../lib/aiUsage.js'
 import { AI_REASONING_EFFORT, AI_TEMPERATURE, GROQ_MAX_WAIT_MS, GROQ_NETWORK_RETRY_DELAYS_MS } from './config.js'
 import { retryOnNetworkFailure } from './networkRetry.js'
 
@@ -23,7 +24,7 @@ export interface GroqJsonResult {
 
 interface GroqBody {
   choices?: { message?: { content?: string } }[]
-  usage?: { total_tokens?: number }
+  usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number }
 }
 
 /**
@@ -38,6 +39,7 @@ export async function callGroqJson(opts: GroqJsonOptions): Promise<GroqJsonResul
     ...(opts.signal === undefined ? {} : { signal: opts.signal }),
   })
   const tokens = body.usage?.total_tokens ?? 0
+  recordAiUsage('evidence', opts.model, body.usage)
   const text = body.choices?.[0]?.message?.content
   if (typeof text !== 'string') return { content: null, tokens }
   try {
