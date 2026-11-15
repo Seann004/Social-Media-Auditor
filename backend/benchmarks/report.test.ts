@@ -136,6 +136,14 @@ describe('redactSecrets', () => {
     expect(redactSecrets('it was s3cr3t-value!', ['s3cr3t-value'])).toBe('it was [redacted]!')
   })
 
+  it('redacts a lower-case secret assignment, and never a plain number or an ordinary word', () => {
+    expect(redactSecrets('set groq_api_key=abcdef123456 first')).toBe('set groq_api_key=[redacted] first')
+    expect(redactSecrets('jwt_secret: hunter2hunter2')).toBe('jwt_secret=[redacted]')
+    expect(redactSecrets('MAX_TOKENS=10000000')).toBe('MAX_TOKENS=10000000')
+    expect(redactSecrets('EVIDENCE_TOKEN=12345678')).toBe('EVIDENCE_TOKEN=12345678')
+    expect(redactSecrets('the monkey: banana; Password: shown as dots')).toBe('the monkey: banana; Password: shown as dots')
+  })
+
   it('ignores given secrets too short to be one', () => {
     expect(redactSecrets('a b c', ['', 'a'])).toBe('a b c')
   })

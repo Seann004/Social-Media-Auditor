@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CASES } from './cases.js'
-import { commitLabel, main, type CliDeps } from './cli.js'
+import { commitLabel, gitCommit, main, secretValues, type CliDeps } from './cli.js'
 import type { RunRepeat } from './execute.js'
 import { buildReport } from './report.js'
 import { writeAtomic } from './reportFiles.js'
@@ -70,6 +70,44 @@ describe('commitLabel', () => {
     expect(commitLabel('abc1234', '')).toBe('abc1234')
     expect(commitLabel('abc1234', ' M backend/benchmarks/cases.ts\n')).toBe('abc1234 (uncommitted changes)')
     expect(commitLabel(null, ' M x')).toBeNull()
+  })
+})
+
+describe('gitCommit', () => {
+  it('looks for uncommitted changes under backend/ only', () => {
+    const calls: string[][] = []
+    const run = (args: string[]) => {
+      calls.push(args)
+      return args[0] === 'rev-parse' ? 'abc1234\n' : ' M backend/benchmarks/cases.ts\n'
+    }
+    expect(gitCommit(run)).toBe('abc1234 (uncommitted changes)')
+    const status = calls.find((a) => a[0] === 'status')
+    expect(status?.slice(0, 3)).toEqual(['status', '--porcelain', '--'])
+    expect(status?.[3]).toMatch(/[\\/]backend[\\/]?$/)
+  })
+})
+
+describe('secretValues', () => {
+  it('takes the values of secret-named variables that look like secrets, never plain numbers or switches', () => {
+    const env = {
+      GROQ_API_KEY: 'gsk_abcdefghijklmnop',
+      JWT_SECRET: 'a-long-signing-secret-value',
+      MAX_TOKENS_PER_DAY: '10000000',
+      EVIDENCE_TOKEN_LIMIT: '25000',
+      DEBUG_KEY: 'true',
+      PASSWORD_MIN_LENGTH: '12',
+      PATH: 'C:/Windows/system32',
+    }
+    expect(secretValues(env).sort()).toEqual(['a-long-signing-secret-value', 'gsk_abcdefghijklmnop'])
+  })
+})
+
+describe('merge, from the command line', () => {
+  it('refuses the same report file given twice', async () => {
+    const path = join(dir, 'a.json')
+    await writeFile(path, '{}')
+    expect(await main(['merge', path, join(dir, '.', 'a.json')], {}, io, noRunner())).toBe(2)
+    expect(err.join('\n')).toContain('a.json is given twice')
   })
 })
 

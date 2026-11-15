@@ -72,6 +72,40 @@ describe('mergeReports', () => {
   })
 })
 
+describe('mergeReports refuses inputs that would count a repeat twice', () => {
+  const a = () => reportJson([REPO], [record(REPO, 1, 'yes')])
+
+  it('the same file name twice', () => {
+    expect(mergeReports([{ name: 'a.json', text: a() }, { name: 'a.json', text: a() }], 'x')).toEqual({ ok: false, error: 'a.json is given twice.' })
+  })
+
+  it('two files with the same content', () => {
+    const text = a()
+    expect(mergeReports([{ name: 'a.json', text }, { name: 'copy.json', text }], 'x')).toEqual({ ok: false, error: 'a.json and copy.json are the same report.' })
+  })
+
+  it('a merged report together with one of the reports it was made from', () => {
+    const merged = reportJson([REPO], [record(REPO, 1, 'yes')], { mergedFrom: ['a.json', 'b.json'] })
+    expect(mergeReports([{ name: 'a.json', text: a() }, { name: 'baseline.json', text: merged }], 'x')).toEqual({
+      ok: false,
+      error: 'baseline.json was merged from a.json, which is given too. Give each report once.',
+    })
+  })
+})
+
+describe('mergeReports compares the whole case', () => {
+  const base = (c: BenchmarkCase) => reportJson([c], [record(c, 1, 'no')])
+
+  it.each([
+    ['app setups', { ...APP, app: { state: { privateAccount: { teen15: true } } } }],
+    ['explanations', { ...APP, why: 'Another reason.' }],
+    ['kinds', { ...APP, kinds: ['clear', 'trap'] as BenchmarkCase['kinds'] }],
+  ])('refuses a case whose %s differ', (what, changed) => {
+    const result = mergeReports([{ name: 'a.json', text: base(APP) }, { name: 'b.json', text: base(changed) }], 'x')
+    expect(result).toEqual({ ok: false, error: `Case app-a is not the same in a.json and b.json (its ${what} differ). Merge only reports of the same cases.` })
+  })
+})
+
 describe('parseMergeArgs', () => {
   it('reads the files and the label', () => {
     expect(parseMergeArgs(['a.json', 'b.json', '--label', 'baseline'])).toEqual({ ok: true, files: ['a.json', 'b.json'], label: 'baseline' })

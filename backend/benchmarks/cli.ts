@@ -5,7 +5,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs, USAGE, type BenchmarkArgs } from './args.js'
 import { CASES, validateCases } from './cases.js'
@@ -68,21 +68,30 @@ export function commitLabel(sha: string | null, porcelain: string): string | nul
   return porcelain.trim() === '' ? sha : `${sha} (uncommitted changes)`
 }
 
+/** The backend folder: the benchmark and the code it measures. Changes elsewhere do not affect a run. */
+const BACKEND_DIR = fileURLToPath(new URL('..', import.meta.url))
+
 function git(args: string[]): string | null {
   try {
-    return execFileSync('git', args, { cwd: fileURLToPath(new URL('.', import.meta.url)), stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+    return execFileSync('git', args, { cwd: BACKEND_DIR, stdio: ['ignore', 'pipe', 'ignore'] }).toString()
   } catch {
     return null
   }
 }
 
-function gitCommit(): string | null {
-  return commitLabel(git(['rev-parse', '--short', 'HEAD'])?.trim() ?? null, git(['status', '--porcelain']) ?? '')
+/** The commit, flagged when anything under backend/ has uncommitted changes. */
+export function gitCommit(run: (args: string[]) => string | null = git): string | null {
+  return commitLabel(run(['rev-parse', '--short', 'HEAD'])?.trim() ?? null, run(['status', '--porcelain', '--', BACKEND_DIR]) ?? '')
 }
 
-/** The values of every variable whose name looks secret: the report must never contain them. */
-function secretValues(env: Env): string[] {
-  return Object.entries(env).flatMap(([name, value]) => (SECRET_NAME.test(name) && value !== undefined && value.length >= MIN_SECRET_CHARS ? [value] : []))
+/** A number or a switch, such as a limit set in a variable whose name says TOKEN: not a secret. */
+const PLAIN_VALUE = /^(?:[\d.,_\s-]+|true|false|on|off|yes|no)$/i
+
+/** The values of the variables whose names and values look secret: the report must never contain them. */
+export function secretValues(env: Env): string[] {
+  return Object.entries(env).flatMap(([name, value]) =>
+    SECRET_NAME.test(name) && value !== undefined && value.length >= MIN_SECRET_CHARS && !PLAIN_VALUE.test(value) ? [value] : [],
+  )
 }
 
 function printSummary(say: (line: string) => void, cases: BenchmarkCase[], records: RepeatRecord[], stoppedEarly: string | null, paths: ReportPaths): void {
@@ -104,6 +113,15 @@ async function mergeCommand(argv: readonly string[], io: CliIo, deps: CliDeps): 
     io.error(parsed.error)
     io.error(USAGE)
     return 2
+  }
+  const seen = new Set<string>()
+  for (const file of parsed.files) {
+    const full = resolve(file).toLowerCase()
+    if (seen.has(full)) {
+      io.error(`${basename(file)} is given twice.`)
+      return 2
+    }
+    seen.add(full)
   }
   const inputs = []
   for (const file of parsed.files) {

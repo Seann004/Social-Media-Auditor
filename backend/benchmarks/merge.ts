@@ -90,6 +90,23 @@ const answersKey = (c: BenchmarkCase): string => JSON.stringify([c.expected, [..
 function difference(a: BenchmarkCase, b: BenchmarkCase): string | null {
   if (a.source !== b.source || a.item !== b.item) return 'items'
   if (answersKey(a) !== answersKey(b)) return 'expected answers'
+  if (JSON.stringify(a.app ?? null) !== JSON.stringify(b.app ?? null)) return 'app setups'
+  if (a.why !== b.why) return 'explanations'
+  if (JSON.stringify([...a.kinds].sort()) !== JSON.stringify([...b.kinds].sort())) return 'kinds'
+  return null
+}
+
+/** A reason the inputs (with distinct names) would count some repeats twice, or null. */
+function duplicateInput(inputs: readonly MergeInput[], reports: { name: string; report: ReportJson }[]): string | null {
+  const names = inputs.map((i) => i.name)
+  for (let i = 0; i < inputs.length; i++) {
+    const same = inputs.findIndex((other, j) => j > i && other.text === inputs[i].text)
+    if (same >= 0) return `${inputs[i].name} and ${inputs[same].name} are the same report.`
+  }
+  for (const { name, report } of reports) {
+    const inside = (report.meta.mergedFrom ?? []).find((source) => names.includes(source) && source !== name)
+    if (inside !== undefined) return `${name} was merged from ${inside}, which is given too. Give each report once.`
+  }
   return null
 }
 
@@ -112,12 +129,17 @@ function mergedMeta(reports: { name: string; report: ReportJson }[], label: stri
 }
 
 export function mergeReports(inputs: readonly MergeInput[], label: string): Merged {
+  const names = inputs.map((i) => i.name)
+  const twice = names.find((name, i) => names.indexOf(name) !== i)
+  if (twice !== undefined) return { ok: false, error: `${twice} is given twice.` }
   const reports: { name: string; report: ReportJson }[] = []
   for (const input of inputs) {
     const report = parseReport(input.text)
     if (report === null) return { ok: false, error: `${input.name} is not a benchmark report.` }
     reports.push({ name: input.name, report })
   }
+  const duplicate = duplicateInput(inputs, reports)
+  if (duplicate !== null) return { ok: false, error: duplicate }
   const models = new Set(reports.map((r) => r.report.meta.model))
   if (models.size > 1) {
     const list = reports.map((r) => `${r.name}: ${r.report.meta.model}`).join('; ')

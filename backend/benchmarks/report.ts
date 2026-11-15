@@ -56,8 +56,22 @@ const KEY_PATTERNS: readonly [RegExp, string][] = [
   [/\bsk-[A-Za-z0-9_-]{16,}/g, REDACTED],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, REDACTED],
   [/\bBearer\s+[^\s"'`|<>]+/gi, `Bearer ${REDACTED}`],
-  [/\b([A-Z][A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD))\s*[=:]\s*[^\s|<>]+/g, `$1=${REDACTED}`],
 ]
+
+/** `NAME=value` or `NAME: value` where the name ends in key, secret, token or password, in any case. */
+const ASSIGNMENT = /\b([A-Za-z][A-Za-z0-9_]*?(?:key|secret|token|password))\s*[=:]\s*([^\s|<>]+)/gi
+/**
+ * A variable's name, as in GROQ_API_KEY or groq_api_key: all capitals, or with an underscore. An
+ * ordinary word ("Password: shown as dots") is not one.
+ */
+const VARIABLE_NAME = (name: string): boolean => /^[A-Z0-9_]+$/.test(name) || name.includes('_')
+
+/** Replaces the value of a secret assignment, unless the value is a plain number (MAX_TOKENS=10000000). */
+function redactAssignments(text: string): string {
+  return text.replace(ASSIGNMENT, (whole: string, name: string, value: string) =>
+    VARIABLE_NAME(name) && !/^\d+$/.test(value) ? `${name}=${REDACTED}` : whole,
+  )
+}
 
 /** Replaces anything that looks like a key, a token or a secret assignment, and every given secret. */
 export function redactSecrets(text: string, secrets: readonly string[] = []): string {
@@ -66,7 +80,7 @@ export function redactSecrets(text: string, secrets: readonly string[] = []): st
     if (secret.length >= MIN_SECRET_CHARS) out = out.split(secret).join(REDACTED)
   }
   for (const [pattern, replacement] of KEY_PATTERNS) out = out.replace(pattern, replacement)
-  return out
+  return redactAssignments(out)
 }
 
 /** A copy with every string redacted. */
