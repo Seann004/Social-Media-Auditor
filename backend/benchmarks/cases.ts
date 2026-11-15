@@ -11,7 +11,7 @@ export const MIN_APP_CASES = 10
 export const MIN_REPO_CASES = 8
 
 /** The platform name the prompts are given. */
-export const PLATFORM = 'Social (practice app)'
+export const PLATFORM = 'Social'
 
 /**
  * Every app case runs with these modes. /settings does not link its sub-pages otherwise, so the AI
@@ -86,9 +86,10 @@ const APP_CASES: BenchmarkCase[] = [
     item: DEFAULT_ITEM,
     expected: 'yes',
     alsoAcceptable: [],
-    why: 'Settings links "How accounts for under-18s are set up" (/help/teen-accounts), which states: "Every new account of a person under 18 is private from the start". The Settings page itself shows only the current switch, so the answer is on the second page.',
+    hedges: ['partially', 'not_settled'],
+    why: 'Teen 15 starts public here, so its Private account switch on /settings reads Off. Settings links "How accounts for under-18s are set up" (/help/teen-accounts), which states "Every new account of a person under 18 is private from the start" and "They can make their account public later in Settings": the default is private and this account was changed. Only that second page shows the default. A "no" read from the switch is wrong; "partially" or no result is an honest hedge.',
     kinds: ['default', 'second_page'],
-    app: { mode: { teenDefaultsHelp: true } },
+    app: { state: { privateAccount: { teen15: false } }, mode: { teenDefaultsHelp: true } },
   },
   {
     id: 'app-message-private-teen',
@@ -97,20 +98,26 @@ const APP_CASES: BenchmarkCase[] = [
     item: MESSAGE_ITEM,
     expected: 'no',
     alsoAcceptable: [],
-    why: 'Teen 15 is private. Adult 30 (a stranger: no follows) opening /u/teen15 sees "This account is private" and no Message link, and the app refuses a message from an adult to a private teen account with "You can\'t message this account".',
+    why: 'Teen 15 is private. Adult 30 (a stranger: no follows) opening /u/teen15 sees "This account is private" and no Message link, and the app refuses a message from an adult to a private teen account with "You can\'t message this account". Teen 15\'s own settings do not settle it: /settings/contact shows "Who can message you: Everyone" while /settings/messaging shows "Friends".',
     kinds: ['two_accounts'],
     app: { state: { privateAccount: { teen15: true } } },
   },
   {
-    id: 'app-message-public-teen',
+    id: 'app-message-settings-not-enforced',
     source: 'app',
     category: 'Messaging',
     item: MESSAGE_ITEM,
     expected: 'yes',
     alsoAcceptable: [],
-    why: 'Teen 15 is public and lets everyone message it (whoCanMessage Everyone). Adult 30 opening /u/teen15 sees a Message link, and the app sends a message from Adult 30 to teen15 ("Message sent").',
-    kinds: ['two_accounts'],
-    app: { state: { privateAccount: { teen15: false }, whoCanMessage: { teen15: 'Everyone' } } },
+    why: 'Teen 15 is public, and its own settings suggest otherwise: Messaging\'s "Who can message you" is "No one" and Contact\'s is "Friends". The app enforces neither: POST /messages refuses an adult only when the teen account is private. Adult 30 opening /u/teen15 sees a Message link, and sending succeeds ("Message sent"). Only the adult\'s side shows this.',
+    kinds: ['two_accounts', 'trap'],
+    app: {
+      state: {
+        privateAccount: { teen15: false },
+        whoCanMessage: { teen15: 'No one' },
+        contact: { teen15: { tag: 'Everyone', message: 'Friends', birthday: null } },
+      },
+    },
   },
   {
     id: 'app-trap-private-banner',
@@ -132,6 +139,50 @@ const APP_CASES: BenchmarkCase[] = [
     alsoAcceptable: [],
     why: 'Settings links "Contact and birthday" (/settings/contact). Its group "Who can see your birthday" offers "Close friends" and "No one"; "No one" hides it from everyone. Nothing is chosen yet, so the option must be seen on that page.',
     kinds: ['clear', 'second_page'],
+  },
+  {
+    id: 'app-tag-nobody',
+    source: 'app',
+    category: 'Privacy',
+    item: 'Can other people tag the Teen 15 account?',
+    expected: 'no',
+    alsoAcceptable: [],
+    why: 'Settings links "Contact and birthday" (/settings/contact). Its group "Who can tag you" offers "Everyone" and "Nobody", and "Nobody" is chosen for Teen 15.',
+    kinds: ['clear'],
+    app: { state: { contact: { teen15: { tag: 'Nobody', message: 'Everyone', birthday: null } } } },
+  },
+  {
+    id: 'app-quiet-mode-on',
+    source: 'app',
+    category: 'Wellbeing',
+    item: 'Is quiet mode turned on for the Teen 15 account?',
+    expected: 'yes',
+    alsoAcceptable: [],
+    why: 'Settings links "Sharing" (/settings/sharing), whose only control is a "Quiet mode" toggle button. For Teen 15 it is pressed (aria-pressed true); no text on the page says on or off, so only the button\'s state shows it.',
+    kinds: ['clear'],
+    app: { state: { quietMode: { teen15: true } } },
+  },
+  {
+    id: 'app-activity-hidden',
+    source: 'app',
+    category: 'Privacy',
+    item: 'Does the Teen 15 account show its activity status to other people?',
+    expected: 'no',
+    alsoAcceptable: [],
+    why: 'On /settings the checkbox "Show activity status" is not ticked for Teen 15 (activityStatus.teen15 false), so the status is not shown.',
+    kinds: ['clear'],
+    app: { state: { activityStatus: { teen15: false } } },
+  },
+  {
+    id: 'app-posts-public',
+    source: 'app',
+    category: 'Privacy',
+    item: "Are Teen 15's posts visible only to Teen 15?",
+    expected: 'no',
+    alsoAcceptable: [],
+    why: 'Settings links "Post privacy" (/settings/privacy), where "Who can see your posts" is "Public" for Teen 15 ("Only me" is the other choice). The new-post form on Home also starts with the audience "Public".',
+    kinds: ['clear'],
+    app: { state: { postVisibility: { teen15: 'Public' } } },
   },
   {
     id: 'app-staff-training',
@@ -212,8 +263,8 @@ const REPO_CASES: BenchmarkCase[] = [
     category: 'Messaging',
     item: 'Are direct messages from strangers turned off by default for accounts of people under 18?',
     expected: 'partially',
-    alsoAcceptable: [],
-    why: "initialSettings() sets dmFrom to 'friends' only below DM_FRIENDS_ONLY_UNDER = 16; 16 and 17 year olds keep DEFAULT_SETTINGS.dmFrom 'everyone'. canMessage() (src/messages/canMessage.ts) enforces dmFrom, so it holds for some teens and not others.",
+    alsoAcceptable: ['no'],
+    why: "initialSettings() sets dmFrom to 'friends' only below DM_FRIENDS_ONLY_UNDER = 16; 16 and 17 year olds keep DEFAULT_SETTINGS.dmFrom 'everyone'. canMessage() (src/messages/canMessage.ts) enforces dmFrom, so it holds for some teens and not others. \"No\" is also accepted: the item asks about every account of a person under 18, and for 16 and 17 year olds it is false.",
     kinds: ['default'],
   },
   {
@@ -274,6 +325,10 @@ function problemsOf(c: BenchmarkCase): string[] {
     if (!ANSWERS.includes(a)) out.push(`Case ${c.id} accepts "${a}", which is not an answer`)
   }
   if (c.alsoAcceptable.includes(c.expected)) out.push(`Case ${c.id} lists its expected answer as also acceptable`)
+  for (const h of c.hedges ?? []) {
+    if (!ANSWERS.includes(h)) out.push(`Case ${c.id} lists "${h}" as a hedge, which is not an answer`)
+    else if (h === c.expected || c.alsoAcceptable.includes(h)) out.push(`Case ${c.id} lists "${h}" both as a hedge and as correct`)
+  }
   if (c.source === 'repo' && c.app !== undefined) out.push(`Case ${c.id} is a code case with an app setup`)
   return out
 }

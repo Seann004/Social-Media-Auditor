@@ -35,6 +35,11 @@ export interface BenchmarkCase {
   expected: ExpectedAnswer
   /** Other answers that also count as correct. */
   alsoAcceptable: Answer[]
+  /**
+   * Answers that are an honest hedge here rather than a wrong claim: scored as not settled, never as
+   * wrong, and not counted as claims. For a case whose answer can be missed honestly (on a second page).
+   */
+  hedges?: Answer[]
   /** Why the expected answer is right, from what the practice app or the synthetic repository really contain. */
   why: string
   kinds: CaseKind[]
@@ -85,6 +90,8 @@ export interface CaseScore {
   alsoAcceptable: Answer[]
   answers: (Answer | null)[]
   outcomes: Outcome[]
+  /** Per repeat: whether it made a claim, that is an answer other than not settled or one of the case's hedges. */
+  claimed: boolean[]
   /** Every repeat that gave a suggestion gave the same answer. Null with fewer than two such repeats. */
   stable: boolean | null
 }

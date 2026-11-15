@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { buildTarGz } from '../src/features/evidence/__fixtures__/fakeGithub.js'
 import { LOGIN_NAMES, PASSWORDS, startSocialApp, type SocialApp } from '../src/features/evidence/__fixtures__/socialApp.js'
 import { readArchive } from '../src/features/evidence/repoArchive.js'
+import { BASE_APP_MODE, CASES } from './cases.js'
 import { REPO_FILES } from './repoFixture.js'
 
 /**
@@ -77,6 +78,80 @@ describe('the practice app, for the benchmark', () => {
     await app.close()
     app = await startSocialApp()
     expect((await signedInGet(app, 'adult30', '/u/teen15')).html).toContain('This account is private')
+  })
+})
+
+/** Starts the app exactly as the benchmark starts it for this case. */
+async function appOf(id: string): Promise<SocialApp> {
+  const c = CASES.find((x) => x.id === id)
+  if (c === undefined || c.source !== 'app') throw new Error(`No app case ${id}`)
+  return startSocialApp({ state: c.app?.state, mode: { ...BASE_APP_MODE, ...c.app?.mode } })
+}
+
+async function signedInPost(app: SocialApp, handle: string, path: string, form: Record<string, string>): Promise<string> {
+  const body = new URLSearchParams({ username: loginOf(handle), password: PASSWORDS[handle] })
+  const login = await fetch(`${app.url}/login`, { method: 'POST', body, redirect: 'manual' })
+  const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]
+  const res = await fetch(`${app.url}${path}`, { method: 'POST', body: new URLSearchParams(form), headers: { cookie }, redirect: 'manual' })
+  return res.text()
+}
+
+const checkedRadio = (html: string, name: string): string | null => new RegExp(`name="${name}" value="([^"]+)" checked`).exec(html)?.[1] ?? null
+
+describe('the facts each app case relies on, in the state the benchmark starts it in', () => {
+  it('app-private-default-help: Teen 15 is public, and only the help page states the private default', async () => {
+    app = await appOf('app-private-default-help')
+    const settings = (await signedInGet(app, 'teen15', '/settings')).html
+    expect(settings).toContain('aria-checked="false">Off')
+    expect(settings).toContain('href="/help/teen-accounts"')
+    expect(settings).not.toMatch(/under 18|private from the start/)
+    const help = (await signedInGet(app, 'teen15', '/help/teen-accounts')).html
+    expect(help).toContain('Every new account of a person under 18 is private from the start')
+    expect(help).toContain('They can make their account public later in Settings.')
+  })
+
+  it('app-message-private-teen: the adult is refused, while the teen settings disagree with each other', async () => {
+    app = await appOf('app-message-private-teen')
+    expect((await signedInGet(app, 'adult30', '/u/teen15')).html).toContain('This account is private')
+    expect(await signedInPost(app, 'adult30', '/messages', { to: 'teen15', text: 'hi' })).toContain("You can't message this account")
+    expect(app.state().messages).toEqual([])
+    expect(checkedRadio((await signedInGet(app, 'teen15', '/settings/contact')).html, 'message')).toBe('Everyone')
+    expect((await signedInGet(app, 'teen15', '/settings/messaging')).html).toContain('aria-selected="true">Friends')
+  })
+
+  it('app-message-settings-not-enforced: the teen settings say No one and Friends, but an adult message to the public teen is sent', async () => {
+    app = await appOf('app-message-settings-not-enforced')
+    expect((await signedInGet(app, 'teen15', '/settings/messaging')).html).toContain('aria-selected="true">No one')
+    expect(checkedRadio((await signedInGet(app, 'teen15', '/settings/contact')).html, 'message')).toBe('Friends')
+    expect((await signedInGet(app, 'adult30', '/u/teen15')).html).toContain('href="/messages/new?to=teen15"')
+    expect(await signedInPost(app, 'adult30', '/messages', { to: 'teen15', text: 'hi' })).toContain('Message sent')
+    expect(app.state().messages).toEqual([{ from: 'adult30', to: 'teen15', text: 'hi' }])
+  })
+
+  it('app-tag-nobody: "Who can tag you" is Nobody', async () => {
+    app = await appOf('app-tag-nobody')
+    const contact = (await signedInGet(app, 'teen15', '/settings/contact')).html
+    expect(contact).toContain('<legend>Who can tag you</legend>')
+    expect(checkedRadio(contact, 'tag')).toBe('Nobody')
+  })
+
+  it('app-quiet-mode-on: the Quiet mode button is pressed, and the page says nothing else about it', async () => {
+    app = await appOf('app-quiet-mode-on')
+    const sharing = (await signedInGet(app, 'teen15', '/settings/sharing')).html
+    expect(sharing).toContain('<button id="quiet" aria-pressed="true">Quiet mode</button>')
+    expect(sharing.replace(/<script>[\s\S]*<\/script>/, '')).not.toMatch(/\bon\b|\boff\b/i)
+  })
+
+  it('app-activity-hidden: "Show activity status" is not ticked', async () => {
+    app = await appOf('app-activity-hidden')
+    const settings = (await signedInGet(app, 'teen15', '/settings')).html
+    expect(settings).toContain('<input type="checkbox" name="activity" value="on"> Show activity status')
+  })
+
+  it('app-posts-public: "Who can see your posts" is Public, and a new post starts Public', async () => {
+    app = await appOf('app-posts-public')
+    expect(checkedRadio((await signedInGet(app, 'teen15', '/settings/privacy')).html, 'visibility')).toBe('public')
+    expect((await signedInGet(app, 'teen15', '/home')).html).toMatch(/<select id="audience" name="audience">\s*<option value="public">Public<\/option>/)
   })
 })
 

@@ -64,6 +64,13 @@ describe('scoreRepeat', () => {
     expect(scoreRepeat(aCase('no'), record)).toBe('correct')
   })
 
+  it('a hedge the case lists counts as not settled, never as wrong', () => {
+    const c = aCase('yes', [], { hedges: ['partially', 'not_settled'] })
+    expect(scoreRepeat(c, repeat('partially'))).toBe('not_settled')
+    expect(scoreRepeat(c, repeat('no'))).toBe('wrong')
+    expect(scoreRepeat(c, repeat('yes'))).toBe('correct')
+  })
+
   it('a repeat without any suggestion is an error, whatever was expected', () => {
     expect(scoreRepeat(aCase('not_settled'), repeat(null))).toBe('error')
     expect(scoreRepeat(aCase('yes'), repeat(null))).toBe('error')
@@ -124,6 +131,15 @@ describe('summarise', () => {
     expect(summary.averageSteps).toBeCloseTo(8)
     expect(summary.averageTokens).toBeCloseTo(100)
     expect(summary.averageSeconds).toBeCloseTo(9 / 5)
+  })
+
+  it('does not count a hedge as a claim', () => {
+    const c = aCase('yes', [], { hedges: ['partially'] })
+    const records = [repeat('partially'), repeat('yes')]
+    const summary = summarise([scoreCase(c, records)], records)
+    expect(summary.coverage).toBeCloseTo(1 / 2)
+    expect(summary.wrongClaimRate).toBe(0)
+    expect(summary.notSettled).toBe(1)
   })
 
   it('gives null rates when there is nothing to divide by', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CASES, validateCases } from './cases.js'
+import { CASES, PLATFORM, validateCases } from './cases.js'
 import { EXPECTED_ANSWERS, type BenchmarkCase } from './types.js'
 
 const valid = (over: Partial<BenchmarkCase>): BenchmarkCase => ({
@@ -55,6 +55,44 @@ describe('the benchmark cases', () => {
   })
 })
 
+describe('cases that a shortcut cannot pass', () => {
+  const byId = (id: string) => CASES.find((c) => c.id === id) as BenchmarkCase
+
+  it('the stated-default case starts the teen public, so the switch alone gives the wrong answer, and a hedge is not wrong', () => {
+    const c = byId('app-private-default-help')
+    expect(c.expected).toBe('yes')
+    expect(c.app?.state?.privateAccount).toEqual({ teen15: false })
+    expect(c.app?.mode?.teenDefaultsHelp).toBe(true)
+    expect(c.hedges).toEqual(expect.arrayContaining(['partially', 'not_settled']))
+  })
+
+  it('a two-account case that only the adult can settle: the teen settings say no, the app says yes', () => {
+    const c = byId('app-message-settings-not-enforced')
+    expect(c.kinds).toContain('two_accounts')
+    expect(c.expected).toBe('yes')
+    expect(c.app?.state).toMatchObject({
+      privateAccount: { teen15: false },
+      whoCanMessage: { teen15: 'No one' },
+      contact: { teen15: { message: 'Friends' } },
+    })
+    expect(byId('app-message-private-teen').why).toContain('Who can message you: Everyone')
+  })
+
+  it('use features of the practice app beyond privacy, push and messaging', () => {
+    for (const id of ['app-tag-nobody', 'app-quiet-mode-on', 'app-activity-hidden', 'app-posts-public']) expect(byId(id).source).toBe('app')
+  })
+
+  it('name the platform "Social" and accept "no" for the under-16 messaging default', () => {
+    expect(PLATFORM).toBe('Social')
+    expect(byId('repo-dm-default-teens').alsoAcceptable).toEqual(['no'])
+  })
+
+  it('are balanced between yes and no', () => {
+    const count = (answer: string) => CASES.filter((c) => c.expected === answer).length
+    expect(Math.abs(count('yes') - count('no'))).toBeLessThanOrEqual(2)
+  })
+})
+
 describe('validateCases', () => {
   const enough = (source: 'app' | 'repo', n: number) => Array.from({ length: n }, (_, i) => valid({ id: `${source}-${i}`, source }))
 
@@ -70,6 +108,8 @@ describe('validateCases', () => {
       valid({ id: 'repo-with-app', app: { mode: { settingsMenu: true } } }),
       valid({ id: 'no-item', item: '' }),
       valid({ id: 'no-kind', kinds: [] }),
+      valid({ id: 'bad-hedge', hedges: ['perhaps' as never] }),
+      valid({ id: 'hedge-accepted', alsoAcceptable: ['partially'], hedges: ['partially'] }),
     ])
     expect(problems).toEqual(
       expect.arrayContaining([
@@ -82,6 +122,8 @@ describe('validateCases', () => {
         'Case repo-with-app is a code case with an app setup',
         'Case no-item has no item text',
         'Case no-kind has no kind',
+        'Case bad-hedge lists "perhaps" as a hedge, which is not an answer',
+        'Case hedge-accepted lists "partially" both as a hedge and as correct',
         'Only 0 app cases; at least 10 are needed',
       ]),
     )
