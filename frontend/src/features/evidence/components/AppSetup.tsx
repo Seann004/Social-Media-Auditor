@@ -1,7 +1,8 @@
 import { useId, useState } from 'react'
-import { CaretRightIcon as CaretRight } from '@phosphor-icons/react'
+import { CaretRightIcon as CaretRight, PlusIcon as Plus } from '@phosphor-icons/react'
 import { EvidenceApiError, addTestAccount, deleteTestAccount, saveAppSource, updateTestAccount } from '../api'
 import type { AppSetupResponse, TestAccountInput, TestAccountView } from '../types'
+import AccountRow from './AccountRow'
 import TestAccountForm from './TestAccountForm'
 
 interface Props {
@@ -13,9 +14,7 @@ interface Props {
   canWriteAccounts?: boolean
 }
 
-const AGE_LABEL = { under_18: 'Under 18', adult: 'Adult' } as const
 const FIELD = 'w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50'
-const LINK_BUTTON = 'rounded text-xs text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50'
 
 const lines = (text: string): string[] => text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '')
 const sentence = (err: unknown): string => (err instanceof EvidenceApiError ? err.message : 'Something went wrong. Try again.')
@@ -134,17 +133,14 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false, 
         {setup.accounts.length > 0 ? (
           <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
             {setup.accounts.map((a) => (
-              <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs">
-                <div>
-                  <span className="font-medium text-slate-900">{a.label}</span>
-                  <span className="text-slate-500"> · {AGE_LABEL[a.ageGroup]}{a.age !== null ? ` (${a.age})` : ''} · {a.loginName}</span>
-                  <span className="block text-slate-500">Password saved</span>
-                </div>
-                <div className="flex gap-3">
-                  {canWriteAccounts ? <button type="button" disabled={disabled} onClick={() => setEditing({ kind: 'edit', account: a })} aria-label={`Edit ${a.label}`} className={LINK_BUTTON}>Edit</button> : null}
-                  <button type="button" disabled={disabled} onClick={() => void remove(a)} aria-label={`Remove ${a.label}`} className="rounded text-xs text-rose-600 hover:text-rose-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50">Remove</button>
-                </div>
-              </li>
+              <AccountRow
+                key={a.id}
+                account={a}
+                disabled={disabled}
+                canEdit={canWriteAccounts}
+                onEdit={() => setEditing({ kind: 'edit', account: a })}
+                onRemove={() => void remove(a)}
+              />
             ))}
           </ul>
         ) : (
@@ -159,7 +155,15 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false, 
             onCancel={() => setEditing(null)}
           />
         ) : canWriteAccounts ? (
-          <button type="button" disabled={disabled} onClick={() => setEditing({ kind: 'new' })} className={LINK_BUTTON}>Add test account</button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => setEditing({ kind: 'new' })}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:border-blue-300 hover:bg-blue-50/50 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Plus size={14} weight="bold" aria-hidden="true" />
+            Add test account
+          </button>
         ) : null}
       </div>
     </div>

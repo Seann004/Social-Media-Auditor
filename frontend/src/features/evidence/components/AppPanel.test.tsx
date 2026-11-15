@@ -31,6 +31,9 @@ vi.mock('../api', async (importOriginal) => {
   }
 })
 
+// These drive the whole drawer (typing, ten ticks): a few take 3-4 s in jsdom, over the 5 s default when the machine is busy.
+vi.setConfig({ testTimeout: 15_000 })
+
 const m = {
   getSources: vi.mocked(api.getSources),
   startRun: vi.mocked(api.startRun),

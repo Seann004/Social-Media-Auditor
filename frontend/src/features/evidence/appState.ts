@@ -1,5 +1,5 @@
 // Pure rules for the "check inside the app" panel. No store access, no mutation.
-import type { ChecklistItem } from '../../types'
+import type { ChecklistItem, Severity } from '../../types'
 import { categoryKey } from './state'
 import type { AppSetupResponse, AppStepOutcome, RunView } from './types'
 
@@ -7,6 +7,8 @@ import type { AppSetupResponse, AppStepOutcome, RunView } from './types'
 export const APP_STEPS_PER_CHECK = 15
 /** Mirrors the backend's per-run item limit. */
 export const MAX_APP_ITEMS = 10
+/** Shown above the item picker: each item costs AI tokens. */
+export const PICK_TIP = "About 3 items works best on Groq's free plan"
 
 /** Everything an app run needs from set-up: an address, an account and the server's key. */
 export const isAppSetupComplete = (setup: AppSetupResponse): boolean =>
@@ -24,7 +26,14 @@ export interface PickItem {
   guidelineId: string
   category: string
   label: string
+  /** The item code, such as "P-1", when the guideline has one. */
+  code?: string
+  /** Shown as a chip in the picker; left out when the value is not one the app knows. */
+  severity?: Severity
 }
+
+const SEVERITIES: readonly Severity[] = ['critical', 'major', 'minor']
+const isSeverity = (value: unknown): value is Severity => SEVERITIES.includes(value as Severity)
 
 export function toPickItems(items: readonly ChecklistItem[]): PickItem[] {
   return items.map((item) => ({
@@ -32,6 +41,8 @@ export function toPickItems(items: readonly ChecklistItem[]): PickItem[] {
     guidelineId: item.guidelineId,
     category: item.category,
     label: item.itemName ?? item.text,
+    code: item.itemCode || undefined,
+    severity: isSeverity(item.severity) ? item.severity : undefined,
   }))
 }
 

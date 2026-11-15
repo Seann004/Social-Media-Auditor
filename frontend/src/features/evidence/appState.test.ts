@@ -23,6 +23,13 @@ describe('pick items', () => {
     ])
   })
 
+  it('toPickItems carries the item code and a known severity for the picker', () => {
+    const [coded, plain] = toPickItems([item({ id: 'a', itemCode: 'P-1', severity: 'critical' }), item({ id: 'b', itemCode: '' })])
+    expect(coded).toMatchObject({ code: 'P-1', severity: 'critical' })
+    expect(plain.code).toBeUndefined()
+    expect(plain.severity).toBeUndefined() // 'high' is not a severity the app knows
+  })
+
   it('groups the same category name in two guidelines separately', () => {
     const groups = groupPickItems(
       toPickItems([item({ id: 'a' }), item({ id: 'b', guidelineId: 'g2' }), item({ id: 'c', category: 'Safety' }), item({ id: 'd' })]),
