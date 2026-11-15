@@ -182,4 +182,12 @@ describe('writeReport', () => {
     expect(await readFile(first.jsonPath, 'utf8')).toBe('{"records":[1,2]}')
     expect((await readdir(dir)).sort()).toEqual(['2026-11-16-x-2.json', '2026-11-16-x.json'])
   })
+
+  it('survives many writes to one file at once, landing them in the order they were made', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bench-report-'))
+    const path = join(dir, 'live.json')
+    await Promise.all(Array.from({ length: 25 }, (_, i) => writeAtomic(path, `v${i}`)))
+    expect(await readFile(path, 'utf8')).toBe('v24')
+    expect(await readdir(dir)).toEqual(['live.json'])
+  })
 })

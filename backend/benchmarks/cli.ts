@@ -42,6 +42,8 @@ export interface CliDeps {
   commit?: () => string | null
   /** Registers what to do on Ctrl+C: run.ts calls the handler on SIGINT, then exits with 130. */
   onInterrupt?: (handler: () => Promise<void>) => void
+  /** Writes one report file. Defaults to writeAtomic. */
+  writeFile?: (path: string, text: string) => Promise<void>
 }
 
 type Env = Record<string, string | undefined>
@@ -162,33 +164,49 @@ async function runCommand({ args, cases, apiKey, requestedModel, env }: RunInput
   const build = (records: RepeatRecord[], stoppedEarly: string | null) => buildReport({ meta: meta(stoppedEarly), cases, records, secrets })
   const stillRunning = (n: number) => `Still running: ${n} of ${counted(total, 'repeat')} done when this was written.`
 
+  const write = deps.writeFile ?? writeAtomic
+  // Every report write goes through one queue, so a Ctrl+C write always lands after any write already
+  // started, and a "Still running" write queued before it is skipped once it runs.
+  let writes: Promise<void> = Promise.resolve()
+  const queued = (job: () => Promise<void>): Promise<void> => {
+    const next = writes.then(job)
+    writes = next.catch(() => undefined)
+    return next
+  }
   let done: RepeatRecord[] = []
   let interrupted = false
   const controller = new AbortController()
   try {
     const paths = await reserveReportPaths(deps.reportDir ?? DEFAULT_REPORT_DIR, reportBaseName(startedAt, args.label), build([], stillRunning(0)).json)
+    const writeBoth = async (report: { json: string; markdown: string }) => {
+      await write(paths.jsonPath, report.json)
+      await write(paths.markdownPath, report.markdown)
+    }
     deps.onInterrupt?.(async () => {
       if (interrupted) return
       interrupted = true
       controller.abort()
       const report = build(done, `Interrupted (Ctrl+C) after ${done.length} of ${counted(total, 'repeat')}; the repeat in progress was dropped.`)
-      await writeAtomic(paths.jsonPath, report.json)
-      await writeAtomic(paths.markdownPath, report.markdown)
+      await queued(() => writeBoth(report))
       say(`Interrupted. Partial report: ${paths.markdownPath}`)
       await finishWithin(runner, FINISH_ON_INTERRUPT_MS)
     })
     const onRecord = async (records: readonly RepeatRecord[]) => {
       if (interrupted) return
       done = [...records]
-      await writeAtomic(paths.jsonPath, build(done, stillRunning(done.length)).json)
+      const json = build(done, stillRunning(done.length)).json
+      await queued(async () => {
+        if (!interrupted) await write(paths.jsonPath, json)
+      })
     }
     say(`Evidence benchmark "${args.label}" with model ${runner.model}.`)
     planLines(cases, args.repeats, args.maxTokens).forEach(say)
     const result = await executeCases(cases, args.repeats, createBudget(args.maxTokens), runner.runRepeat, say, { signal: controller.signal, onRecord })
-    if (interrupted) return INTERRUPTED_EXIT_CODE
-    const report = build(result.records, result.stoppedEarly)
-    await writeAtomic(paths.jsonPath, report.json)
-    await writeAtomic(paths.markdownPath, report.markdown)
+    if (interrupted) {
+      await writes
+      return INTERRUPTED_EXIT_CODE
+    }
+    await queued(() => writeBoth(build(result.records, result.stoppedEarly)))
     printSummary(say, cases, result.records, result.stoppedEarly, paths)
     return 0
   } finally {

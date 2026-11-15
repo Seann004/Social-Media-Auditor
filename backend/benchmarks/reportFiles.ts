@@ -3,6 +3,7 @@
  * report, claimed at the start of a run, and writes through a temporary file and a rename, so the
  * JSON on disk is always whole, even when the run is stopped half way.
  */
+import { randomUUID } from 'node:crypto'
 import { access, mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { BuiltReport } from './report.js'
@@ -53,9 +54,12 @@ export async function reserveReportPaths(dir: string, baseName: string, initialJ
   }
 }
 
-/** Writes the whole text to a temporary file next to the target, then renames it over the target. */
-export async function writeAtomic(path: string, text: string): Promise<void> {
-  const temporary = `${path}.${process.pid}.tmp`
+/** The writes still pending, by target: each waits for the one before it, so they land in the order made. */
+const pending = new Map<string, Promise<void>>()
+
+async function writeThenRename(path: string, text: string): Promise<void> {
+  // Its own temporary name, so no two writes ever share one.
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
   await writeFile(temporary, text, 'utf8')
   try {
     await rename(temporary, path)
@@ -63,6 +67,22 @@ export async function writeAtomic(path: string, text: string): Promise<void> {
     await unlink(temporary).catch(() => undefined)
     throw err
   }
+}
+
+/**
+ * Writes the whole text to a temporary file next to the target, then renames it over the target.
+ * Writes to the same target run one after another, in the order they were made.
+ */
+export function writeAtomic(path: string, text: string): Promise<void> {
+  const before = pending.get(path) ?? Promise.resolve()
+  const mine = before.catch(() => undefined).then(() => writeThenRename(path, text))
+  pending.set(path, mine)
+  void mine
+    .catch(() => undefined)
+    .then(() => {
+      if (pending.get(path) === mine) pending.delete(path)
+    })
+  return mine
 }
 
 /** Writes a finished report under a free name: `<base>.md` and `<base>.json`. */

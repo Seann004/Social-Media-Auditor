@@ -6,6 +6,7 @@ import { CASES } from './cases.js'
 import { commitLabel, main, type CliDeps } from './cli.js'
 import type { RunRepeat } from './execute.js'
 import { buildReport } from './report.js'
+import { writeAtomic } from './reportFiles.js'
 
 const KEY = 'gsk_fake_key_for_the_cli_test_0123456789'
 
@@ -177,6 +178,34 @@ describe('main', () => {
     const json = JSON.parse(await readFile(join(dir, '2026-11-16-cut.json'), 'utf8')) as { records: unknown[] }
     expect(markdown).toContain('> Stopped early: Interrupted (Ctrl+C) after 1 of 10 repeats; the repeat in progress was dropped.')
     expect(json.records).toHaveLength(1)
+  })
+
+  it('a Ctrl+C during a "Still running" write is written after it, so the partial report is the last word', async () => {
+    let interrupt: (() => Promise<void>) | null = null
+    const runRepeat: RunRepeat = async (c, repeat) => ({ caseId: c.id, source: c.source, repeat, answer: 'yes', reason: '', quotes: [{ text: 'q', verified: true }], flags: [], runStatus: 'completed', runError: null, tokens: 10, seconds: 1, steps: null, lines: [] })
+    // A slow disk: the "Still running" write after the first repeat lets Ctrl+C in before it lands.
+    const slowWrite = async (path: string, text: string) => {
+      if (text.includes('Still running: 1 of')) {
+        void interrupt?.()
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      await writeAtomic(path, text)
+    }
+    const deps: CliDeps = {
+      reportDir: dir,
+      runner: async () => ({ runRepeat, model: 'm', finish: async () => undefined }),
+      now: () => new Date(2026, 10, 16),
+      commit: () => null,
+      writeFile: slowWrite,
+      onInterrupt: (handler) => {
+        interrupt = handler
+      },
+    }
+    expect(await main(['--source', 'repo', '--repeats', '1', '--label', 'race'], { GROQ_API_KEY: KEY }, io, deps)).toBe(130)
+    const json = JSON.parse(await readFile(join(dir, '2026-11-16-race.json'), 'utf8')) as { meta: { stoppedEarly: string }; records: unknown[] }
+    expect(json.meta.stoppedEarly).toMatch(/^Interrupted \(Ctrl\+C\) after 1 of 10 repeats/)
+    expect(json.records).toHaveLength(1)
+    expect(await readFile(join(dir, '2026-11-16-race.md'), 'utf8')).toContain('Interrupted (Ctrl+C) after 1 of 10 repeats')
   })
 
   it('merges reports into one with "merge", without a key and without calling the AI', async () => {
