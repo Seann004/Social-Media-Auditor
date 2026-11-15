@@ -114,6 +114,10 @@ describe('configured', () => {
     const app = makeApp(CONFIGURED)
     expect((await request(app).get('/api/projects/p-1/ai-suggestions')).status).toBe(401)
   })
+
+  it('mounts the item kinds route behind a token', async () => {
+    expect((await request(makeApp(CONFIGURED)).post('/api/projects/p-1/item-kinds')).status).toBe(401)
+  })
 })
 
 describe('unconfigured', () => {
@@ -136,6 +140,7 @@ describe('unconfigured', () => {
     ['post', '/api/projects/p-1/app-runs'],
     ['get', '/api/projects/p-1/evidence-runs/r-1/app-changes'],
     ['get', '/api/suggestions/s-1/steps'],
+    ['post', '/api/projects/p-1/item-kinds'],
   ] as const)('%s %s answers 503', async (method, path) => {
     const res = await request(makeApp({}))[method](path)
     expect(res.status).toBe(503)

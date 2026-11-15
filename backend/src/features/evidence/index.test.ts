@@ -77,9 +77,9 @@ describe('createEvidenceModule', () => {
     await expect(m.removeProjectScreenshots('p-1')).resolves.toBeUndefined()
   })
 
-  it('returns the evidence, app and repo routers when configured, and no login router', async () => {
+  it('returns the evidence, app, repo and item kinds routers when configured, and no login router', async () => {
     const m = moduleWith()
-    expect(m.routers).toHaveLength(3)
+    expect(m.routers).toHaveLength(4) // evidence, app, repo and item kinds
     const app = express()
     app.use('/api', ...m.routers)
     expect((await request(app).post('/api/auth/login').send({})).status).toBe(404)
@@ -88,14 +88,14 @@ describe('createEvidenceModule', () => {
 
   it('warns once, and still starts, without a Groq key', () => {
     const m = moduleWith(undefined, { ...CONFIGURED, GROQ_API_KEY: undefined })
-    expect(m.routers).toHaveLength(3)
+    expect(m.routers).toHaveLength(4) // evidence, app, repo and item kinds
     expect(errors).toHaveBeenCalledTimes(1)
     expect(String(errors.mock.calls[0][0])).toContain('GROQ_API_KEY')
   })
 
   it('logs one startup line, and still starts, without EVIDENCE_SECRET_KEY', () => {
     const m = moduleWith(undefined, { ...CONFIGURED, EVIDENCE_SECRET_KEY: undefined })
-    expect(m.routers).toHaveLength(3)
+    expect(m.routers).toHaveLength(4) // evidence, app, repo and item kinds
     expect(errors).toHaveBeenCalledTimes(1)
     expect(errors.mock.calls[0]).toEqual([KEY_MISSING_LINE])
   })
@@ -273,6 +273,13 @@ describe('how the module is wired', () => {
     const res = await request(app).post('/api/projects/p-1/evidence-runs').set(head)
     expect(res.status).toBe(503)
     expect(runJob).not.toHaveBeenCalled()
+  })
+
+  it('answers 503 on the item kinds route when GROQ_API_KEY is missing', async () => {
+    const { app } = build({ ...CONFIGURED, GROQ_API_KEY: undefined })
+    const res = await request(app).post('/api/projects/p-1/item-kinds').set(head)
+    expect(res.status).toBe(503)
+    expect(res.body).toEqual({ error: 'AI assessment is not configured on this server: GROQ_API_KEY is missing.' })
   })
 
   it('checks start addresses against the allow-list from the environment, and only that', async () => {
