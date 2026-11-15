@@ -387,36 +387,6 @@ describe('generateMappingsForGuideline against every other guideline', () => {
   })
 })
 
-describe('fetchMappings (admin review list)', () => {
-  beforeEach(() => {
-    addThirdGuideline()
-    tables.Item_Mapping = [
-      { mappingId: 'low', itemIdA: 'g1a', itemIdB: 'g3a', relation: 'partial', confidence: 0.3, rationale: 'weak', status: 'suggested', createdAt: '2026-01-03T00:00:00Z' },
-      { mappingId: 'none', itemIdA: 'g2a', itemIdB: 'g3a', relation: 'partial', confidence: null, rationale: null, status: 'suggested', createdAt: '2026-01-04T00:00:00Z' },
-      { mappingId: 'high', itemIdA: 'g1a', itemIdB: 'g2a', relation: 'equivalent', confidence: 0.95, rationale: 'same', status: 'suggested', createdAt: '2026-01-01T00:00:00Z' },
-    ]
-  })
-
-  it('puts the most confident pair first and pairs without a score last', async () => {
-    expect((await mapping.fetchMappings()).map((m) => m.mappingId)).toEqual(['high', 'low', 'none'])
-  })
-
-  it('describes both items of each pair', async () => {
-    const [first] = await mapping.fetchMappings()
-    expect(first.itemA!.guidelineName).toBe('ONSA')
-    expect(first.itemB!.guidelineName).toBe('UKCC')
-  })
-
-  it('can be limited to the pairs that touch one guideline', async () => {
-    expect((await mapping.fetchMappings('G3')).map((m) => m.mappingId).sort()).toEqual(['low', 'none'])
-  })
-
-  it('leaves out a pair whose item no longer exists', async () => {
-    tables.Item_Mapping.push({ mappingId: 'orphan', itemIdA: 'g1a', itemIdB: 'gone', relation: 'partial', confidence: 0.5, status: 'suggested', createdAt: '2026-01-05T00:00:00Z' })
-    expect((await mapping.fetchMappings()).map((m) => m.mappingId)).not.toContain('orphan')
-  })
-})
-
 describe('reviewMapping (admin decision)', () => {
   it('stores the status, the reviewer and the time', async () => {
     await mapping.reviewMapping('m1', 'rejected', undefined, 'admin-1')

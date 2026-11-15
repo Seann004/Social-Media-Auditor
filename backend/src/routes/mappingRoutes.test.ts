@@ -153,17 +153,43 @@ describe('POST /guidelines/:id/mappings/generate (admin only)', () => {
 })
 
 describe('GET /mappings (admin only)', () => {
-  it('lists every pair with both items, most confident first', async () => {
+  it('lists the pairs awaiting review by default, with both items, the learned score and usage', async () => {
     const res = await request(makeApp()).get('/api/mappings').set('Authorization', as.admin)
     expect(res.status).toBe(200)
-    expect(res.body.map((m: { mappingId: string }) => m.mappingId)).toEqual([M1, M_OUTSIDE])
-    expect(res.body[0]).toMatchObject({ confidence: 0.9, itemA: { guidelineName: 'ONSA' }, itemB: { guidelineName: 'UKCC' } })
+    expect(res.body.items.map((m: { mappingId: string }) => m.mappingId)).toEqual([M_OUTSIDE])
+    expect(res.body.items[0]).toMatchObject({
+      confidence: 0.6, learnedConfidence: expect.any(Number), level: 'medium', usage: { together: 0 },
+      itemA: { guidelineName: 'UKCC' }, itemB: { guidelineName: 'EDPB' },
+    })
+    expect(res.body).toMatchObject({ total: 1, counts: { suggested: 1, confirmed: 1, rejected: 0 }, levels: { high: 0, medium: 1, low: 0 } })
   })
 
-  it('can be limited to one guideline', async () => {
-    const res = await request(makeApp()).get(`/api/mappings?guidelineId=${G3}`).set('Authorization', as.admin)
-    expect(res.body.map((m: { mappingId: string }) => m.mappingId)).toEqual([M_OUTSIDE])
-    expect((await request(makeApp()).get('/api/mappings?guidelineId=x').set('Authorization', as.admin)).status).toBe(400)
+  it('shows the pairs of another status when asked', async () => {
+    const res = await request(makeApp()).get('/api/mappings?status=confirmed').set('Authorization', as.admin)
+    expect(res.body.items.map((m: { mappingId: string }) => m.mappingId)).toEqual([M1])
+    expect(res.body.items[0].usage).toEqual({ projectsA: 1, projectsB: 1, together: 1 })
+  })
+
+  it('can be limited to one guideline, one relation or the pairs in use', async () => {
+    const app = makeApp()
+    const get = (q: string) => request(app).get(`/api/mappings?status=confirmed${q}`).set('Authorization', as.admin)
+    expect((await get(`&guidelineId=${G1}`)).body.total).toBe(1)
+    expect((await get(`&guidelineId=${G3}`)).body.total).toBe(0)
+    expect((await get('&relation=partial')).body.total).toBe(0)
+    expect((await get('&inUse=true')).body.total).toBe(1)
+  })
+
+  it('pages the list', async () => {
+    const res = await request(makeApp()).get('/api/mappings?status=confirmed&limit=1&offset=1').set('Authorization', as.admin)
+    expect(res.body.items).toEqual([])
+    expect(res.body.total).toBe(1)
+  })
+
+  it('rejects filters and paging that are not valid', async () => {
+    const app = makeApp()
+    for (const q of ['guidelineId=x', 'status=maybe', 'relation=same', 'inUse=maybe', 'limit=0', 'limit=1000', 'limit=x', 'offset=-1']) {
+      expect((await request(app).get(`/api/mappings?${q}`).set('Authorization', as.admin)).status, q).toBe(400)
+    }
   })
 
   it('refuses everyone but an admin', async () => {
@@ -171,6 +197,63 @@ describe('GET /mappings (admin only)', () => {
     expect((await request(app).get('/api/mappings').set('Authorization', as.head)).status).toBe(403)
     expect((await request(app).get('/api/mappings').set('Authorization', as.aud)).status).toBe(403)
     expect((await request(app).get('/api/mappings')).status).toBe(401)
+  })
+})
+
+describe('GET /mappings/learning (admin only)', () => {
+  it('reports how the AI has done so far', async () => {
+    const res = await request(makeApp()).get('/api/mappings/learning').set('Authorization', as.admin)
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ decided: 1, approved: 1, rejected: 0 })
+    expect(res.body.bands).toEqual([expect.objectContaining({ relation: 'equivalent', fromPercent: 90, decided: 1, approved: 1 })])
+  })
+
+  it('refuses everyone but an admin', async () => {
+    expect((await request(makeApp()).get('/api/mappings/learning').set('Authorization', as.head)).status).toBe(403)
+    expect((await request(makeApp()).get('/api/mappings/learning')).status).toBe(401)
+  })
+})
+
+describe('POST /mappings/bulk (admin only)', () => {
+  const post = (body: object, who = as.admin) => request(makeApp()).post('/api/mappings/bulk').set('Authorization', who).send(body)
+
+  it('decides a list of pairs', async () => {
+    const res = await post({ ids: [M_OUTSIDE], status: 'rejected' })
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ updated: 1 })
+    expect(tables.Item_Mapping.find((m) => m.mappingId === M_OUTSIDE)).toMatchObject({ status: 'rejected', reviewedBy: ADMIN })
+  })
+
+  it('decides everything a filter matches when the count is what the admin saw', async () => {
+    const res = await post({ filter: { status: 'suggested', level: 'medium' }, expectedCount: 1, status: 'confirmed' })
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ updated: 1 })
+  })
+
+  it('answers 409 and changes nothing when the list is not the one the admin saw', async () => {
+    const res = await post({ filter: { status: 'suggested', level: 'medium' }, expectedCount: 5, status: 'confirmed' })
+    expect(res.status).toBe(409)
+    expect(res.body.actual).toBe(1)
+    expect(tables.Item_Mapping.find((m) => m.mappingId === M_OUTSIDE)!.status).toBe('suggested')
+  })
+
+  it('needs exactly one of ids and filter, a valid status and relation, and an expected count with a filter', async () => {
+    expect((await post({ status: 'confirmed' })).status).toBe(400)
+    expect((await post({ ids: [M1], filter: {}, expectedCount: 1, status: 'confirmed' })).status).toBe(400)
+    expect((await post({ ids: [M1], status: 'maybe' })).status).toBe(400)
+    expect((await post({ ids: [M1], status: 'confirmed', relation: 'same' })).status).toBe(400)
+    expect((await post({ ids: [], status: 'confirmed' })).status).toBe(400)
+    expect((await post({ ids: ['nope'], status: 'confirmed' })).status).toBe(400)
+    expect((await post({ filter: { status: 'suggested' }, status: 'confirmed' })).status).toBe(400)
+    expect((await post({ filter: { status: 'suggested' }, expectedCount: 99999, status: 'confirmed' })).status).toBe(400)
+    expect((await post({ filter: { level: 'extreme' }, expectedCount: 1, status: 'confirmed' })).status).toBe(400)
+  })
+
+  it('refuses everyone but an admin, and changes nothing', async () => {
+    expect((await post({ ids: [M_OUTSIDE], status: 'confirmed' }, as.head)).status).toBe(403)
+    expect((await post({ ids: [M_OUTSIDE], status: 'confirmed' }, as.aud)).status).toBe(403)
+    expect((await request(makeApp()).post('/api/mappings/bulk').send({ ids: [M_OUTSIDE], status: 'confirmed' })).status).toBe(401)
+    expect(tables.Item_Mapping.find((m) => m.mappingId === M_OUTSIDE)!.status).toBe('suggested')
   })
 })
 

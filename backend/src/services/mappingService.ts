@@ -6,7 +6,7 @@ export type AskModel = (systemPrompt: string, userPrompt: string) => Promise<any
 export type MappingRelation = 'equivalent' | 'partial'
 export type MappingStatus = 'suggested' | 'confirmed' | 'rejected'
 
-interface GlobalItem {
+export interface GlobalItem {
   itemId: string
   guidelineId: string
   guidelineName: string
@@ -19,7 +19,7 @@ interface GlobalItem {
   verbatimClauseText: string | null
 }
 
-interface MappingRow {
+export interface MappingRow {
   mappingId: string
   itemIdA: string
   itemIdB: string
@@ -61,7 +61,7 @@ export class SuggestionNotFoundError extends Error {
 
 export class MappingFailedError extends Error {}
 
-async function fetchAllRows<T>(page: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>): Promise<T[]> {
+export async function fetchAllRows<T>(page: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>): Promise<T[]> {
   const rows: T[] = []
   for (let from = 0; ; from += PAGE_SIZE) {
     const { data, error } = await page(from, from + PAGE_SIZE - 1)
@@ -78,7 +78,7 @@ function chunk<T>(list: T[], size = IN_CHUNK): T[][] {
   return out
 }
 
-async function fetchAllIn<T>(ids: string[], page: (ids: string[], from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>): Promise<T[]> {
+export async function fetchAllIn<T>(ids: string[], page: (ids: string[], from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>): Promise<T[]> {
   const rows: T[] = []
   for (const part of chunk(ids)) {
     rows.push(...await fetchAllRows<T>((from, to) => page(part, from, to)))
@@ -86,7 +86,7 @@ async function fetchAllIn<T>(ids: string[], page: (ids: string[], from: number, 
   return rows
 }
 
-async function fetchGlobalItems(): Promise<GlobalItem[]> {
+export async function fetchGlobalItems(): Promise<GlobalItem[]> {
   const { data: checklists, error } = await supabase
     .from('Checklist')
     .select('checklistId, guidelineId, Guideline(guidelineName, shortName)')
@@ -123,7 +123,7 @@ async function fetchGlobalItems(): Promise<GlobalItem[]> {
   })
 }
 
-async function fetchMappingRows(): Promise<MappingRow[]> {
+export async function fetchMappingRows(): Promise<MappingRow[]> {
   return fetchAllRows<MappingRow>((from, to) => supabase
     .from('Item_Mapping')
     .select('*')
@@ -315,27 +315,6 @@ async function fetchProjectLibraryItems(projectId: string): Promise<ProjectItem[
     .range(from, to))
 }
 
-/** All pairs (optionally those touching one guideline) with both items described, most confident first. For the admin review screen. */
-export async function fetchMappings(guidelineId?: string) {
-  const [rows, items] = await Promise.all([fetchMappingRows(), fetchGlobalItems()])
-  const byId = new Map(items.map((i) => [i.itemId.toLowerCase(), i]))
-  return rows
-    .map((m) => ({
-      mappingId: m.mappingId,
-      relation: m.relation,
-      confidence: m.confidence,
-      rationale: m.rationale,
-      status: m.status,
-      createdAt: m.createdAt,
-      reviewedAt: m.reviewedAt,
-      itemA: describeItem(byId.get(m.itemIdA.toLowerCase())),
-      itemB: describeItem(byId.get(m.itemIdB.toLowerCase())),
-    }))
-    .filter((m) => m.itemA && m.itemB)
-    .filter((m) => !guidelineId || m.itemA!.guidelineId === guidelineId || m.itemB!.guidelineId === guidelineId)
-    .sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1) || b.createdAt.localeCompare(a.createdAt))
-}
-
 /** The admin's decision on one pair. Only confirmed pairs are shown to auditors. */
 export async function reviewMapping(mappingId: string, status: MappingStatus, relation: MappingRelation | undefined, userId: string) {
   const values: Record<string, unknown> = { status, reviewedBy: userId, reviewedAt: new Date().toISOString() }
@@ -350,7 +329,7 @@ export async function reviewMapping(mappingId: string, status: MappingStatus, re
   return data[0]
 }
 
-function describeItem(item: GlobalItem | undefined) {
+export function describeItem(item: GlobalItem | undefined) {
   if (!item) return null
   return {
     itemId: item.itemId,
