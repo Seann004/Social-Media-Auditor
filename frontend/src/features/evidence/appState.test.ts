@@ -17,10 +17,23 @@ const ready = { hasApp: true, accountCount: 1, picked: 1, secretKeyConfigured: t
 describe('pick items', () => {
   it('toPickItems uses itemName, falling back to text', () => {
     const picks = toPickItems([item({ id: 'a', itemName: 'Private profiles' }), item({ id: 'b' })])
+    // Each pick now also carries its suggested evidence kind, for the picker's chip.
+    const kind = expect.objectContaining({ kind: 'app' })
     expect(picks).toEqual([
-      { id: 'a', guidelineId: 'g1', category: 'Privacy', label: 'Private profiles' },
-      { id: 'b', guidelineId: 'g1', category: 'Privacy', label: 'Profiles are private by default' },
+      { id: 'a', guidelineId: 'g1', category: 'Privacy', label: 'Private profiles', evidenceKind: kind },
+      { id: 'b', guidelineId: 'g1', category: 'Privacy', label: 'Profiles are private by default', evidenceKind: kind },
     ])
+  })
+
+  it('toPickItems suggests the evidence kind from the text, the name, the category and the help text', () => {
+    const [policy, fromHelp, fromName] = toPickItems([
+      item({ id: 'a', text: 'Staff are trained every year.' }),
+      item({ id: 'b', text: 'Teens are protected.', category: 'Safety', helpText: 'Check the code for encryption.' }),
+      item({ id: 'c', text: 'C-1', itemName: 'Passwords are hashed', category: 'Safety' }),
+    ])
+    expect(policy.evidenceKind).toEqual({ kind: 'neither', reason: 'It is a policy or process item (it mentions “staff”).' })
+    expect(fromHelp.evidenceKind?.kind).toBe('code')
+    expect(fromName.evidenceKind?.kind).toBe('code')
   })
 
   it('toPickItems carries the item code and a known severity for the picker', () => {

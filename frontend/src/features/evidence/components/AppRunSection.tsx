@@ -57,7 +57,7 @@ export default function AppRunSection({ projectId, setup, items, evidence, locke
       </SetupStep>
       <DrawerStep n={3} title="Items and run" state={complete ? 'current' : 'todo'}>
         {setup.secretKeyConfigured ? (
-          <AppItemPicker items={items} picked={picked} onChange={setChosen} limit={MAX_APP_ITEMS} />
+          <AppItemPicker items={items} picked={picked} onChange={setChosen} limit={MAX_APP_ITEMS} source="app" />
         ) : (
           <p className="text-xs text-slate-500">Items can be picked once the server is set up for checks inside the app.</p>
         )}

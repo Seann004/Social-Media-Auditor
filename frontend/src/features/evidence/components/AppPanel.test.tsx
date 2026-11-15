@@ -373,6 +373,18 @@ describe('App source in the evidence panel', () => {
     expect(await screen.findByText('Checking in the app: Item 2 · starting')).toBeInTheDocument()
   })
 
+  it('tells the picker it is the App, so a code item is better checked with Code', async () => {
+    const user = userEvent.setup()
+    const appItem = 'Accounts of users under 16 are private by default.'
+    const codeItem = 'Passwords are stored hashed, never in plain text.'
+    render(<Harness items={[appItem, codeItem].map((text, n) => ({ ...item(n + 1), itemName: undefined, text }))} />)
+    await openApp(user)
+    const codeRow = screen.getByRole('checkbox', { name: codeItem }).closest('li')!
+    expect(within(codeRow).getByText('Code')).toBeInTheDocument()
+    expect(within(codeRow).getByText('Better checked with Code')).toBeInTheDocument()
+    expect(within(screen.getByRole('checkbox', { name: appItem }).closest('li')!).queryByText(/Better checked/)).toBeNull()
+  })
+
   it('links the cap note to the disabled boxes and drops picked items that left the checklist', async () => {
     const user = userEvent.setup()
     m.startAppRun.mockResolvedValue({ run: makeRun({ source: 'app', status: 'queued' }) })

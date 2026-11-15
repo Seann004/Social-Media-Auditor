@@ -123,6 +123,71 @@ describe('AppItemPicker', () => {
     })
   })
 
+  describe('evidence kind chips', () => {
+    const TEXTS = {
+      app: 'Accounts of users under 16 are private by default.',
+      neither: 'The privacy policy for younger users is easy to find.',
+      code: 'Passwords are stored hashed, never in plain text.',
+      both: 'Users must enter their date of birth when they sign up.',
+    }
+    const kinds: ChecklistItem[] = Object.values(TEXTS).map((text, n) => ({ ...item(n + 1, 'Privacy by default'), itemName: undefined, text }))
+
+    function WithSource({ source }: { source?: 'app' | 'repo' }) {
+      const [picked, setPicked] = useState<Set<string>>(new Set())
+      return <AppItemPicker items={toPickItems(kinds)} picked={picked} onChange={setPicked} guidelines={[]} source={source} />
+    }
+    const rowOf = (text: string) => screen.getByRole('checkbox', { name: text }).closest('li')!
+
+    it('shows a chip with the suggested kind beside each item, with the reason as a tooltip and for screen readers', () => {
+      render(<WithSource />)
+      const chips: [string, string][] = [
+        [TEXTS.app, 'App'],
+        [TEXTS.neither, 'Policy / process'],
+        [TEXTS.code, 'Code'],
+        [TEXTS.both, 'App + Code'],
+      ]
+      for (const [text, label] of chips) expect(within(rowOf(text)).getByText(label)).toBeInTheDocument()
+      const chip = within(rowOf(TEXTS.neither)).getByText('Policy / process')
+      expect(chip).toHaveAttribute('title', 'It is a policy or process item (it mentions “policy”).')
+      expect(chip).toHaveTextContent('Suggested source: Policy / process. It is a policy or process item (it mentions “policy”).')
+      expect(within(chip).getByText('. It is a policy or process item (it mentions “policy”).')).toHaveClass('sr-only')
+    })
+
+    it('keeps each checkbox named by its item text alone', () => {
+      render(<WithSource source="app" />)
+      for (const text of Object.values(TEXTS)) {
+        const box = screen.getByRole('checkbox', { name: text })
+        expect(box).toHaveAccessibleName(text)
+        expect(box).toBeEnabled()
+      }
+    })
+
+    it('on the App source, marks the items that suit another source, and blocks none of them', async () => {
+      const user = userEvent.setup()
+      render(<WithSource source="app" />)
+      expect(within(rowOf(TEXTS.code)).getByText('Better checked with Code')).toBeInTheDocument()
+      expect(within(rowOf(TEXTS.neither)).getByText("Usually can't be shown by an app or code")).toBeInTheDocument()
+      expect(within(rowOf(TEXTS.app)).queryByText(/Better checked|Usually can't/)).toBeNull()
+      expect(within(rowOf(TEXTS.both)).queryByText(/Better checked|Usually can't/)).toBeNull()
+      await user.click(screen.getByRole('checkbox', { name: TEXTS.code }))
+      await user.click(screen.getByRole('checkbox', { name: TEXTS.neither }))
+      expect(screen.getByText(`2 of ${MAX_APP_ITEMS} picked`)).toBeInTheDocument()
+    })
+
+    it('on the Code repository source, points app items to the App', () => {
+      render(<WithSource source="repo" />)
+      expect(within(rowOf(TEXTS.app)).getByText('Better checked with the App')).toBeInTheDocument()
+      expect(within(rowOf(TEXTS.neither)).getByText("Usually can't be shown by an app or code")).toBeInTheDocument()
+      expect(within(rowOf(TEXTS.code)).queryByText(/Better checked|Usually can't/)).toBeNull()
+      expect(within(rowOf(TEXTS.both)).queryByText(/Better checked|Usually can't/)).toBeNull()
+    })
+
+    it('shows no hint without a source', () => {
+      render(<WithSource />)
+      expect(screen.queryByText(/Better checked|Usually can't/)).toBeNull()
+    })
+  })
+
   describe('select all per category', () => {
     const three = (limit?: number) => {
       const all = [

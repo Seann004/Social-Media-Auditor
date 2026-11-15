@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
@@ -46,9 +46,9 @@ const item = (n: number, category = 'Privacy'): ChecklistItem => ({
 const items = [...Array.from({ length: 8 }, (_, i) => item(i + 1)), ...Array.from({ length: 4 }, (_, i) => item(i + 9, 'Safety'))]
 const repo = { repoUrl: 'https://github.com/o/n', branch: null, updatedAt: '2026-11-07T09:00:00.000Z' }
 
-function Harness() {
+function Harness({ checklist = items }: { checklist?: ChecklistItem[] }) {
   const evidence = useEvidence('p1', { enabled: true })
-  return <EvidencePanel projectId="p1" role="auditor" evidence={evidence} locked={false} checklistItems={items} publicPagesEnabled />
+  return <EvidencePanel projectId="p1" role="auditor" evidence={evidence} locked={false} checklistItems={checklist} publicPagesEnabled />
 }
 
 beforeEach(() => {
@@ -149,6 +149,20 @@ describe('Code repository source in the evidence panel', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Item 1' }))
     await user.click(screen.getByRole('button', { name: 'Check the code' }))
     expect(await screen.findByText('Something went wrong. Try again.')).toBeInTheDocument()
+  })
+
+  it('tells the picker it is the Code repository, so an app item is better checked with the App', async () => {
+    const user = userEvent.setup()
+    const appItem = 'Accounts of users under 16 are private by default.'
+    const codeItem = 'Passwords are stored hashed, never in plain text.'
+    const checklist = [appItem, codeItem].map((text, n) => ({ ...item(n + 1), itemName: undefined, text }))
+    m.getRepoSource.mockResolvedValue({ repo })
+    await renderOpen(<Harness checklist={checklist} />)
+    await openRepo(user)
+    const appRow = (await screen.findByRole('checkbox', { name: appItem })).closest('li')!
+    expect(within(appRow).getByText('App')).toBeInTheDocument()
+    expect(within(appRow).getByText('Better checked with the App')).toBeInTheDocument()
+    expect(within(screen.getByRole('checkbox', { name: codeItem }).closest('li')!).queryByText(/Better checked/)).toBeNull()
   })
 
   it('caps the picker at 10 with the same style of message as the app', async () => {

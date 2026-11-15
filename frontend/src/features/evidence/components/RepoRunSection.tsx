@@ -67,7 +67,7 @@ export default function RepoRunSection({ projectId, setup, items, evidence, lock
         <RepoSetup repo={setup.repo} onSave={setup.save} disabled={locked} />
       </SetupStep>
       <DrawerStep n={3} title="Items and run" state={setup.repo ? 'current' : 'todo'}>
-        <AppItemPicker items={items} picked={picked} onChange={setChosen} limit={REPO_ITEM_LIMIT} verb="repository" />
+        <AppItemPicker items={items} picked={picked} onChange={setChosen} limit={REPO_ITEM_LIMIT} verb="repository" source="repo" />
       </DrawerStep>
       <RunFooter
         summary={`${plural(pickedIds.length, 'item')} · ${setup.repo ? 'repository saved' : 'no repository saved'}`}
