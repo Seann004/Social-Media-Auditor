@@ -84,6 +84,8 @@ export function parseClassifyArgs(argv: readonly string[]): ClassifyArgs | { err
 
 export interface GroupScore {
   total: number
+  /** Items with any answer: fewer than total when a call failed or the cap stopped the calls. */
+  answered: number
   /** Items whose answer, at either confidence, is the label or an also-label. */
   agreed: number
   agreement: number
@@ -117,11 +119,13 @@ const fairLabels = (s: LabelledSample): ItemKind[] => [s.label, ...(s.also ?? []
 
 function groupScore(results: readonly SampleResult[]): GroupScore {
   const total = results.length
+  const answered = results.filter((r) => r.answer !== null).length
   const agreed = results.filter((r) => r.agrees).length
   const high = results.filter((r) => r.answer?.confidence === 'high')
   const assertedCorrect = high.filter((r) => r.agrees).length
   return {
     total,
+    answered,
     agreed,
     agreement: total === 0 ? 0 : agreed / total,
     asserted: high.length,
@@ -177,7 +181,7 @@ const cell = (text: string): string => text.replace(/\r?\n/g, ' ').replace(/\|/g
 
 function scoreRow(name: string, s: GroupScore): string {
   const precision = s.precision === null ? 'none asserted' : ratio(s.assertedCorrect, s.asserted)
-  return `| ${name} | ${s.total} | ${ratio(s.agreed, s.total)} | ${s.asserted} | ${precision} | ${pct(s.coverage)} |`
+  return `| ${name} | ${s.total} | ${s.answered} | ${ratio(s.agreed, s.total)} | ${s.asserted} | ${precision} | ${pct(s.coverage)} |`
 }
 
 function confusionTable(matrix: Confusion, noneName: string): string[] {
@@ -193,6 +197,15 @@ const GROUP_NAME: Readonly<Record<SampleGroup, string>> = {
   held_out: 'Held out (never used to tune any rule)',
 }
 
+function partialNote(meta: KindReportMeta, score: KindScore): string[] {
+  if (score.all.answered === score.all.total) return []
+  const cause = meta.stoppedByCap ? 'the token cap stopped the calls' : `${meta.failedCalls} AI call(s) failed (see the console: often Groq's rate limit)`
+  return [
+    `**Partial run**: ${score.all.answered} of ${score.all.total} items got an answer, because ${cause}. Every number below counts an item without an answer against the classifier, so read the Answered column and the disagreements, not the headline agreement.`,
+    '',
+  ]
+}
+
 function markdownOf(meta: KindReportMeta, score: KindScore): string {
   const disagreements = score.results.filter((r) => !r.agrees)
   const lines = [
@@ -204,10 +217,11 @@ function markdownOf(meta: KindReportMeta, score: KindScore): string {
     '',
     '**Agreement**: the AI kind, at either confidence, is the label (or an equally fair "also" label); a missing answer counts against. **Precision when asserting**: of the high-confidence answers (the only ones the screen uses), how many are right. **Coverage**: the share of items with a high-confidence answer. The held-out items were never used to tune the old keyword rules, and the AI prompt was not tuned to any of these items.',
     '',
+    ...partialNote(meta, score),
     '## Summary',
     '',
-    '| Set | Items | Agreement | Asserted (high) | Precision when asserting | Coverage |',
-    '|---|---|---|---|---|---|',
+    '| Set | Items | Answered | Agreement | Asserted (high) | Precision when asserting | Coverage |',
+    '|---|---|---|---|---|---|---|',
     scoreRow('All', score.all),
     ...GROUPS.map((g) => scoreRow(GROUP_NAME[g], score.byGroup[g])),
     '',

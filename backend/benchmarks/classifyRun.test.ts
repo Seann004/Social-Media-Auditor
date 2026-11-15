@@ -100,12 +100,22 @@ describe('buildKindReport', () => {
     const samples = [sample('Teens can pick things.', 'app'), sample('Staff | volunteers are vetted.', 'neither', 'held_out')]
     const answers = new Map([['s1', answer('app')], ['s2', answer('code', 'high', `Leaked ${KEY} here`)]])
     const report = buildKindReport(meta, samples, scoreSamples(samples, answers), [KEY])
-    expect(report.markdown).toContain('| All | 2 | 1 of 2 (50.0%)')
+    expect(report.markdown).toContain('| All | 2 | 2 | 1 of 2 (50.0%)')
+    expect(report.markdown).not.toContain('Partial run')
     expect(report.markdown).toContain('| held_out | Staff \\| volunteers are vetted. | neither | code | high | Leaked [redacted] here |')
     expect(report.markdown).not.toContain('Teens can pick things.')
     expect(report.markdown).not.toContain(KEY)
     expect(report.json).not.toContain(KEY)
     expect(JSON.parse(report.json).summary.all.agreed).toBe(1)
+  })
+
+  it('says plainly when the run was partial, and how many items got an answer', () => {
+    const samples = [sample('A', 'app'), sample('B', 'code'), sample('C', 'neither', 'held_out')]
+    const answers = new Map([['s1', answer('app')]])
+    const report = buildKindReport({ ...meta, failedCalls: 1 }, samples, scoreSamples(samples, answers), [])
+    expect(report.markdown).toContain('**Partial run**: 1 of 3 items got an answer')
+    expect(report.markdown).toContain('| All | 3 | 1 | 1 of 3 (33.3%)')
+    expect(JSON.parse(report.json).summary.all.answered).toBe(1)
   })
 })
 
