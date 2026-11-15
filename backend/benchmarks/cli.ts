@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs, USAGE } from './args.js'
 import { CASES, validateCases } from './cases.js'
 import { createBudget, executeCases, type RunRepeat } from './execute.js'
+import { counted, num, pct, ratioText } from './format.js'
 import { caseLines, planLines, selectCases } from './plan.js'
 import { buildReport, redactSecrets, reportBaseName, writeReport } from './report.js'
 import { scoreCase, summarise } from './score.js'
@@ -44,21 +45,27 @@ const MIN_SECRET_CHARS = 8
 
 const NO_KEY = 'GROQ_API_KEY is not set, so the benchmark cannot call the AI. Set it in the environment (or in backend/.env, which is loaded as the server loads it), or use --dry-run to list the cases without a key.'
 
-const pct = (x: number | null): string => (x === null ? '–' : `${Math.round(x * 100)}%`)
-
 async function defaultRunner(apiKey: string, requestedModel: string | null): Promise<Runner> {
   const { createRealRunner } = await import('./realRun.js')
   return createRealRunner(apiKey, requestedModel)
 }
 
-function gitCommit(): string | null {
+/** The commit as the report shows it: the short id, flagged when the working tree has uncommitted changes. */
+export function commitLabel(sha: string | null, porcelain: string): string | null {
+  if (sha === null || sha === '') return null
+  return porcelain.trim() === '' ? sha : `${sha} (uncommitted changes)`
+}
+
+function git(args: string[]): string | null {
   try {
-    return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: fileURLToPath(new URL('.', import.meta.url)), stdio: ['ignore', 'pipe', 'ignore'] })
-      .toString()
-      .trim()
+    return execFileSync('git', args, { cwd: fileURLToPath(new URL('.', import.meta.url)), stdio: ['ignore', 'pipe', 'ignore'] }).toString()
   } catch {
     return null
   }
+}
+
+function gitCommit(): string | null {
+  return commitLabel(git(['rev-parse', '--short', 'HEAD'])?.trim() ?? null, git(['status', '--porcelain']) ?? '')
 }
 
 /** The values of every variable whose name looks secret: the report must never contain them. */
@@ -136,8 +143,10 @@ export async function main(argv: readonly string[], env: Env, io: CliIo, deps: C
   const scores = cases.map((c) => scoreCase(c, result.records.filter((r) => r.caseId === c.id)))
   const s = summarise(scores, result.records)
   say('')
-  say(`Done: ${s.repeats} ${s.repeats === 1 ? 'repeat' : 'repeats'}, ${s.totalTokens.toLocaleString('en-US')} tokens, ${s.totalSeconds.toFixed(0)} s.`)
-  say(`Accuracy: ${pct(s.accuracy)} (${s.correct} of ${s.scored}) · coverage ${pct(s.coverage)} · wrong-claim rate ${pct(s.wrongClaimRate)} · stability ${pct(s.stability)} · errors ${s.errors}`)
+  say(`Done: ${counted(s.repeats, 'repeat')}, ${counted(s.totalTokens, 'token')}, ${s.totalSeconds.toFixed(0)} s.`)
+  say(
+    `Accuracy: ${ratioText(s.accuracy, s.correct, s.scored)} · strict ${ratioText(s.strictAccuracy, s.correct, s.repeats)} · coverage ${pct(s.coverage)} · wrong-claim rate ${pct(s.wrongClaimRate)} · stability ${pct(s.stability)} · errors ${num(s.errors)}`,
+  )
   if (result.stoppedEarly !== null) say(`Stopped early: ${result.stoppedEarly}`)
   say(`Report: ${paths.markdownPath}`)
   say(`        ${paths.jsonPath}`)

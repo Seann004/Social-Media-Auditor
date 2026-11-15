@@ -1,6 +1,7 @@
 /** Which cases a benchmark runs, and a rough estimate of the AI calls and tokens it needs. No side effects. */
 import { APP_MAX_STEPS_PER_CHECK } from '../src/features/evidence/config.js'
 import type { BenchmarkArgs } from './args.js'
+import { counted, num } from './format.js'
 import type { BenchmarkCase, CaseSource } from './types.js'
 
 interface SourceEstimate {
@@ -46,8 +47,6 @@ export function estimateOf(cases: readonly BenchmarkCase[], repeats: number): Es
   return { runs: cases.length * repeats, typicalCalls: per((e) => e.typicalCalls), maxCalls: per((e) => e.maxCalls), tokens: per((e) => e.tokens) }
 }
 
-const num = (n: number): string => n.toLocaleString('en-US')
-const counted = (n: number, word: string): string => `${num(n)} ${word}${n === 1 ? '' : 's'}`
 const SOURCE_NAMES: Readonly<Record<CaseSource, string>> = { app: 'App', repo: 'Code' }
 
 /** What the plan of a run looks like: the counts, and the estimate against the cap. */

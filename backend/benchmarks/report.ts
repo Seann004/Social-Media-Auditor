@@ -5,8 +5,21 @@
  */
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { scoreCase, summarise } from './score.js'
-import type { BenchmarkCase, CaseScore, CaseSource, Outcome, RepeatRecord, Summary } from './types.js'
+import { BASE_APP_MODE, PLATFORM } from './cases.js'
+import { counted, num, pct, ratioText } from './format.js'
+import { REPO_FILES } from './repoFixture.js'
+import { constantFloors, scoreCase, summarise } from './score.js'
+import {
+  EXPECTED_ANSWERS,
+  type BenchmarkCase,
+  type CaseScore,
+  type CaseSource,
+  type ExpectedAnswer,
+  type Floors,
+  type Outcome,
+  type RepeatRecord,
+  type Summary,
+} from './types.js'
 
 export interface ReportMeta {
   /** ISO time the benchmark started. */
@@ -77,14 +90,13 @@ const OUTCOME_NAMES: Readonly<Record<Outcome, string>> = {
 }
 
 const cell = (text: string): string => text.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|')
-const pct = (x: number | null): string => (x === null ? '–' : `${Math.round(x * 100)}%`)
-const num = (x: number): string => x.toLocaleString('en-US')
 const avg = (x: number | null, digits = 1): string => (x === null ? '–' : x.toFixed(digits))
 const answerOf = (a: string | null): string => a ?? '(none)'
 
 interface Scored {
   scores: CaseScore[]
   summaries: Record<'all' | CaseSource, Summary>
+  floors: Record<'all' | CaseSource, Floors>
 }
 
 function scoreAll(cases: BenchmarkCase[], records: RepeatRecord[]): Scored {
@@ -94,24 +106,34 @@ function scoreAll(cases: BenchmarkCase[], records: RepeatRecord[]): Scored {
       scores.filter((s) => source === null || s.source === source),
       records.filter((r) => source === null || r.source === source),
     )
-  return { scores, summaries: { all: of(null), app: of('app'), repo: of('repo') } }
+  const floorsOf = (source: CaseSource | null): Floors => constantFloors(cases.filter((c) => source === null || c.source === source))
+  return {
+    scores,
+    summaries: { all: of(null), app: of('app'), repo: of('repo') },
+    floors: { all: floorsOf(null), app: floorsOf('app'), repo: floorsOf('repo') },
+  }
 }
 
-function summaryTable(s: Scored['summaries']): string[] {
+function summaryTable({ summaries: s, floors: f }: Scored): string[] {
   const cols = [s.all, s.app, s.repo]
+  const floor = (answer: ExpectedAnswer) => `| Floor: always "${ANSWER_NAMES[answer]}" | ${[f.all, f.app, f.repo].map((x) => pct(x[answer])).join(' | ')} |`
   const row = (name: string, value: (x: Summary) => string) => `| ${name} | ${cols.map(value).join(' | ')} |`
   return [
     '| Measure | All | App | Code |',
     '| --- | --- | --- | --- |',
     row('Cases', (x) => num(x.cases)),
     row('Repeats', (x) => num(x.repeats)),
-    row('Accuracy', (x) => `${pct(x.accuracy)} (${x.correct} of ${x.scored})`),
+    row('Accuracy', (x) => ratioText(x.accuracy, x.correct, x.scored)),
+    row('Strict accuracy', (x) => ratioText(x.strictAccuracy, x.correct, x.repeats)),
+    floor('yes'),
+    floor('no'),
+    floor('not_settled'),
     row('Coverage', (x) => pct(x.coverage)),
-    row('Wrong-claim rate', (x) => `${pct(x.wrongClaimRate)} (${x.wrong} wrong)`),
+    row('Wrong-claim rate', (x) => `${pct(x.wrongClaimRate)} (${num(x.wrong)} wrong)`),
     row('Stability', (x) => pct(x.stability)),
     row('Not settled', (x) => num(x.notSettled)),
     row('Unproven', (x) => num(x.unproven)),
-    row('Errors (no suggestion)', (x) => num(x.errors)),
+    row('Errors (left out)', (x) => num(x.errors)),
     row('Average steps', (x) => avg(x.averageSteps)),
     row('Tokens', (x) => num(x.totalTokens)),
     row('Tokens per repeat', (x) => (x.averageTokens === null ? '–' : num(Math.round(x.averageTokens)))),
@@ -121,10 +143,36 @@ function summaryTable(s: Scored['summaries']): string[] {
 }
 
 const GLOSSARY = [
-  'Accuracy: correct repeats out of those that gave a suggestion. Coverage: the share of those that made a claim (any answer but "not settled").',
-  'Wrong-claim rate: wrong claims out of all claims. Stability: cases whose repeats all gave the same answer (unknown with fewer than two answers).',
-  'Unproven: the right claim, but none of its quotes was found in what the AI was sent. Error: the run gave no suggestion at all (see the last section).',
+  'Accuracy: correct repeats out of the repeats that count. Strict accuracy: correct repeats out of all repeats, errors included. Floor: the accuracy a tool would reach by always giving that one answer.',
+  'Coverage: the share of counted repeats that made a claim (any answer but "not settled" or a hedge the case allows). Wrong-claim rate: wrong claims out of all claims.',
+  'Not settled: no result where a claim was expected, an allowed hedge, or a run that failed to give a suggestion by itself (never correct). Unproven: the right claim, but none of its quotes was found in what the AI was sent.',
+  "Error: a repeat left out because the benchmark's token cap or Groq's daily limit stopped it, or it could not run (see the last section). Stability: cases whose repeats all gave the same answer (unknown with fewer than two).",
+  "Seconds include Groq's rate-limit waits, so they are not comparable across runs.",
 ]
+
+const ANSWER_NAMES: Readonly<Record<ExpectedAnswer, string>> = { yes: 'yes', no: 'no', partially: 'partially', not_settled: 'not settled' }
+
+function mixOf(cases: BenchmarkCase[], source: CaseSource): string {
+  const own = cases.filter((c) => c.source === source)
+  const parts = EXPECTED_ANSWERS.flatMap((a) => {
+    const n = own.filter((c) => c.expected === a).length
+    return n === 0 ? [] : [`${num(n)} ${ANSWER_NAMES[a]}`]
+  })
+  const name = counted(own.length, `${source === 'app' ? 'app' : 'code'} case`)
+  return parts.length === 0 ? name : `${name} (${parts.join(', ')})`
+}
+
+/** What the numbers measure, so that they are not read as the tool's accuracy on a real platform. */
+function contextLines(cases: BenchmarkCase[], floors: Floors): string[] {
+  const modes = Object.keys(BASE_APP_MODE).join(', ')
+  const best = EXPECTED_ANSWERS.reduce((a, b) => ((floors[b] ?? 0) > (floors[a] ?? 0) ? b : a))
+  return [
+    `- Sources: the practice social app, shown to the AI as the platform "${PLATFORM}", with its ${modes} mode on in every app case (Settings then links each settings page); and a synthetic repository of ${counted(Object.keys(REPO_FILES).length, 'file')} served by a faked GitHub.`,
+    '- Both are far simpler than a real platform: a few pages with plain labels, and a few hundred lines of code. The numbers show how the tool does on small, fixed ground, not how accurate it is on a real platform.',
+    `- Case mix: ${mixOf(cases, 'app')}; ${mixOf(cases, 'repo')}.`,
+    `- Floors: always "yes" would score ${pct(floors.yes)}, always "no" ${pct(floors.no)}, always "not settled" ${pct(floors.not_settled)}. Accuracy means something only well above the highest floor (${pct(floors[best])}, always "${ANSWER_NAMES[best]}").`,
+  ]
+}
 
 function caseTable(cases: BenchmarkCase[], scores: CaseScore[]): string[] {
   const rows = scores.map((s) => {
@@ -150,7 +198,7 @@ function detail(c: BenchmarkCase, r: RepeatRecord, outcome: Outcome): string[] {
     `- Reason given: ${r.reason || '(none)'}`,
     `- Quotes: ${quotes}`,
     `- Flags: ${r.flags.length === 0 ? 'none' : r.flags.join(', ')}`,
-    `- Run: ${r.runStatus}, ${num(r.tokens)} tokens, ${r.seconds.toFixed(1)} s${r.steps === null ? '' : `, ${r.steps} steps`}`,
+    `- Run: ${r.runStatus}, ${counted(r.tokens, 'token')}, ${r.seconds.toFixed(1)} s${r.steps === null ? '' : `, ${counted(r.steps, 'step')}`}`,
     '',
     c.source === 'app' ? 'Step lines:' : 'Code pieces sent to the judge:',
     '',
@@ -175,21 +223,28 @@ function details(cases: BenchmarkCase[], records: RepeatRecord[], scores: CaseSc
 function errorTable(records: RepeatRecord[]): string[] {
   const failed = records.filter((r) => r.answer === null)
   if (failed.length === 0) return ['None.']
-  const rows = failed.map((r) => `| ${r.caseId} | ${r.repeat} | ${r.runStatus} | ${cell(r.runError ?? '(no message)')} |`)
-  return ['| Case | Repeat | Run status | Message |', '| --- | --- | --- | --- |', ...rows]
+  const rows = failed.map((r) => {
+    const countedAs = r.excluded ? `left out (${r.excluded.replace('_', ' ')})` : 'not settled'
+    return `| ${r.caseId} | ${r.repeat} | ${r.runStatus} | ${countedAs} | ${cell(r.runError ?? '(no message)')} |`
+  })
+  return ['| Case | Repeat | Run status | Counted as | Message |', '| --- | --- | --- | --- | --- |', ...rows]
 }
 
 function markdownOf(meta: ReportMeta, cases: BenchmarkCase[], records: RepeatRecord[], scored: Scored): string {
-  const header = `Started ${meta.startedAt} · model \`${meta.model}\` · ${meta.repeats} ${meta.repeats === 1 ? 'repeat' : 'repeats'} per case · token cap ${num(meta.maxTokens)} · commit ${meta.commit ?? 'unknown'}`
+  const header = `Started ${meta.startedAt} · model \`${meta.model}\` · ${counted(meta.repeats, 'repeat')} per case · token cap ${num(meta.maxTokens)} · commit ${meta.commit ?? 'unknown'}`
   return [
     `# Evidence benchmark: ${meta.label}`,
     '',
     header,
     '',
     ...(meta.stoppedEarly === null ? [] : [`> Stopped early: ${meta.stoppedEarly}`, '']),
+    '## What this measures',
+    '',
+    ...contextLines(cases, scored.floors.all),
+    '',
     '## Summary',
     '',
-    ...summaryTable(scored.summaries),
+    ...summaryTable(scored),
     '',
     ...GLOSSARY.map((g) => `- ${g}`),
     '',
@@ -217,7 +272,7 @@ export function buildReport(input: ReportInput): BuiltReport {
   const markdown = redactSecrets(markdownOf(meta, cases, records, scored), secrets)
   const caseRows = scored.scores.map((s) => {
     const c = cases.find((x) => x.id === s.caseId) as BenchmarkCase
-    return { ...s, item: c.item, why: c.why, kinds: c.kinds }
+    return { ...s, category: c.category, item: c.item, why: c.why, kinds: c.kinds, hedges: c.hedges ?? [], app: c.app ?? null }
   })
   const json = JSON.stringify({ meta, summary: scored.summaries, cases: caseRows, records }, null, 2)
   return { markdown, json }

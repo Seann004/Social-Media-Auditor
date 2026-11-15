@@ -53,6 +53,12 @@ export interface RepeatQuote {
   verified: boolean
 }
 
+/**
+ * Why a repeat says nothing about the AI and is left out of accuracy and coverage: the benchmark's
+ * token cap, Groq's daily limit, or a repeat that could not run at all.
+ */
+export type ExcludedReason = 'token_cap' | 'daily_limit' | 'not_run'
+
 /** What one repeat of one case produced. A repeat is one fresh run of the real pipeline. */
 export interface RepeatRecord {
   caseId: string
@@ -72,14 +78,17 @@ export interface RepeatRecord {
   steps: number | null
   /** App cases: the step lines. Code cases: the pieces of code the judge was sent. */
   lines: string[]
+  /** Set when the repeat is left out of the scores; null or absent when it counts. */
+  excluded?: ExcludedReason | null
 }
 
 /**
  * - correct: the answer is the expected one or an acceptable one (with a verified quote, if it is a claim);
  * - wrong: a different claim;
- * - not_settled: no result, where a claim was expected;
+ * - not_settled: no result where a claim was expected, a hedge the case lists, or a run that failed to
+ *   give a suggestion for a reason of its own (never correct, even where no result was expected);
  * - unproven: the right claim, but none of its quotes could be found in what was sent;
- * - error: no suggestion at all, so the repeat says nothing about the AI's judgement.
+ * - error: an excluded repeat (token cap, daily limit, not run), which says nothing about the AI.
  */
 export type Outcome = 'correct' | 'wrong' | 'not_settled' | 'unproven' | 'error'
 
@@ -108,6 +117,8 @@ export interface Summary {
   errors: number
   /** correct / scored. */
   accuracy: number | null
+  /** correct / repeats: errors count as not settled. */
+  strictAccuracy: number | null
   /** Repeats that made a claim (any answer but not_settled) / scored. */
   coverage: number | null
   /** wrong / claims. */
@@ -117,7 +128,12 @@ export interface Summary {
   /** Over app repeats only. */
   averageSteps: number | null
   totalTokens: number
+  /** Over repeats that ran. */
   averageTokens: number | null
   totalSeconds: number
+  /** Over repeats that ran. Includes Groq's 429 waits, so it is not comparable across runs. */
   averageSeconds: number | null
 }
+
+/** Per fixed answer, the share of cases a tool that always gave it would get right. */
+export type Floors = Record<ExpectedAnswer, number | null>

@@ -43,7 +43,7 @@ const RECORDS: RepeatRecord[] = [
   record({ repeat: 1, lines: ['Step 1 · Teen 15 · CORRECT-LINE'] }),
   record({ repeat: 2, answer: 'yes', reason: 'The banner says private.', quotes: [{ text: 'Your account is private', verified: true }], lines: ['Step 4 · Teen 15 · WRONG-LINE'] }),
   record({ caseId: 'repo-b', source: 'repo', repeat: 1, answer: 'yes', quotes: [{ text: 'blockUser(', verified: false }], steps: null, lines: ['File src/safety/block.ts, lines 1–20'] }),
-  record({ caseId: 'repo-b', source: 'repo', repeat: 2, answer: null, quotes: [], runStatus: 'partial', runError: 'AI daily limit reached; 1 item not checked', steps: null, lines: [] }),
+  record({ caseId: 'repo-b', source: 'repo', repeat: 2, answer: null, quotes: [], runStatus: 'partial', runError: 'AI daily limit reached; 1 item not checked', steps: null, lines: [], excluded: 'daily_limit' }),
 ]
 
 describe('buildReport', () => {
@@ -71,6 +71,26 @@ describe('buildReport', () => {
     expect(parsed.summary).toMatchObject({ all: { cases: 2, repeats: 4, wrong: 1, unproven: 1, errors: 1 } })
     expect(parsed.cases).toHaveLength(2)
     expect(parsed.records).toHaveLength(4)
+  })
+
+  it('says what the numbers measure: the sources, how simple they are, the case mix and the floors', () => {
+    const { markdown } = buildReport({ meta: META, cases: CASES, records: RECORDS })
+    expect(markdown).toContain('## What this measures')
+    expect(markdown).toContain('platform "Social"')
+    expect(markdown).toContain('settingsMenu')
+    expect(markdown).toContain('far simpler than a real platform')
+    expect(markdown).toContain('Case mix: 1 app case (1 no); 1 code case (1 yes).')
+    expect(markdown).toMatch(/\| Floor: always "yes" \| 50% \| 0% \| 100% \|/)
+    expect(markdown).toMatch(/\| Floor: always "not settled" \| 0% \| 0% \| 0% \|/)
+    expect(markdown).toMatch(/\| Strict accuracy \| 25% \(1 of 4\) \|/)
+  })
+
+  it('writes counts and numbers the same way everywhere', () => {
+    const one = [record({ repeat: 1, answer: 'yes', tokens: 12_048, steps: 1 })]
+    const { markdown } = buildReport({ meta: { ...META, repeats: 1 }, cases: CASES, records: one })
+    expect(markdown).toContain('1 repeat per case')
+    expect(markdown).toContain('12,048 tokens, 12.5 s, 1 step')
+    expect(markdown).not.toMatch(/\b1 (repeats|steps|cases)\b/)
   })
 
   it('says so when the run stopped early', () => {

@@ -4,6 +4,7 @@
  * AI call: once it is reached no call starts, and the benchmark stops.
  */
 import { appPartialSummary } from '../src/features/evidence/itemRun.js'
+import { counted, num } from './format.js'
 import { redactSecrets } from './report.js'
 import { scoreRepeat } from './score.js'
 import type { BenchmarkCase, RepeatRecord } from './types.js'
@@ -71,7 +72,6 @@ export interface ExecuteResult {
 /** How a run's summary starts when Groq's daily limit stopped it. */
 const LIMIT_PREFIX = appPartialSummary('limit', 1).split(';')[0]
 const CAP_NOTE = "(the benchmark's token cap was reached during this repeat)"
-const num = (n: number): string => n.toLocaleString('en-US')
 
 function notRun(c: BenchmarkCase, repeat: number, err: unknown): RepeatRecord {
   const message = err instanceof Error ? err.message : String(err)
@@ -89,14 +89,26 @@ function notRun(c: BenchmarkCase, repeat: number, err: unknown): RepeatRecord {
     seconds: 0,
     steps: null,
     lines: [],
+    excluded: 'not_run',
   }
 }
 
+/**
+ * A repeat left without a suggestion by the benchmark's cap or by Groq's daily limit is excluded from
+ * the scores; any other repeat counts, including one the pipeline failed on by itself.
+ */
+function withExclusion(record: RepeatRecord, budget: Budget): RepeatRecord {
+  if (record.excluded === 'not_run' || record.answer !== null) return { ...record, excluded: record.excluded ?? null }
+  if (budget.isReached()) return { ...record, excluded: 'token_cap', runError: `${record.runError ?? 'No suggestion'} ${CAP_NOTE}` }
+  if (budget.limitHit() || record.runError?.startsWith(LIMIT_PREFIX)) return { ...record, excluded: 'daily_limit' }
+  return { ...record, excluded: null }
+}
+
 function progressLine(index: number, total: number, c: BenchmarkCase, r: RepeatRecord): string {
-  const steps = r.steps === null ? '' : `, ${r.steps} steps`
+  const steps = r.steps === null ? '' : `, ${counted(r.steps, 'step')}`
   const head = `[${index}/${total}] ${c.id} #${r.repeat}: ${r.answer ?? 'no suggestion'} → ${scoreRepeat(c, r)}`
   const error = r.answer === null && r.runError ? ` — ${redactSecrets(r.runError)}` : ''
-  return `${head} (${num(r.tokens)} tokens, ${r.seconds.toFixed(1)} s${steps})${error}`
+  return `${head} (${counted(r.tokens, 'token')}, ${r.seconds.toFixed(1)} s${steps})${error}`
 }
 
 export async function executeCases(
@@ -126,15 +138,13 @@ export async function executeCases(
         record = notRun(c, repeat, err)
       }
       budget.settle(record.tokens)
-      if (record.answer === null && budget.isReached()) {
-        record = { ...record, runError: `${record.runError ?? 'No suggestion'} ${CAP_NOTE}` }
-      }
-      if (record.runError?.startsWith(LIMIT_PREFIX)) budget.noteLimit()
+      record = withExclusion(record, budget)
+      if (record.excluded === 'daily_limit') budget.noteLimit()
       records.push(record)
       log(progressLine(records.length, total, c, record))
     }
   }
-  if (stoppedEarly === null && records.some((r) => r.runError?.endsWith(CAP_NOTE))) {
+  if (stoppedEarly === null && records.some((r) => r.excluded === 'token_cap')) {
     stoppedEarly = `The token cap of ${num(budget.cap)} tokens was reached during the last repeat, which was cut short. Raise the cap with --max-tokens.`
   }
   return { records, stoppedEarly, tokensUsed: budget.spent() }

@@ -92,6 +92,7 @@ describe('executeCases', () => {
       ['b', 1, null],
     ])
     expect(result.records[1].runError).toContain("the benchmark's token cap was reached")
+    expect(result.records.map((r) => r.excluded)).toEqual([null, 'token_cap'])
     expect(result.stoppedEarly).toBe('The token cap of 450 tokens was reached after 500 tokens; 4 of 6 repeats were not run. Raise the cap with --max-tokens.')
   })
 
@@ -109,6 +110,7 @@ describe('executeCases', () => {
     }
     const result = await executeCases(CASES, 2, createBudget(1_000_000), limited, quiet)
     expect(result.records).toHaveLength(2)
+    expect(result.records.map((r) => r.excluded)).toEqual([null, 'daily_limit'])
     expect(result.stoppedEarly).toBe("Groq's daily limit was reached; 2 of 4 repeats were not run. Try again when the limit resets.")
   })
 
@@ -119,11 +121,19 @@ describe('executeCases', () => {
     }
     const lines: string[] = []
     const result = await executeCases(CASES, 1, createBudget(1_000_000), throwing, (line) => lines.push(line))
-    expect(result.records[0]).toMatchObject({ caseId: 'a', answer: null, runStatus: 'not run', tokens: 0 })
+    expect(result.records[0]).toMatchObject({ caseId: 'a', answer: null, runStatus: 'not run', tokens: 0, excluded: 'not_run' })
     expect(result.records[0].runError).toContain('the browser could not start')
     expect(result.records[0].runError).not.toContain('gsk_secret123456')
     expect(result.records[1]).toMatchObject({ caseId: 'b', answer: 'yes' })
     expect(lines.join('\n')).not.toContain('gsk_secret123456')
+  })
+
+  it('leaves a repeat that failed for another reason in the scores, as not settled', async () => {
+    const failing: RunRepeat = async (c, repeat) => record(c, repeat, { answer: null, runStatus: 'partial', runError: '1 item could not be checked' })
+    const lines: string[] = []
+    const result = await executeCases([aCase('a')], 1, createBudget(1_000_000), failing, (line) => lines.push(line))
+    expect(result.records[0].excluded).toBeNull()
+    expect(lines[0]).toMatch(/a #1: no suggestion → not_settled/)
   })
 
   it('logs one progress line per repeat', async () => {

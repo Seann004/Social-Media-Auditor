@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CASES } from './cases.js'
-import { main, type CliDeps } from './cli.js'
+import { commitLabel, main, type CliDeps } from './cli.js'
 import type { RunRepeat } from './execute.js'
 
 const KEY = 'gsk_fake_key_for_the_cli_test_0123456789'
@@ -60,6 +60,14 @@ describe('--dry-run', () => {
     await main(['--dry-run'], { GROQ_API_KEY: KEY, EVIDENCE_GROQ_MODEL: 'some-model' }, io, noRunner())
     expect(out.join('\n')).not.toContain(KEY)
     expect(out.join('\n')).toContain('some-model')
+  })
+})
+
+describe('commitLabel', () => {
+  it('flags a working tree with uncommitted changes', () => {
+    expect(commitLabel('abc1234', '')).toBe('abc1234')
+    expect(commitLabel('abc1234', ' M backend/benchmarks/cases.ts\n')).toBe('abc1234 (uncommitted changes)')
+    expect(commitLabel(null, ' M x')).toBeNull()
   })
 })
 
@@ -121,7 +129,7 @@ describe('main', () => {
     expect(markdown).toContain('commit abc1234')
     expect(JSON.parse(json).records).toHaveLength(4)
     for (const text of [markdown, json, out.join('\n'), err.join('\n')]) expect(text).not.toContain(KEY)
-    expect(out.join('\n')).toMatch(/Accuracy: 100% \(4 of 4\)/)
+    expect(out.join('\n')).toMatch(/Accuracy: 100% \(4 of 4\) · strict 100% \(4 of 4\)/)
     expect(out.join('\n')).toContain('2026-11-16-smoke.md')
   })
 
