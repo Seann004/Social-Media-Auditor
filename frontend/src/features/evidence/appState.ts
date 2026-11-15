@@ -46,16 +46,58 @@ export function toPickItems(items: readonly ChecklistItem[]): PickItem[] {
   }))
 }
 
+export interface PickGroup {
+  key: string
+  guidelineId: string
+  category: string
+  items: PickItem[]
+}
+
 /** Items grouped by guideline and category, in the order they first appear. */
-export function groupPickItems(items: readonly PickItem[]): { key: string; category: string; items: PickItem[] }[] {
-  const groups = new Map<string, { key: string; category: string; items: PickItem[] }>()
+export function groupPickItems(items: readonly PickItem[]): PickGroup[] {
+  const groups = new Map<string, PickGroup>()
   for (const item of items) {
     const key = categoryKey(item.guidelineId, item.category)
     const group = groups.get(key)
     if (group) groups.set(key, { ...group, items: [...group.items, item] })
-    else groups.set(key, { key, category: item.category, items: [item] })
+    else groups.set(key, { key, guidelineId: item.guidelineId, category: item.category, items: [item] })
   }
   return [...groups.values()]
+}
+
+export interface PickSection {
+  guidelineId: string
+  /** How many items the guideline has in this list. */
+  itemCount: number
+  groups: PickGroup[]
+}
+
+/** The category groups gathered under their guideline, in the order each guideline first appears. */
+export function groupPickItemsByGuideline(items: readonly PickItem[]): PickSection[] {
+  const sections = new Map<string, PickSection>()
+  for (const group of groupPickItems(items)) {
+    const section = sections.get(group.guidelineId)
+    if (section) {
+      sections.set(group.guidelineId, { ...section, itemCount: section.itemCount + group.items.length, groups: [...section.groups, group] })
+    } else {
+      sections.set(group.guidelineId, { guidelineId: group.guidelineId, itemCount: group.items.length, groups: [group] })
+    }
+  }
+  return [...sections.values()]
+}
+
+/** What the picker needs to name a guideline. */
+export interface GuidelineLabel {
+  id: string
+  name: string
+  shortName: string
+  version: string
+}
+
+/** "Name · SHORT vX", leaving out what the guideline does not have. */
+export function guidelineTitle(guideline: GuidelineLabel): string {
+  const tag = [guideline.shortName, guideline.version ? `v${guideline.version}` : ''].filter(Boolean).join(' ')
+  return tag ? `${guideline.name} · ${tag}` : guideline.name
 }
 
 export interface AppRunBlockerInput {

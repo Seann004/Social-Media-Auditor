@@ -79,4 +79,47 @@ describe('AppItemPicker', () => {
     await user.click(privacy)
     expect(screen.getByRole('checkbox', { name: 'Item 2' })).toBeChecked()
   })
+
+  describe('guideline headings', () => {
+    const guidelines = [
+      { id: 'g1', name: 'Demo Child Safety Checklist', shortName: 'DEMO', version: '1.0' },
+      { id: 'g2', name: 'Online Safety Code', shortName: 'OSC', version: '2.1' },
+    ]
+    const two: ChecklistItem[] = [
+      { ...item(1, 'Privacy'), guidelineId: 'g1' },
+      { ...item(2, 'Reporting'), guidelineId: 'g2' },
+      { ...item(3, 'Safety'), guidelineId: 'g1' },
+    ]
+
+    function WithGuidelines({ all, known }: { all: ChecklistItem[]; known?: typeof guidelines }) {
+      const [picked, setPicked] = useState<Set<string>>(new Set())
+      return <AppItemPicker items={toPickItems(all)} picked={picked} onChange={setPicked} guidelines={known} />
+    }
+
+    it('names each guideline with its short name and version above its categories, in checklist order', () => {
+      render(<WithGuidelines all={two} known={guidelines} />)
+      const headings = screen.getAllByRole('heading', { level: 4 })
+      expect(headings.map((h) => h.textContent)).toEqual(['Demo Child Safety Checklist · DEMO v1.0', 'Online Safety Code · OSC v2.1'])
+    })
+
+    it('keeps every category under the guideline it belongs to, even when guidelines interleave', () => {
+      render(<WithGuidelines all={two} known={guidelines} />)
+      const first = screen.getByRole('heading', { name: /Demo Child Safety Checklist/ }).closest('section')!
+      expect(within(first).getByRole('button', { name: /Privacy/ })).toBeInTheDocument()
+      expect(within(first).getByRole('button', { name: /Safety/ })).toBeInTheDocument()
+      expect(within(first).queryByRole('button', { name: /Reporting/ })).toBeNull()
+    })
+
+    it('shows a count of items per guideline', () => {
+      render(<WithGuidelines all={two} known={guidelines} />)
+      const first = screen.getByRole('heading', { name: /Demo Child Safety Checklist/ }).closest('section')!
+      expect(within(first).getByText('2 items')).toBeInTheDocument()
+    })
+
+    it('shows no heading when the guideline is not known', () => {
+      render(<WithGuidelines all={two} known={[]} />)
+      expect(screen.queryAllByRole('heading', { level: 4 })).toHaveLength(0)
+      expect(screen.getByRole('checkbox', { name: 'Item 1' })).toBeInTheDocument()
+    })
+  })
 })
