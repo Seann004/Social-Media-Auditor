@@ -2,6 +2,7 @@
  * The shapes the benchmark shares: a case with its known answer, what one repeat of it produced,
  * and how that repeat is scored.
  */
+import type { SocialMode, SocialStatePatch } from '../src/features/evidence/__fixtures__/socialApp.js'
 /** What the tool can answer for an item. `not_settled` is a suggestion with no result. */
 export type Answer = 'yes' | 'no' | 'partially' | 'not_applicable' | 'not_settled'
 
@@ -15,6 +16,13 @@ export type CaseSource = 'app' | 'repo'
 
 /** What a case tests, so that the set can be checked to cover every kind the design asks for. */
 export type CaseKind = 'clear' | 'default' | 'cannot_show' | 'trap' | 'second_page' | 'two_accounts'
+
+/** The state the practice app starts in for an app case. Every repeat starts a fresh app in this state. */
+export interface AppSetup {
+  state?: SocialStatePatch
+  /** Added to the modes every app case runs with (BASE_APP_MODE in cases.ts). */
+  mode?: Partial<SocialMode>
+}
 
 export interface BenchmarkCase {
   /** Lower case letters, digits and dashes; unique. */
@@ -30,6 +38,8 @@ export interface BenchmarkCase {
   /** Why the expected answer is right, from what the practice app or the synthetic repository really contain. */
   why: string
   kinds: CaseKind[]
+  /** App cases only: the practice app's starting state and modes. */
+  app?: AppSetup
 }
 
 /** One quote of a suggestion, and whether the tool could find it in what it sent. */
