@@ -13,7 +13,21 @@ async function openAudit(page: Page, options: { evidenceDown?: boolean; appDown?
 }
 
 const row = (page: Page, index: number): Locator => page.locator('div.px-6.py-5').filter({ hasText: ITEMS[index].text })
-const panelOf = (page: Page): Locator => page.getByRole('region', { name: 'AI evidence assessment' })
+const barOf = (page: Page): Locator => page.getByRole('region', { name: 'AI evidence assessment' })
+
+/** The panel lives in a drawer opened from the slim bar at the top of the audit page. */
+async function panelOf(page: Page): Promise<Locator> {
+  await barOf(page).getByRole('button', { name: 'Open AI evidence' }).click()
+  const panel = page.getByRole('dialog', { name: 'AI evidence assessment' })
+  await expect(panel).toBeVisible()
+  return panel
+}
+
+/** Closes the drawer so it no longer covers the checklist rows. */
+async function closePanel(panel: Locator): Promise<void> {
+  await panel.getByRole('button', { name: 'Close AI evidence' }).click()
+  await expect(panel).toBeHidden()
+}
 
 async function snap(target: Page | Locator, name: string): Promise<void> {
   if (!SHOTS) return
@@ -33,8 +47,9 @@ async function addAccount(panel: Locator, fields: { name: string; group: string;
 }
 
 async function setUpApp(page: Page): Promise<Locator> {
-  const panel = panelOf(page)
+  const panel = await panelOf(page)
   await panel.getByLabel('App (test accounts)').check()
+  await expect(barOf(page).getByText('Needs setup')).toBeVisible()
   await panel.getByLabel('App address').fill('https://social.example.test')
   await panel.getByRole('button', { name: 'Save app address' }).click()
   await addAccount(panel, { name: 'Teen 15', group: 'Under 18', age: '15', login: 'teen15' })
@@ -50,7 +65,9 @@ test.describe('AI evidence from inside the app', () => {
 
     await panel.getByLabel(ITEMS[0].text).check()
     await panel.getByLabel(ITEMS[1].text).check()
-    await expect(panel.getByText('Items to check (2 picked)')).toBeVisible()
+    await expect(panel.getByText('2 of 10 picked')).toBeVisible()
+    await expect(panel.getByRole('group', { name: 'Run' }).getByText('2 items · 2 accounts ready')).toBeVisible()
+    await expect(barOf(page).getByText('Ready')).toBeVisible()
     await snap(panel, 'app-panel')
 
     await panel.getByRole('button', { name: 'Run app check' }).click()
@@ -59,6 +76,8 @@ test.describe('AI evidence from inside the app', () => {
     await expect(panel.getByRole('heading', { name: 'Last run' })).toBeVisible({ timeout: 15_000 })
     await expect(panel.getByText('2 suggestions · 0 flagged')).toBeVisible()
     await expect(panel.getByText('Left changed')).toBeVisible()
+    await closePanel(panel)
+    await expect(barOf(page).getByText('Last run: 2 suggestions · 0 flagged')).toBeVisible()
 
     // Suggestions alone change nothing.
     await expect(answeredCount(page)).toHaveText('0/3')
@@ -114,7 +133,7 @@ test.describe('AI evidence from inside the app', () => {
 
   test('the page stays usable when the app endpoints answer 503', async ({ page }) => {
     const stub = await openAudit(page, { appDown: true })
-    const panel = panelOf(page)
+    const panel = await panelOf(page)
 
     await panel.getByLabel('App (test accounts)').check()
     await expect(panel.getByRole('alert').filter({ hasText: 'Checking inside the app is not set up on this server.' })).toBeVisible()
@@ -123,6 +142,7 @@ test.describe('AI evidence from inside the app', () => {
     // The page-based check and the ordinary audit are untouched.
     await panel.getByLabel('Public pages').check()
     await expect(panel.getByRole('button', { name: 'Run assessment' })).toBeVisible()
+    await closePanel(panel)
     await row(page, 0).getByRole('button', { name: 'Yes' }).click()
     await expect(answeredCount(page)).toHaveText('1/3')
     expect(stub.savedAnswers).toHaveLength(1)

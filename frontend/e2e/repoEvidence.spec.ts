@@ -10,12 +10,20 @@ async function openAudit(page: Page): Promise<Stub> {
 }
 
 const row = (page: Page, index: number): Locator => page.locator('div.px-6.py-5').filter({ hasText: ITEMS[index].text })
-const panelOf = (page: Page): Locator => page.getByRole('region', { name: 'AI evidence assessment' })
+const barOf = (page: Page): Locator => page.getByRole('region', { name: 'AI evidence assessment' })
+
+/** The panel lives in a drawer opened from the slim bar at the top of the audit page. */
+async function panelOf(page: Page): Promise<Locator> {
+  await barOf(page).getByRole('button', { name: 'Open AI evidence' }).click()
+  const panel = page.getByRole('dialog', { name: 'AI evidence assessment' })
+  await expect(panel).toBeVisible()
+  return panel
+}
 
 test.describe('AI evidence from a code repository', () => {
   test('auditor saves a repository, picks items, runs, opens the code and accepts one suggestion', async ({ page }) => {
     const stub = await openAudit(page)
-    const panel = panelOf(page)
+    const panel = await panelOf(page)
 
     await panel.getByRole('radio', { name: 'Code repository' }).check()
     await panel.getByLabel('Repository address').fill('https://github.com/acme/social-app')
@@ -25,10 +33,16 @@ test.describe('AI evidence from a code repository', () => {
 
     await panel.getByLabel(ITEMS[0].text).check()
     await panel.getByLabel(ITEMS[1].text).check()
+    await expect(panel.getByRole('group', { name: 'Run' }).getByText('2 items · repository saved')).toBeVisible()
     await panel.getByRole('button', { name: 'Check the code' }).click()
     expect(stub.repoRunItems).toEqual([['i1', 'i2']])
     await expect(panel.getByRole('heading', { name: 'Last run' })).toBeVisible({ timeout: 15_000 })
     await expect(panel.getByText('2 suggestions · 0 flagged')).toBeVisible()
+
+    // The drawer covers the right of the page: close it to work on the checklist.
+    await panel.getByRole('button', { name: 'Close AI evidence' }).click()
+    await expect(panel).toBeHidden()
+    await expect(barOf(page).getByText('Last run: 2 suggestions · 0 flagged')).toBeVisible()
 
     // Suggestions alone change nothing.
     await expect(answeredCount(page)).toHaveText('0/3')
