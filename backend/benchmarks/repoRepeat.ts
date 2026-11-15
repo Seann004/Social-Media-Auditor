@@ -14,7 +14,7 @@ import type { UrlGuard } from '../src/features/evidence/urlGuard.js'
 import { buildTarGz, fakeGithubFetch } from '../src/features/evidence/__fixtures__/fakeGithub.js'
 import { REPO_FILES } from './repoFixture.js'
 import type { BenchmarkCase, RepeatRecord } from './types.js'
-import { benchmarkAudit, createRun, finishedRun, itemOf, meteredAssess, PROJECT_ID, recordOf, type RepeatContext } from './world.js'
+import { benchmarkAudit, createRun, finishedRun, installGroqGate, itemOf, meteredAssess, PROJECT_ID, recordOf, type RepeatContext } from './world.js'
 
 const SHA = '0123456789abcdef0123456789abcdef01234567'
 const OWNER = 'acme'
@@ -56,11 +56,16 @@ export async function runRepoRepeat(c: BenchmarkCase, repeat: number, ctx: Repea
     assessBatch: meteredAssess(ctx.ai.assessBatch, ctx.budget),
     code: { repoRepo, fetcher: (guard, signal) => createGithubFetcher({ guard, signal, fetchFn }) },
   }
-  // The search-words call happens inside the run and is not metered here, so it is held back once the cap is reached.
+  // No run starts once the cap is reached; within the run, every request to Groq is checked and counted at the gate.
   ctx.budget.assertOpen()
   const created = await createRun(repo, c, REPO_PROMPT_VERSION)
   const started = Date.now()
-  await runEvidenceJob(created.id, deps)
+  const restoreFetch = installGroqGate(ctx.budget)
+  try {
+    await runEvidenceJob(created.id, deps)
+  } finally {
+    restoreFetch()
+  }
   const seconds = (Date.now() - started) / 1000
   const { run, suggestion } = await finishedRun(repo, created.id, item.id)
   const pieces = await repoRepo.listPieces(created.id, item.id)

@@ -49,37 +49,29 @@ export function benchmarkAudit(item: AssessItem): AuditData {
   }
 }
 
-function tokensOf(err: unknown): number {
-  const tokens = (err as { tokensUsed?: unknown } | null)?.tokensUsed
-  return typeof tokens === 'number' ? tokens : 0
-}
-
-/** The step call, refused once the budget is spent, its tokens counted. */
+/**
+ * The step call, refused once the budget is spent, and Groq's daily limit noted. Its tokens are
+ * counted at the Groq gate, from each reply, so a call that failed is counted too, and only once.
+ */
 export function meteredDecideStep(real: DecideStep, budget: Budget): DecideStep {
   return async (input) => {
     budget.assertOpen()
     try {
-      const out = await real(input)
-      budget.charge(out.tokensUsed)
-      return out
+      return await real(input)
     } catch (err) {
-      budget.charge(tokensOf(err))
       if (isGroqLimit(err)) budget.noteLimit()
       throw err
     }
   }
 }
 
-/** The judge call, refused once the budget is spent, its tokens counted, also when it failed. */
+/** The judge call, as meteredDecideStep: refused once the budget is spent; its tokens are counted at the Groq gate. */
 export function meteredAssess(real: AiDeps['assessBatch'], budget: Budget): AiDeps['assessBatch'] {
   return async (input) => {
     budget.assertOpen()
     try {
-      const out = await real(input)
-      budget.charge(out.tokensUsed)
-      return out
+      return await real(input)
     } catch (err) {
-      budget.charge(tokensOf(err))
       if (isGroqLimit(err)) budget.noteLimit()
       throw err
     }
@@ -87,6 +79,17 @@ export function meteredAssess(real: AiDeps['assessBatch'], budget: Budget): AiDe
 }
 
 const GROQ_HOST = 'api.groq.com'
+
+/** The tokens a Groq reply reports in its `usage`, read from a copy so the caller can still read it; 0 when it reports none. */
+async function usageOf(response: Response): Promise<number> {
+  try {
+    const body = (await response.clone().json()) as { usage?: { total_tokens?: unknown } } | null
+    const tokens = body?.usage?.total_tokens
+    return typeof tokens === 'number' && Number.isFinite(tokens) && tokens > 0 ? tokens : 0
+  } catch {
+    return 0
+  }
+}
 
 function hostOf(input: RequestInfo | URL): string | null {
   try {
@@ -97,14 +100,18 @@ function hostOf(input: RequestInfo | URL): string | null {
 }
 
 /**
- * A fetch that refuses every request to Groq once the budget is spent, before it is sent. It covers
- * every AI call the pipeline makes, including tries again after a 429 and the code run's search-words
- * call, which the metered wrappers do not see. Requests to any other host pass untouched.
+ * A fetch that refuses every request to Groq once the budget is spent, before it is sent, and counts
+ * the tokens each Groq reply reports, whatever its status. It sees every AI call the pipeline makes:
+ * tries again after a 429, a judge call that failed twice (which throws without a count), and the
+ * code run's search-words call. Requests to any other host pass untouched.
  */
 export function gateGroqFetch(original: typeof fetch, budget: Budget): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (hostOf(input) === GROQ_HOST) budget.assertOpen()
-    return original(input, init)
+    if (hostOf(input) !== GROQ_HOST) return original(input, init)
+    budget.assertOpen()
+    const response = await original(input, init)
+    budget.charge(await usageOf(response))
+    return response
   }) as typeof fetch
 }
 

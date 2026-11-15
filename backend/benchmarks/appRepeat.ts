@@ -19,6 +19,7 @@ import {
   benchmarkAudit,
   createRun,
   finishedRun,
+  installGroqGate,
   itemOf,
   meteredAssess,
   meteredDecideStep,
@@ -55,6 +56,8 @@ function testAccount(a: (typeof ACCOUNTS)[number], key: Buffer): NewTestAccount 
 
 export async function runAppRepeat(c: BenchmarkCase, repeat: number, ctx: RepeatContext): Promise<RepeatRecord> {
   const social = await startSocialApp({ state: c.app?.state, mode: { ...BASE_APP_MODE, ...c.app?.mode } })
+  // Every request to Groq in this repeat is checked against the budget and counted.
+  const restoreFetch = installGroqGate(ctx.budget)
   try {
     const secretKey = randomBytes(32)
     const repo = createMemoryRepository()
@@ -85,6 +88,7 @@ export async function runAppRepeat(c: BenchmarkCase, repeat: number, ctx: Repeat
     const steps = await appRepo.listSteps(created.id, item.id)
     return recordOf(c, repeat, { run, suggestion, steps: steps.length, lines: steps.map((s) => s.line), seconds })
   } finally {
+    restoreFetch()
     await social.close()
   }
 }

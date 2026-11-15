@@ -67,8 +67,9 @@ describe('a code repeat', () => {
     // Only the search-words call went out through fetch, and only to Groq.
     expect(groq).toHaveBeenCalledTimes(1)
     expect(String((groq.mock.calls[0] as unknown[])[0])).toContain('api.groq.com')
-    // The judge call went through the budget.
-    expect(budget.spent()).toBe(100)
+    // The search-words request went through the Groq gate, which counted its 50 tokens; the fake judge sends no request.
+    expect(budget.spent()).toBe(50)
+    expect(globalThis.fetch).toBe(groq)
   })
 
   it('starts no run, and so no AI call, once the budget is spent', async () => {
@@ -85,7 +86,8 @@ describe('a code repeat', () => {
   it('leaves the item without a suggestion when the cap is reached between the search words and the judge', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[]}' } }], usage: { total_tokens: 10 } }))))
     const assessBatch = vi.fn()
-    // The check before the run passes; the one before the judge call finds the cap reached.
+    // The check before the run passes; the gate before the search-words request and the check before
+    // the judge call find the cap reached.
     const real = createBudget(1_000)
     let checks = 0
     const budget: Budget = {
@@ -96,7 +98,7 @@ describe('a code repeat', () => {
       },
     }
     const record = await runRepoRepeat(caseOf('repo-block'), 1, { apiKey: 'gsk_test_key_123456', model: 'test-model', ai: { decideStep: neverStep, assessBatch }, budget })
-    expect(checks).toBe(2)
+    expect(checks).toBe(3)
     expect(assessBatch).not.toHaveBeenCalled()
     expect(record.answer).toBeNull()
     expect(record.runStatus).toBe('partial')
@@ -135,6 +137,7 @@ describe('an app repeat', () => {
     expect(judgedInput).not.toBeNull()
     // Six step calls of 100 tokens (one finish refused as too early) and the judge's 300.
     expect(record.tokens).toBe(agent.prompts.length * 100 + 300)
-    expect(budget.spent()).toBe(record.tokens)
+    // The fakes send no request to Groq, so the gate counted nothing; the run's own total is settled by the executor.
+    expect(budget.spent()).toBe(0)
   })
 })
