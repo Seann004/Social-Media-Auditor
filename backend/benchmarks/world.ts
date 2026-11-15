@@ -70,7 +70,7 @@ export function meteredDecideStep(real: DecideStep, budget: Budget): DecideStep 
   }
 }
 
-/** The judge call, refused once the budget is spent, its tokens counted. */
+/** The judge call, refused once the budget is spent, its tokens counted, also when it failed. */
 export function meteredAssess(real: AiDeps['assessBatch'], budget: Budget): AiDeps['assessBatch'] {
   return async (input) => {
     budget.assertOpen()
@@ -79,9 +79,41 @@ export function meteredAssess(real: AiDeps['assessBatch'], budget: Budget): AiDe
       budget.charge(out.tokensUsed)
       return out
     } catch (err) {
+      budget.charge(tokensOf(err))
       if (isGroqLimit(err)) budget.noteLimit()
       throw err
     }
+  }
+}
+
+const GROQ_HOST = 'api.groq.com'
+
+function hostOf(input: RequestInfo | URL): string | null {
+  try {
+    return new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).hostname
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A fetch that refuses every request to Groq once the budget is spent, before it is sent. It covers
+ * every AI call the pipeline makes, including tries again after a 429 and the code run's search-words
+ * call, which the metered wrappers do not see. Requests to any other host pass untouched.
+ */
+export function gateGroqFetch(original: typeof fetch, budget: Budget): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (hostOf(input) === GROQ_HOST) budget.assertOpen()
+    return original(input, init)
+  }) as typeof fetch
+}
+
+/** Puts the gate on globalThis.fetch for one repeat. Returns the function that puts the original back. */
+export function installGroqGate(budget: Budget): () => void {
+  const original = globalThis.fetch
+  globalThis.fetch = gateGroqFetch(original, budget)
+  return () => {
+    globalThis.fetch = original
   }
 }
 

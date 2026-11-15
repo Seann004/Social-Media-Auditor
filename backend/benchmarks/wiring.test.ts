@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppAction } from '../src/features/evidence/appTypes.js'
 import type { AssessInput, AssessOutput } from '../src/features/evidence/assess.js'
 import { closeBrowser } from '../src/features/evidence/browser.js'
@@ -26,6 +26,7 @@ const neverStep: AiDeps['decideStep'] = async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 afterAll(async () => {
@@ -33,6 +34,12 @@ afterAll(async () => {
 })
 
 describe('a code repeat', () => {
+  beforeEach(() => {
+    // The pipeline logs each AI call and the judge failure some of these tests cause on purpose.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.spyOn(console, 'log').mockImplementation(() => undefined)
+  })
+
   it('reads the synthetic repository from the faked GitHub and records the answer, quotes, pieces and tokens', async () => {
     const groq = vi.fn(async () => {
       const content = { items: [{ itemId: 'repo-block', words: ['blockUser', 'hasBlocked'], pathHints: ['safety'] }] }

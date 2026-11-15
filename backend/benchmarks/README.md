@@ -50,9 +50,12 @@ for example `--max-tokens 1000000`, or several smaller runs with `--source` or `
 own limits apply: a short wait is retried, and when the **daily** limit is reached the benchmark
 stops and says so.
 
-**The token cap is hard:** once the benchmark has used that many tokens, no new AI call starts, and
-the run stops with a message. The call in progress when the cap is reached may pass it by a few
-thousand tokens. The report is still written, and says the run stopped early.
+**What the token cap guarantees:** every request to Groq goes through a gate, and once the tokens
+counted so far reach the cap, no request to Groq is sent at all (not a step, not a judge call, not a
+try again after a 429, not a search-words call), and the benchmark stops with a message. Tokens are
+counted when each call answers, except a code run's search-words call, which is counted when its run
+ends. So the total can pass the cap by the call that was already in progress, plus at most one
+search-words call (about 2,000 tokens). The report is still written, and says the run stopped early.
 
 ## The report
 
