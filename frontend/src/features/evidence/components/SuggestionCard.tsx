@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { RobotIcon as Robot } from '@phosphor-icons/react'
+import { InfoIcon as Info, RobotIcon as Robot } from '@phosphor-icons/react'
 import type { ChecklistItemStatus } from '../../../types'
+import { CANNOT_SHOW_NOTE, cannotShowReason } from '../cannotShow'
+import type { EvidenceKindInput } from '../evidenceKind'
 import { isHttpUrl } from '../safeUrl'
 import { suggestionState, toAnswerStatus, type CardState } from '../state'
 import { FLAG_LABEL, type DecisionView, type QuoteView, type FlagType, type SuggestionView } from '../types'
@@ -21,6 +23,10 @@ export interface SuggestionCardProps {
   onAccept: () => void
   onOverride: () => void
   onKeepMine: () => void
+  /** The checklist item, to say when the suggestion's source can't show it. */
+  item?: EvidenceKindInput
+  /** The result run left the item unchecked: the card then says nothing about the source. */
+  unchecked?: boolean
 }
 
 const STATE_NOTE: Partial<Record<CardState, string>> = {
@@ -85,6 +91,18 @@ function flagsToList(suggestion: SuggestionView): ListedFlag[] {
   })
 }
 
+/** A calm note in the neutral hint style (as "Asked to look further"): the source was the wrong one, not a failure. */
+function CannotShowNote({ reason }: { reason: string }) {
+  return (
+    <p data-tone="hint" className="flex items-start gap-1.5 rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs text-sky-700">
+      <Info size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+      <span>
+        <span className="font-medium">{CANNOT_SHOW_NOTE}</span> {reason}
+      </span>
+    </p>
+  )
+}
+
 function DecisionNote({ decision }: { decision: DecisionView }) {
   if (decision.decision === 'accepted') return <p className="text-xs font-medium text-emerald-700">Accepted</p>
   return (
@@ -95,11 +113,24 @@ function DecisionNote({ decision }: { decision: DecisionView }) {
   )
 }
 
-export default function SuggestionCard({ suggestion, decision, currentStatus, canDecide, busy = false, error, onAccept, onOverride, onKeepMine }: SuggestionCardProps) {
+export default function SuggestionCard({
+  suggestion,
+  decision,
+  currentStatus,
+  canDecide,
+  busy = false,
+  error,
+  onAccept,
+  onOverride,
+  onKeepMine,
+  item,
+  unchecked = false,
+}: SuggestionCardProps) {
   const [replaying, setReplaying] = useState(false)
   const [showCode, setShowCode] = useState(false)
   const isRepo = suggestion.source === 'repo'
   const flags = flagsToList(suggestion)
+  const cannotShow = cannotShowReason({ suggestion, item, unchecked })
   const state = suggestionState({ suggestion, decision, currentStatus })
   const suggested = suggestion.suggestedResult
   const decided = state === 'accepted' || state === 'overridden'
@@ -126,6 +157,8 @@ export default function SuggestionCard({ suggestion, decision, currentStatus, ca
         )}
         {note && <span className="text-xs text-slate-500">{note}</span>}
       </div>
+
+      {cannotShow && <CannotShowNote reason={cannotShow} />}
 
       <p className="text-sm text-slate-600">{suggestion.reason}</p>
 

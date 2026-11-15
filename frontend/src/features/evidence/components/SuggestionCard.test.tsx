@@ -468,3 +468,44 @@ describe('SuggestionCard: the reason is shown once', () => {
     expect(screen.getByText('Help centre says otherwise.')).toBeInTheDocument()
   })
 })
+
+describe("SuggestionCard: the source can't show this item", () => {
+  const POLICY_ITEM = { text: 'The privacy policy for younger users is easy to find.' }
+  const APP_ITEM = { text: 'Accounts of users under 16 are private by default.' }
+  const aiReason = 'No step of the check showed the privacy policy.'
+  const flags = [{ type: 'missing_evidence' as const, reason: aiReason }]
+  const noResult = (over: Partial<SuggestionView> = {}) => makeSuggestion({ source: 'app', suggestedResult: null, reason: aiReason, flags, ...over })
+  const NOTE = "This source can't show this item."
+
+  it('says so calmly, with the reason, and keeps the reason, the flags and the review label', () => {
+    renderCard({ suggestion: noResult(), item: POLICY_ITEM })
+    const note = screen.getByText(NOTE).closest('[data-tone="hint"]')!
+    expect(note).toHaveTextContent(`${NOTE} It is a policy or process item (it mentions “policy”).`)
+    expect(note).toHaveClass('bg-sky-50', 'text-sky-700')
+    expect(screen.getByText('The AI could not suggest an answer')).toBeInTheDocument()
+    expect(screen.getByText(aiReason)).toBeInTheDocument()
+    expect(screen.getByText('Needs human review')).toBeInTheDocument()
+  })
+
+  it('says so for a code repository suggestion on an app item', () => {
+    renderCard({ suggestion: noResult({ source: 'repo' }), item: APP_ITEM })
+    expect(screen.getByText(NOTE).closest('[data-tone="hint"]')).toHaveTextContent(
+      `${NOTE} It is about something a user can see or change in the app (it mentions “private”).`,
+    )
+  })
+
+  it('is not shown for a result, an item the source suits, a failed check, an unchecked item or an unknown item', () => {
+    const cases: Partial<CardProps>[] = [
+      { suggestion: noResult({ suggestedResult: 'no' }), item: POLICY_ITEM },
+      { suggestion: noResult(), item: APP_ITEM },
+      { suggestion: noResult({ flags: [...flags, { type: 'inaccessible', reason: 'The check stopped at https://app.example/: a captcha.' }] }), item: POLICY_ITEM },
+      { suggestion: noResult(), item: POLICY_ITEM, unchecked: true },
+      { suggestion: noResult() },
+    ]
+    for (const over of cases) {
+      const { unmount } = render(<SuggestionCard decision={null} currentStatus={undefined} canDecide onAccept={vi.fn()} onOverride={vi.fn()} onKeepMine={vi.fn()} {...(over as CardProps)} />)
+      expect(screen.queryByText(NOTE)).toBeNull()
+      unmount()
+    }
+  })
+})

@@ -2091,6 +2091,8 @@ helpText: newItemHelp.trim() || undefined,
                               suggestion={aiEvidence.suggestionsByItem.get(ci.id)}
                               decision={aiEvidence.decisionsByItem.get(ci.id) ?? null}
                               currentStatus={resp?.status}
+                              item={ci}
+                              resultRun={aiEvidence.resultRun}
                             />
                           )}
 
