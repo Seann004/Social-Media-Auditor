@@ -1,0 +1,151 @@
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { buildReport, redactSecrets, reportBaseName, writeReport, type ReportMeta } from './report.js'
+import type { BenchmarkCase, RepeatRecord } from './types.js'
+
+const CASES: BenchmarkCase[] = [
+  { id: 'app-a', source: 'app', category: 'Privacy', item: 'Is the Teen 15 account private?', expected: 'no', alsoAcceptable: [], why: 'The switch is off.', kinds: ['clear'] },
+  { id: 'repo-b', source: 'repo', category: 'Safety', item: 'Can users block | mute?', expected: 'yes', alsoAcceptable: ['partially'], why: 'blockUser exists.', kinds: ['clear'] },
+]
+
+function record(over: Partial<RepeatRecord>): RepeatRecord {
+  return {
+    caseId: 'app-a',
+    source: 'app',
+    repeat: 1,
+    answer: 'no',
+    reason: 'The switch reads Off.',
+    quotes: [{ text: 'Private account Off', verified: true }],
+    flags: [],
+    runStatus: 'completed',
+    runError: null,
+    tokens: 1_000,
+    seconds: 12.5,
+    steps: 7,
+    lines: ['Step 1 · Teen 15 · opened /settings'],
+    ...over,
+  }
+}
+
+const META: ReportMeta = {
+  startedAt: '2026-11-16T10:00:00.000Z',
+  label: 'baseline',
+  model: 'test-model',
+  repeats: 2,
+  maxTokens: 400_000,
+  commit: 'abc1234',
+  stoppedEarly: null,
+}
+
+const RECORDS: RepeatRecord[] = [
+  record({ repeat: 1, lines: ['Step 1 · Teen 15 · CORRECT-LINE'] }),
+  record({ repeat: 2, answer: 'yes', reason: 'The banner says private.', quotes: [{ text: 'Your account is private', verified: true }], lines: ['Step 4 · Teen 15 · WRONG-LINE'] }),
+  record({ caseId: 'repo-b', source: 'repo', repeat: 1, answer: 'yes', quotes: [{ text: 'blockUser(', verified: false }], steps: null, lines: ['File src/safety/block.ts, lines 1–20'] }),
+  record({ caseId: 'repo-b', source: 'repo', repeat: 2, answer: null, quotes: [], runStatus: 'partial', runError: 'AI daily limit reached; 1 item not checked', steps: null, lines: [] }),
+]
+
+describe('buildReport', () => {
+  it('has a summary table, a row per case and the step lines of every wrong or unproven result only', () => {
+    const { markdown } = buildReport({ meta: META, cases: CASES, records: RECORDS })
+
+    expect(markdown).toContain('# Evidence benchmark: baseline')
+    expect(markdown).toMatch(/\| Accuracy \|/)
+    expect(markdown).toMatch(/\| Wrong-claim rate \|/)
+    expect(markdown).toMatch(/\| Stability \|/)
+    expect(markdown).toMatch(/\| app-a \| App \|/)
+    expect(markdown).toMatch(/\| repo-b \| Code \|/)
+    // A pipe in an item is escaped, so the table keeps its columns.
+    expect(markdown).toContain('Can users block \\| mute?')
+    expect(markdown).toContain('WRONG-LINE')
+    expect(markdown).toContain('File src/safety/block.ts, lines 1–20')
+    expect(markdown).not.toContain('CORRECT-LINE')
+    expect(markdown).toContain('AI daily limit reached; 1 item not checked')
+  })
+
+  it('writes JSON with the meta, the summaries, the case scores and every record', () => {
+    const { json } = buildReport({ meta: META, cases: CASES, records: RECORDS })
+    const parsed = JSON.parse(json) as Record<string, unknown>
+    expect(parsed.meta).toMatchObject({ label: 'baseline', model: 'test-model', commit: 'abc1234' })
+    expect(parsed.summary).toMatchObject({ all: { cases: 2, repeats: 4, wrong: 1, unproven: 1, errors: 1 } })
+    expect(parsed.cases).toHaveLength(2)
+    expect(parsed.records).toHaveLength(4)
+  })
+
+  it('says so when the run stopped early', () => {
+    const { markdown } = buildReport({ meta: { ...META, stoppedEarly: 'The token cap of 400,000 was reached.' }, cases: CASES, records: RECORDS })
+    expect(markdown).toContain('The token cap of 400,000 was reached.')
+  })
+
+  it('drops anything that looks like a key, in the Markdown and in the JSON', () => {
+    const leaky = [
+      record({
+        repeat: 2,
+        answer: 'yes',
+        reason: 'Failed with key gsk_abcDEF1234567890xyz and Bearer sk-live-abcdefghijklmnopqrstu',
+        lines: ['GROQ_API_KEY=gsk_zzzzzzzzzzzzzzzzzzzz', 'SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZSJ9.c2lnbmF0dXJlLXZhbHVl'],
+        quotes: [{ text: 'the-explicit-secret-value', verified: true }],
+      }),
+    ]
+    const { markdown, json } = buildReport({ meta: META, cases: CASES, records: leaky, secrets: ['the-explicit-secret-value'] })
+    for (const text of [markdown, json]) {
+      expect(text).not.toMatch(/gsk_/)
+      expect(text).not.toMatch(/sk-live/)
+      expect(text).not.toMatch(/eyJhbGciOiJIUzI1NiJ9/)
+      expect(text).not.toContain('the-explicit-secret-value')
+      expect(text).toContain('[redacted]')
+    }
+    expect(() => JSON.parse(json)).not.toThrow()
+  })
+})
+
+describe('redactSecrets', () => {
+  it('keeps ordinary text as it is', () => {
+    const text = 'Step 3 · Adult 30 · opened /u/teen15 → "This account is private"'
+    expect(redactSecrets(text)).toBe(text)
+  })
+
+  it('redacts Groq keys, bearer tokens, JWTs, secret assignments and the given secrets', () => {
+    expect(redactSecrets('key gsk_ABCdef123_-x end')).toBe('key [redacted] end')
+    expect(redactSecrets('Authorization: Bearer abc.def-ghi')).toBe('Authorization: Bearer [redacted]')
+    expect(redactSecrets('token eyJabcdefghij.eyJklmnopqrs.tuvwxyz012345 here')).toBe('token [redacted] here')
+    expect(redactSecrets('EVIDENCE_SECRET_KEY=AAAABBBBCCCC==')).toBe('EVIDENCE_SECRET_KEY=[redacted]')
+    expect(redactSecrets('JWT_SECRET: hunter2hunter2')).toBe('JWT_SECRET=[redacted]')
+    expect(redactSecrets('it was s3cr3t-value!', ['s3cr3t-value'])).toBe('it was [redacted]!')
+  })
+
+  it('ignores given secrets too short to be one', () => {
+    expect(redactSecrets('a b c', ['', 'a'])).toBe('a b c')
+  })
+})
+
+describe('reportBaseName', () => {
+  it('is the local date and a safe label', () => {
+    expect(reportBaseName(new Date(2026, 10, 6, 23, 30), 'Baseline run #1')).toBe('2026-11-06-baseline-run-1')
+    expect(reportBaseName(new Date(2026, 0, 2), '../../etc')).toBe('2026-01-02-etc')
+    expect(reportBaseName(new Date(2026, 0, 2), '')).toBe('2026-01-02-run')
+  })
+})
+
+describe('writeReport', () => {
+  let dir: string | null = null
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true })
+    dir = null
+  })
+
+  it('writes the .md and .json, and never overwrites an earlier report of the same name', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bench-report-'))
+    await writeFile(join(dir, '2026-11-16-baseline.md'), 'earlier')
+    const first = await writeReport(join(dir, 'nested'), '2026-11-16-baseline', { markdown: '# one', json: '{}' })
+    const again = await writeReport(dir, '2026-11-16-baseline', { markdown: '# two', json: '{"a":1}' })
+
+    expect(await readFile(first.markdownPath, 'utf8')).toBe('# one')
+    expect(again.markdownPath).toBe(join(dir, '2026-11-16-baseline-2.md'))
+    expect(again.jsonPath).toBe(join(dir, '2026-11-16-baseline-2.json'))
+    expect(await readFile(join(dir, '2026-11-16-baseline.md'), 'utf8')).toBe('earlier')
+    expect((await readdir(dir)).sort()).toEqual(['2026-11-16-baseline-2.json', '2026-11-16-baseline-2.md', '2026-11-16-baseline.md', 'nested'])
+  })
+})
