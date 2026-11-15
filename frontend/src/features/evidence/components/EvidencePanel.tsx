@@ -293,6 +293,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
           <PagesSection
             text={text}
             onText={setText}
+            linkCount={parseLinks(text).length}
             locked={locked}
             state={sourcesState}
             error={sourcesError}

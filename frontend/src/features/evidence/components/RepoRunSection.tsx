@@ -1,5 +1,3 @@
-import { motion } from 'framer-motion'
-import { PlayIcon as Play } from '@phosphor-icons/react'
 import { startRepoRun } from '../api'
 import type { PickItem } from '../appState'
 import type { RepoSourceView } from '../types'
@@ -9,6 +7,9 @@ import type { UseRepoSetupResult } from '../useRepoSetup'
 import AppItemPicker from './AppItemPicker'
 import DrawerStep, { SetupStep } from './DrawerStep'
 import RepoSetup, { REPO_ITEM_LIMIT } from './RepoSetup'
+import RunFooter from './RunFooter'
+
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
 
 interface Props {
   projectId: string
@@ -38,7 +39,7 @@ function RepoSummary({ repo }: { repo: RepoSourceView }) {
   )
 }
 
-/** The Code repository branch of the drawer: ② the repository and ③ the item picker and the button. */
+/** The Code repository branch of the drawer: ② the repository, ③ the item picker, and the action bar. */
 export default function RepoRunSection({ projectId, setup, items, evidence, locked, onStarted }: Props) {
   const { setChosen, pickedIds, picked, busy, message, running, start } = useItemRun({
     items,
@@ -66,25 +67,17 @@ export default function RepoRunSection({ projectId, setup, items, evidence, lock
         <RepoSetup repo={setup.repo} onSave={setup.save} disabled={locked} />
       </SetupStep>
       <DrawerStep n={3} title="Items and run" state={setup.repo ? 'current' : 'todo'}>
-        <div className="space-y-3">
-          <AppItemPicker items={items} picked={picked} onChange={setChosen} limit={REPO_ITEM_LIMIT} verb="repository" />
-          {message ? <p role="alert" className="text-xs text-rose-600">{message}</p> : null}
-          {why ? <p className="text-xs text-slate-500">{why}</p> : null}
-          {!locked ? (
-            <motion.button
-              type="button"
-              whileTap={{ scale: 0.97 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-              onClick={() => void start()}
-              disabled={why !== null || busy}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Play size={14} weight="fill" aria-hidden="true" />
-              Check the code
-            </motion.button>
-          ) : null}
-        </div>
+        <AppItemPicker items={items} picked={picked} onChange={setChosen} limit={REPO_ITEM_LIMIT} verb="repository" />
       </DrawerStep>
+      <RunFooter
+        summary={`${plural(pickedIds.length, 'item')} · ${setup.repo ? 'repository saved' : 'no repository saved'}`}
+        reason={why}
+        message={message}
+        showButton={!locked}
+        label="Check the code"
+        onRun={() => void start()}
+        disabled={why !== null || busy}
+      />
     </>
   )
 }
