@@ -48,7 +48,8 @@ export default function RunResults({ run, pages, resultRun, suggestionCount, fla
             items={items}
           />
           {!locked ? (
-            <div className="flex flex-wrap items-center gap-2">
+            // The pair wraps at drawer width: the plain button has no side padding so both start on one edge.
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <button
                 type="button"
                 onClick={() => onReassess('unfinished')}
@@ -62,7 +63,7 @@ export default function RunResults({ run, pages, resultRun, suggestionCount, fla
                 type="button"
                 onClick={() => onReassess('all')}
                 disabled={!canReassess}
-                className="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded py-1.5 text-sm text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:no-underline"
               >
                 {labels.all}
               </button>

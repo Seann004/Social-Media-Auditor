@@ -63,6 +63,11 @@ describe('runningText', () => {
     expect(runningText(active({ source: 'repo', categoriesDone: 0, currentItemId: 'i1' }), items)).toBe('Checking Item 1 · 1 of 3')
   })
 
+  it('drops the closing full stop of an item text before the position', () => {
+    const sentence: PickItem[] = [{ id: 'i1', guidelineId: 'g1', category: 'Privacy', label: 'Parents can link to a teen account.' }]
+    expect(runningText(active({ currentItemId: 'i1', categoriesDone: 0 }), sentence)).toBe('Checking Parents can link to a teen account · 1 of 3')
+  })
+
   it('falls back to the position when the item is unknown, and never passes the total', () => {
     expect(runningText(active({ currentItemId: 'gone', categoriesDone: 3 }), items)).toBe('Checking item 3 of 3')
     expect(runningText(active({ categoriesTotal: 0, categoriesDone: 0, currentItemId: null }), items)).toBe('Starting')

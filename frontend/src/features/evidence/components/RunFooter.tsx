@@ -27,7 +27,9 @@ export default function RunFooter({ summary, reason, message = null, showButton,
       data-run-bar=""
       role="group"
       aria-label="Run"
-      className="sticky bottom-0 z-10 -mx-5 -mb-5 border-t border-slate-200 bg-white px-5 py-3 shadow-[0_-6px_12px_-8px_oklch(0.3_0.01_250/0.18)]"
+      // `!` because the drawer's space-y rule sets margin-bottom: 0 with a stronger selector; the
+      // negative margin lets the bar sit flush on the drawer's bottom edge when scrolled to the end.
+      className="sticky bottom-0 z-10 -mx-5 !-mb-5 border-t border-slate-200 bg-white px-5 py-3 shadow-[0_-6px_12px_-8px_oklch(0.3_0.01_250/0.18)]"
     >
       {message ? <p role="alert" className="mb-2 text-xs text-rose-600">{message}</p> : null}
       <div className="flex items-center gap-3">

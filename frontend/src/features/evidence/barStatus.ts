@@ -46,7 +46,8 @@ export function runningText(run: RunView, items: readonly PickItem[]): string {
   const total = run.categoriesTotal
   if (total <= 0) return 'Starting'
   const position = Math.min(run.categoriesDone + 1, total)
-  const label = currentItemLabel(run, items)
+  // Item texts are often sentences: their full stop would sit before the "·".
+  const label = currentItemLabel(run, items)?.replace(/[.\s]+$/, '')
   return label ? `Checking ${label} · ${position} of ${total}` : `Checking item ${position} of ${total}`
 }
 
