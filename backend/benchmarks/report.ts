@@ -114,7 +114,7 @@ function summaryTable(s: Scored['summaries']): string[] {
     row('Errors (no suggestion)', (x) => num(x.errors)),
     row('Average steps', (x) => avg(x.averageSteps)),
     row('Tokens', (x) => num(x.totalTokens)),
-    row('Tokens per repeat', (x) => avg(x.averageTokens, 0)),
+    row('Tokens per repeat', (x) => (x.averageTokens === null ? '–' : num(Math.round(x.averageTokens)))),
     row('Seconds', (x) => avg(x.totalSeconds)),
     row('Seconds per repeat', (x) => avg(x.averageSeconds)),
   ]
@@ -180,7 +180,7 @@ function errorTable(records: RepeatRecord[]): string[] {
 }
 
 function markdownOf(meta: ReportMeta, cases: BenchmarkCase[], records: RepeatRecord[], scored: Scored): string {
-  const header = `Started ${meta.startedAt} · model \`${meta.model}\` · ${meta.repeats} repeats per case · token cap ${num(meta.maxTokens)} · commit ${meta.commit ?? 'unknown'}`
+  const header = `Started ${meta.startedAt} · model \`${meta.model}\` · ${meta.repeats} ${meta.repeats === 1 ? 'repeat' : 'repeats'} per case · token cap ${num(meta.maxTokens)} · commit ${meta.commit ?? 'unknown'}`
   return [
     `# Evidence benchmark: ${meta.label}`,
     '',
