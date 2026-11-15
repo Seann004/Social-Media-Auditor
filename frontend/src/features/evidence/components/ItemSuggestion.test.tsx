@@ -15,6 +15,7 @@ const flow: ResponseFlow = {
   dialogProps: null,
 }
 
+const POLICY: ItemKindView = { kind: 'neither', reason: 'A company policy, not a screen or code.' }
 const APP: ItemKindView = { kind: 'app', reason: 'A setting a user can see.' }
 const NOTE = "This source can't show this item."
 const noCode = makeSuggestion({
@@ -26,16 +27,21 @@ const noCode = makeSuggestion({
 })
 
 describe('ItemSuggestion: the kind and the run reach the card', () => {
-  it("names the item's kind on a suggestion carried forward from an earlier run of another source", () => {
+  it('notes a policy item on a suggestion carried forward from an earlier run of another source', () => {
     // The latest result run checked the app; this repo suggestion was carried forward from an earlier run.
     const resultRun = makeRun({ id: 'run-2', source: 'app', checkedItemIds: ['item-2'] })
-    render(<ItemSuggestion itemId="item-1" flow={flow} suggestion={noCode} decision={null} currentStatus={undefined} kind={APP} resultRun={resultRun} />)
-    expect(screen.getByText(NOTE).closest('[data-tone="hint"]')).toHaveTextContent(`${NOTE} A setting a user can see.`)
+    render(<ItemSuggestion itemId="item-1" flow={flow} suggestion={noCode} decision={null} currentStatus={undefined} kind={POLICY} resultRun={resultRun} />)
+    expect(screen.getByText(NOTE).closest('[data-tone="hint"]')).toHaveTextContent(`${NOTE} A company policy, not a screen or code.`)
+  })
+
+  it('says nothing for an app item on a repo suggestion: only the picker gives that advice', () => {
+    render(<ItemSuggestion itemId="item-1" flow={flow} suggestion={noCode} decision={null} currentStatus={undefined} kind={APP} />)
+    expect(screen.queryByText(NOTE)).toBeNull()
   })
 
   it('says nothing for an item the result run left unchecked', () => {
     const resultRun = makeRun({ id: 'run-2', source: 'repo', status: 'partial', checkedItemIds: ['item-1'], uncheckedItemIds: ['item-1'] })
-    render(<ItemSuggestion itemId="item-1" flow={flow} suggestion={noCode} decision={null} currentStatus={undefined} kind={APP} resultRun={resultRun} />)
+    render(<ItemSuggestion itemId="item-1" flow={flow} suggestion={noCode} decision={null} currentStatus={undefined} kind={POLICY} resultRun={resultRun} />)
     expect(screen.queryByText(NOTE)).toBeNull()
     expect(screen.getAllByText('No code in the repository matches this item.').length).toBeGreaterThan(0)
   })

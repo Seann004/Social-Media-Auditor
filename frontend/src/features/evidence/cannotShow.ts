@@ -1,5 +1,5 @@
 // When a result card may say "This source can't show this item". Pure: no store, no fetch.
-import { fitsSource, type CheckSource } from './kindHints'
+import type { CheckSource } from './kindHints'
 import type { ItemKindView, RunSource, SuggestionView } from './types'
 
 export const CANNOT_SHOW_NOTE = "This source can't show this item."
@@ -29,13 +29,14 @@ export interface CannotShowInput {
 
 /**
  * The AI's reason to show after "This source can't show this item", or null to leave the card as it is.
- * Only with a high-confidence kind from the AI, for an App or Code repository suggestion with no result,
- * from a check that did not fail, on an item the run did not leave unchecked, whose kind does not include
- * the suggestion's own source. The suggestion's source is used, not the run's, so a suggestion carried
- * forward from an earlier run of another source is judged by the source that made it.
+ * Only for an item the AI is sure is policy or process (`neither`): an App or Code repository suggestion
+ * with no result, from a check that did not fail, on an item the run did not leave unchecked. An item the
+ * AI places with the other source gets no note: that stays advice in the picker, because the AI's app and
+ * code calls are not reliable enough to tell an auditor a source cannot show something (it never says
+ * "both" with high confidence).
  */
 export function cannotShowReason({ suggestion, kind, unchecked = false }: CannotShowInput): string | null {
-  if (!kind || unchecked || suggestion.suggestedResult !== null) return null
+  if (kind?.kind !== 'neither' || unchecked || suggestion.suggestedResult !== null) return null
   if (!isCheckSource(suggestion.source) || checkFailed(suggestion)) return null
-  return fitsSource(kind.kind, suggestion.source) ? null : kind.reason
+  return kind.reason
 }

@@ -488,15 +488,18 @@ describe("SuggestionCard: the source can't show this item", () => {
     expect(screen.getByText('Needs human review')).toBeInTheDocument()
   })
 
-  it('says so for a code repository suggestion on an app item', () => {
-    renderCard({ suggestion: noResult({ source: 'repo' }), kind: APP })
-    expect(screen.getByText(NOTE).closest('[data-tone="hint"]')).toHaveTextContent(`${NOTE} A setting a user can see.`)
+  it('says so for a code repository suggestion on a policy or process item', () => {
+    renderCard({ suggestion: noResult({ source: 'repo' }), kind: POLICY })
+    expect(screen.getByText(NOTE).closest('[data-tone="hint"]')).toHaveTextContent(`${NOTE} A company policy, not a screen or code.`)
   })
 
-  it('is not shown for a result, an item the source suits, a failed check, an unchecked item or an item without an AI kind', () => {
+  it('is not shown for a result, an app or code item on either source, a failed check, an unchecked item or an item without an AI kind', () => {
     const cases: Partial<CardProps>[] = [
       { suggestion: noResult({ suggestedResult: 'no' }), kind: POLICY },
       { suggestion: noResult(), kind: APP },
+      // The other source would suit it: the picker says so, the card does not.
+      { suggestion: noResult({ source: 'repo' }), kind: APP },
+      { suggestion: noResult(), kind: { kind: 'code', reason: 'Only the server shows it.' } },
       { suggestion: noResult({ flags: [...flags, { type: 'inaccessible', reason: 'The check stopped at https://app.example/: a captcha.' }] }), kind: POLICY },
       { suggestion: noResult(), kind: POLICY, unchecked: true },
       { suggestion: noResult() },

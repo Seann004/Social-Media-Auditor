@@ -14,13 +14,13 @@ const noResult = (source: 'app' | 'repo' | 'pages', over = {}) =>
   makeSuggestion({ source, suggestedResult: null, reason: 'The app shows nothing about this.', flags: [missing], ...over })
 
 describe('cannotShowReason', () => {
-  it.each([
-    ['app', POLICY],
-    ['repo', POLICY],
-    ['app', CODE],
-    ['repo', APP],
-  ] as const)("gives the AI's reason for a %s suggestion with no result on an item that source cannot show", (source, kind) => {
-    expect(cannotShowReason({ suggestion: noResult(source), kind })).toBe(kind.reason)
+  it.each(['app', 'repo'] as const)("gives the AI's reason for a %s suggestion with no result on a policy or process item", (source) => {
+    expect(cannotShowReason({ suggestion: noResult(source), kind: POLICY })).toBe(POLICY.reason)
+  })
+
+  it('is null for an item the AI places with the other source: that stays advice in the picker', () => {
+    expect(cannotShowReason({ suggestion: noResult('app'), kind: CODE })).toBeNull()
+    expect(cannotShowReason({ suggestion: noResult('repo'), kind: APP })).toBeNull()
   })
 
   it('is null when the suggestion has a result', () => {
@@ -43,7 +43,7 @@ describe('cannotShowReason', () => {
     const stopped = { type: 'inaccessible' as const, reason: 'The check stopped at https://app.example/login: a captcha.' }
     expect(cannotShowReason({ suggestion: noResult('app', { flags: [missing, stopped] }), kind: POLICY })).toBeNull()
     expect(cannotShowReason({ suggestion: noResult('app', { reason: APP_NO_STEPS_REASON }), kind: POLICY })).toBeNull()
-    expect(cannotShowReason({ suggestion: noResult('repo', { reason: REPO_TRUNCATED_REASON }), kind: APP })).toBeNull()
+    expect(cannotShowReason({ suggestion: noResult('repo', { reason: REPO_TRUNCATED_REASON }), kind: POLICY })).toBeNull()
   })
 
   it('is null for an item the run left unchecked', () => {
