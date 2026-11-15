@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import { makeDecision, makeSuggestion } from '../testFixtures'
-import type { QuoteView, SuggestionView } from '../types'
+import type { ItemKindView, QuoteView, SuggestionView } from '../types'
 import OverrideDialog from './OverrideDialog'
 import SuggestionCard from './SuggestionCard'
 
@@ -470,17 +470,18 @@ describe('SuggestionCard: the reason is shown once', () => {
 })
 
 describe("SuggestionCard: the source can't show this item", () => {
-  const POLICY_ITEM = { text: 'The privacy policy for younger users is easy to find.' }
-  const APP_ITEM = { text: 'Accounts of users under 16 are private by default.' }
+  // The AI's high-confidence kinds: the only ones the server sends.
+  const POLICY: ItemKindView = { kind: 'neither', reason: 'A company policy, not a screen or code.' }
+  const APP: ItemKindView = { kind: 'app', reason: 'A setting a user can see.' }
   const aiReason = 'No step of the check showed the privacy policy.'
   const flags = [{ type: 'missing_evidence' as const, reason: aiReason }]
   const noResult = (over: Partial<SuggestionView> = {}) => makeSuggestion({ source: 'app', suggestedResult: null, reason: aiReason, flags, ...over })
   const NOTE = "This source can't show this item."
 
   it('says so calmly, with the reason, and keeps the reason, the flags and the review label', () => {
-    renderCard({ suggestion: noResult(), item: POLICY_ITEM })
+    renderCard({ suggestion: noResult(), kind: POLICY })
     const note = screen.getByText(NOTE).closest('[data-tone="hint"]')!
-    expect(note).toHaveTextContent(`${NOTE} It is a policy or process item (it mentions “policy”).`)
+    expect(note).toHaveTextContent(`${NOTE} A company policy, not a screen or code.`)
     expect(note).toHaveClass('bg-sky-50', 'text-sky-700')
     expect(screen.getByText('The AI could not suggest an answer')).toBeInTheDocument()
     expect(screen.getByText(aiReason)).toBeInTheDocument()
@@ -488,18 +489,16 @@ describe("SuggestionCard: the source can't show this item", () => {
   })
 
   it('says so for a code repository suggestion on an app item', () => {
-    renderCard({ suggestion: noResult({ source: 'repo' }), item: APP_ITEM })
-    expect(screen.getByText(NOTE).closest('[data-tone="hint"]')).toHaveTextContent(
-      `${NOTE} It is about something a user can see or change in the app (it mentions “private”).`,
-    )
+    renderCard({ suggestion: noResult({ source: 'repo' }), kind: APP })
+    expect(screen.getByText(NOTE).closest('[data-tone="hint"]')).toHaveTextContent(`${NOTE} A setting a user can see.`)
   })
 
-  it('is not shown for a result, an item the source suits, a failed check, an unchecked item or an unknown item', () => {
+  it('is not shown for a result, an item the source suits, a failed check, an unchecked item or an item without an AI kind', () => {
     const cases: Partial<CardProps>[] = [
-      { suggestion: noResult({ suggestedResult: 'no' }), item: POLICY_ITEM },
-      { suggestion: noResult(), item: APP_ITEM },
-      { suggestion: noResult({ flags: [...flags, { type: 'inaccessible', reason: 'The check stopped at https://app.example/: a captcha.' }] }), item: POLICY_ITEM },
-      { suggestion: noResult(), item: POLICY_ITEM, unchecked: true },
+      { suggestion: noResult({ suggestedResult: 'no' }), kind: POLICY },
+      { suggestion: noResult(), kind: APP },
+      { suggestion: noResult({ flags: [...flags, { type: 'inaccessible', reason: 'The check stopped at https://app.example/: a captcha.' }] }), kind: POLICY },
+      { suggestion: noResult(), kind: POLICY, unchecked: true },
       { suggestion: noResult() },
     ]
     for (const over of cases) {

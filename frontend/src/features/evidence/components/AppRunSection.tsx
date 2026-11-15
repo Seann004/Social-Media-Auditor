@@ -1,7 +1,7 @@
 import { startAppRun } from '../api'
 import { MAX_APP_ITEMS, appRunBlocker, isAppSetupComplete } from '../appState'
 import type { PickItem } from '../appState'
-import type { AppSetupResponse } from '../types'
+import type { AppSetupResponse, ItemKindView } from '../types'
 import type { UseEvidenceResult } from '../useEvidence'
 import { useItemRun } from '../useItemRun'
 import AppItemPicker from './AppItemPicker'
@@ -19,6 +19,8 @@ interface Props {
   onStarted(): void | Promise<void>
   /** Reloads the app address and accounts. */
   onSetupSaved(): void | Promise<void>
+  /** The AI's high-confidence kind of each item, for the picker's chips. */
+  kinds?: ReadonlyMap<string, ItemKindView>
 }
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
@@ -33,7 +35,7 @@ function AppSummary({ setup }: { setup: AppSetupResponse }) {
 }
 
 /** The App branch of the drawer: ② the set-up, ③ the item picker, and the action bar with Run. */
-export default function AppRunSection({ projectId, setup, items, evidence, locked, onStarted, onSetupSaved }: Props) {
+export default function AppRunSection({ projectId, setup, items, evidence, locked, onStarted, onSetupSaved, kinds }: Props) {
   const { setChosen, picked, busy, message, running, start: run } = useItemRun({
     items,
     run: evidence.run,
@@ -57,7 +59,7 @@ export default function AppRunSection({ projectId, setup, items, evidence, locke
       </SetupStep>
       <DrawerStep n={3} title="Items and run" state={complete ? 'current' : 'todo'}>
         {setup.secretKeyConfigured ? (
-          <AppItemPicker items={items} picked={picked} onChange={setChosen} limit={MAX_APP_ITEMS} source="app" />
+          <AppItemPicker items={items} picked={picked} onChange={setChosen} limit={MAX_APP_ITEMS} source="app" kinds={kinds} />
         ) : (
           <p className="text-xs text-slate-500">Items can be picked once the server is set up for checks inside the app.</p>
         )}

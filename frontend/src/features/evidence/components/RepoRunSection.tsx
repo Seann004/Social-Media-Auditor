@@ -1,6 +1,6 @@
 import { startRepoRun } from '../api'
 import type { PickItem } from '../appState'
-import type { RepoSourceView } from '../types'
+import type { ItemKindView, RepoSourceView } from '../types'
 import type { UseEvidenceResult } from '../useEvidence'
 import { useItemRun } from '../useItemRun'
 import type { UseRepoSetupResult } from '../useRepoSetup'
@@ -20,6 +20,8 @@ interface Props {
   locked: boolean
   /** Called after a run was started (or refused as already running), to reload the panel. */
   onStarted(): void | Promise<void>
+  /** The AI's high-confidence kind of each item, for the picker's chips. */
+  kinds?: ReadonlyMap<string, ItemKindView>
 }
 
 export function repoRunBlocker(input: { hasRepo: boolean; picked: number; locked: boolean; running: boolean }): string | null {
@@ -40,7 +42,7 @@ function RepoSummary({ repo }: { repo: RepoSourceView }) {
 }
 
 /** The Code repository branch of the drawer: ② the repository, ③ the item picker, and the action bar. */
-export default function RepoRunSection({ projectId, setup, items, evidence, locked, onStarted }: Props) {
+export default function RepoRunSection({ projectId, setup, items, evidence, locked, onStarted, kinds }: Props) {
   const { setChosen, pickedIds, picked, busy, message, running, start } = useItemRun({
     items,
     run: evidence.run,
@@ -67,7 +69,7 @@ export default function RepoRunSection({ projectId, setup, items, evidence, lock
         <RepoSetup repo={setup.repo} onSave={setup.save} disabled={locked} />
       </SetupStep>
       <DrawerStep n={3} title="Items and run" state={setup.repo ? 'current' : 'todo'}>
-        <AppItemPicker items={items} picked={picked} onChange={setChosen} limit={REPO_ITEM_LIMIT} verb="repository" source="repo" />
+        <AppItemPicker items={items} picked={picked} onChange={setChosen} limit={REPO_ITEM_LIMIT} verb="repository" source="repo" kinds={kinds} />
       </DrawerStep>
       <RunFooter
         summary={`${plural(pickedIds.length, 'item')} · ${setup.repo ? 'repository saved' : 'no repository saved'}`}

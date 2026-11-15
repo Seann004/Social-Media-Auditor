@@ -1,6 +1,5 @@
 // Pure rules for the "check inside the app" panel. No store access, no mutation.
 import type { ChecklistItem, Severity } from '../../types'
-import { suggestEvidenceKind, type EvidenceKindSuggestion } from './evidenceKind'
 import { categoryKey } from './state'
 import type { AppSetupResponse, AppStepOutcome, RunView } from './types'
 
@@ -31,8 +30,6 @@ export interface PickItem {
   code?: string
   /** Shown as a chip in the picker; left out when the value is not one the app knows. */
   severity?: Severity
-  /** The source that can most likely answer the item, shown as a chip in the picker. */
-  evidenceKind?: EvidenceKindSuggestion
 }
 
 const SEVERITIES: readonly Severity[] = ['critical', 'major', 'minor']
@@ -46,7 +43,6 @@ export function toPickItems(items: readonly ChecklistItem[]): PickItem[] {
     label: item.itemName ?? item.text,
     code: item.itemCode || undefined,
     severity: isSeverity(item.severity) ? item.severity : undefined,
-    evidenceKind: suggestEvidenceKind(item),
   }))
 }
 

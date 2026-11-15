@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { describe, expect, it } from 'vitest'
 import { MAX_APP_ITEMS, toPickItems } from '../appState'
 import type { ChecklistItem, Severity } from '../../../types'
+import type { ItemKindView } from '../types'
 import AppItemPicker from './AppItemPicker'
 
 const item = (n: number, category = 'Privacy', severity: Severity = 'major'): ChecklistItem => ({
@@ -129,16 +130,25 @@ describe('AppItemPicker', () => {
       neither: 'The privacy policy for younger users is easy to find.',
       code: 'Passwords are stored hashed, never in plain text.',
       both: 'Users must enter their date of birth when they sign up.',
+      unknown: 'Teens are kept safe.',
     }
-    const kinds: ChecklistItem[] = Object.values(TEXTS).map((text, n) => ({ ...item(n + 1, 'Privacy by default'), itemName: undefined, text }))
+    const all: ChecklistItem[] = Object.values(TEXTS).map((text, n) => ({ ...item(n + 1, 'Privacy by default'), itemName: undefined, text }))
+    // The AI's high-confidence kinds, by item id; the fifth item has none.
+    const KINDS = new Map<string, ItemKindView>([
+      ['i1', { kind: 'app', reason: 'A setting a user can see.' }],
+      ['i2', { kind: 'neither', reason: 'A company policy, not a screen.' }],
+      ['i3', { kind: 'code', reason: 'Only the server shows it.' }],
+      ['i4', { kind: 'both', reason: 'Seen in the app and set in the code.' }],
+    ])
 
-    function WithSource({ source }: { source?: 'app' | 'repo' }) {
+    function WithSource({ source, kinds = KINDS }: { source?: 'app' | 'repo'; kinds?: ReadonlyMap<string, ItemKindView> }) {
       const [picked, setPicked] = useState<Set<string>>(new Set())
-      return <AppItemPicker items={toPickItems(kinds)} picked={picked} onChange={setPicked} guidelines={[]} source={source} />
+      return <AppItemPicker items={toPickItems(all)} picked={picked} onChange={setPicked} guidelines={[]} source={source} kinds={kinds} />
     }
     const rowOf = (text: string) => screen.getByRole('checkbox', { name: text }).closest('li')!
+    const CHIP = /^(App|Code|App \+ Code|Policy \/ process)$/
 
-    it('shows a chip with the suggested kind beside each item, with the reason as a tooltip and for screen readers', () => {
+    it('shows a chip with the AI kind beside each item that has one, with the reason as a tooltip and for screen readers', () => {
       render(<WithSource />)
       const chips: [string, string][] = [
         [TEXTS.app, 'App'],
@@ -148,9 +158,10 @@ describe('AppItemPicker', () => {
       ]
       for (const [text, label] of chips) expect(within(rowOf(text)).getByText(label)).toBeInTheDocument()
       const chip = within(rowOf(TEXTS.neither)).getByText('Policy / process')
-      expect(chip).toHaveAttribute('title', 'It is a policy or process item (it mentions “policy”).')
-      expect(chip).toHaveTextContent('Suggested source: Policy / process. It is a policy or process item (it mentions “policy”).')
-      expect(within(chip).getByText('. It is a policy or process item (it mentions “policy”).')).toHaveClass('sr-only')
+      expect(chip).toHaveAttribute('title', 'A company policy, not a screen.')
+      expect(chip).toHaveTextContent('Suggested source: Policy / process. A company policy, not a screen.')
+      expect(within(chip).getByText('. A company policy, not a screen.')).toHaveClass('sr-only')
+      expect(within(rowOf(TEXTS.unknown)).queryByText(CHIP)).toBeNull()
     })
 
     it('keeps each checkbox named by its item text alone', () => {
@@ -167,8 +178,7 @@ describe('AppItemPicker', () => {
       render(<WithSource source="app" />)
       expect(within(rowOf(TEXTS.code)).getByText('Better checked with Code')).toBeInTheDocument()
       expect(within(rowOf(TEXTS.neither)).getByText("Usually can't be shown by an app or code")).toBeInTheDocument()
-      expect(within(rowOf(TEXTS.app)).queryByText(/Better checked|Usually can't/)).toBeNull()
-      expect(within(rowOf(TEXTS.both)).queryByText(/Better checked|Usually can't/)).toBeNull()
+      for (const text of [TEXTS.app, TEXTS.both, TEXTS.unknown]) expect(within(rowOf(text)).queryByText(/Better checked|Usually can't/)).toBeNull()
       await user.click(screen.getByRole('checkbox', { name: TEXTS.code }))
       await user.click(screen.getByRole('checkbox', { name: TEXTS.neither }))
       expect(screen.getByText(`2 of ${MAX_APP_ITEMS} picked`)).toBeInTheDocument()
@@ -178,12 +188,17 @@ describe('AppItemPicker', () => {
       render(<WithSource source="repo" />)
       expect(within(rowOf(TEXTS.app)).getByText('Better checked with the App')).toBeInTheDocument()
       expect(within(rowOf(TEXTS.neither)).getByText("Usually can't be shown by an app or code")).toBeInTheDocument()
-      expect(within(rowOf(TEXTS.code)).queryByText(/Better checked|Usually can't/)).toBeNull()
-      expect(within(rowOf(TEXTS.both)).queryByText(/Better checked|Usually can't/)).toBeNull()
+      for (const text of [TEXTS.code, TEXTS.both, TEXTS.unknown]) expect(within(rowOf(text)).queryByText(/Better checked|Usually can't/)).toBeNull()
     })
 
     it('shows no hint without a source', () => {
       render(<WithSource />)
+      expect(screen.queryByText(/Better checked|Usually can't/)).toBeNull()
+    })
+
+    it('shows no chip and no hint without kinds: while they load, or when they could not be had', () => {
+      render(<WithSource source="app" kinds={new Map()} />)
+      expect(screen.queryByText(CHIP)).toBeNull()
       expect(screen.queryByText(/Better checked|Usually can't/)).toBeNull()
     })
   })

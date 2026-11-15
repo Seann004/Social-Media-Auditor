@@ -2,10 +2,9 @@ import { useState } from 'react'
 import { InfoIcon as Info, RobotIcon as Robot } from '@phosphor-icons/react'
 import type { ChecklistItemStatus } from '../../../types'
 import { CANNOT_SHOW_NOTE, cannotShowReason } from '../cannotShow'
-import type { EvidenceKindInput } from '../evidenceKind'
 import { isHttpUrl } from '../safeUrl'
 import { suggestionState, toAnswerStatus, type CardState } from '../state'
-import { FLAG_LABEL, type DecisionView, type QuoteView, type FlagType, type SuggestionView } from '../types'
+import { FLAG_LABEL, type DecisionView, type ItemKindView, type QuoteView, type FlagType, type SuggestionView } from '../types'
 import CodeFound from './CodeFound'
 import { RESULT_LABEL } from './OverrideDialog'
 import QuoteThumbnail from './QuoteThumbnail'
@@ -23,8 +22,8 @@ export interface SuggestionCardProps {
   onAccept: () => void
   onOverride: () => void
   onKeepMine: () => void
-  /** The checklist item, to say when the suggestion's source can't show it. */
-  item?: EvidenceKindInput
+  /** The AI's high-confidence kind of the item, to say when the suggestion's source can't show it. */
+  kind?: ItemKindView
   /** The result run left the item unchecked: the card then says nothing about the source. */
   unchecked?: boolean
 }
@@ -123,14 +122,14 @@ export default function SuggestionCard({
   onAccept,
   onOverride,
   onKeepMine,
-  item,
+  kind,
   unchecked = false,
 }: SuggestionCardProps) {
   const [replaying, setReplaying] = useState(false)
   const [showCode, setShowCode] = useState(false)
   const isRepo = suggestion.source === 'repo'
   const flags = flagsToList(suggestion)
-  const cannotShow = cannotShowReason({ suggestion, item, unchecked })
+  const cannotShow = cannotShowReason({ suggestion, kind, unchecked })
   const state = suggestionState({ suggestion, decision, currentStatus })
   const suggested = suggestion.suggestedResult
   const decided = state === 'accepted' || state === 'overridden'

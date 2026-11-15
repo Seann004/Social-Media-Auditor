@@ -6,6 +6,7 @@ import { EvidenceApiError } from '../api'
 import { useStore } from '../../../store/useStore'
 import { makeRun, makeSuggestion } from '../testFixtures'
 import { useEvidence } from '../useEvidence'
+import { forgetItemKinds } from '../useItemKinds'
 import type { ChecklistItem } from '../../../types'
 import EvidencePanel from './EvidencePanel'
 
@@ -21,6 +22,7 @@ vi.mock('../api', async (importOriginal) => {
     saveRepoSource: vi.fn(),
     startRepoRun: vi.fn(),
     reassess: vi.fn(),
+    getItemKinds: vi.fn(),
   }
 })
 
@@ -33,6 +35,7 @@ const m = {
   saveRepoSource: vi.mocked(api.saveRepoSource),
   startRepoRun: vi.mocked(api.startRepoRun),
   reassess: vi.mocked(api.reassess),
+  getItemKinds: vi.mocked(api.getItemKinds),
 }
 
 const item = (n: number, category = 'Privacy'): ChecklistItem => ({
@@ -46,9 +49,9 @@ const item = (n: number, category = 'Privacy'): ChecklistItem => ({
 const items = [...Array.from({ length: 8 }, (_, i) => item(i + 1)), ...Array.from({ length: 4 }, (_, i) => item(i + 9, 'Safety'))]
 const repo = { repoUrl: 'https://github.com/o/n', branch: null, updatedAt: '2026-11-07T09:00:00.000Z' }
 
-function Harness({ checklist = items }: { checklist?: ChecklistItem[] }) {
+function Harness() {
   const evidence = useEvidence('p1', { enabled: true })
-  return <EvidencePanel projectId="p1" role="auditor" evidence={evidence} locked={false} checklistItems={checklist} publicPagesEnabled />
+  return <EvidencePanel projectId="p1" role="auditor" evidence={evidence} locked={false} checklistItems={items} publicPagesEnabled />
 }
 
 beforeEach(() => {
@@ -59,6 +62,8 @@ beforeEach(() => {
   m.getSuggestions.mockResolvedValue({ run: null, suggestions: [], decisions: [] })
   m.getAppSetup.mockResolvedValue({ app: null, accounts: [], secretKeyConfigured: true })
   m.getRepoSource.mockResolvedValue({ repo: null })
+  m.getItemKinds.mockResolvedValue({ kinds: {} })
+  forgetItemKinds()
 })
 
 /** The panel lives in a drawer: open it from the bar, as a user does. */
@@ -151,18 +156,16 @@ describe('Code repository source in the evidence panel', () => {
     expect(await screen.findByText('Something went wrong. Try again.')).toBeInTheDocument()
   })
 
-  it('tells the picker it is the Code repository, so an app item is better checked with the App', async () => {
+  it('shows the item kinds on the Code repository source, so an app item is better checked with the App', async () => {
     const user = userEvent.setup()
-    const appItem = 'Accounts of users under 16 are private by default.'
-    const codeItem = 'Passwords are stored hashed, never in plain text.'
-    const checklist = [appItem, codeItem].map((text, n) => ({ ...item(n + 1), itemName: undefined, text }))
+    m.getItemKinds.mockResolvedValue({ kinds: { i1: { kind: 'app', reason: 'A setting a user can see.' }, i2: { kind: 'code', reason: 'Only the server shows it.' } } })
     m.getRepoSource.mockResolvedValue({ repo })
-    await renderOpen(<Harness checklist={checklist} />)
+    await renderOpen(<Harness />)
     await openRepo(user)
-    const appRow = (await screen.findByRole('checkbox', { name: appItem })).closest('li')!
+    const appRow = (await screen.findByText('Better checked with the App')).closest('li')!
+    expect(within(appRow).getByRole('checkbox', { name: 'Item 1' })).toBeInTheDocument()
     expect(within(appRow).getByText('App')).toBeInTheDocument()
-    expect(within(appRow).getByText('Better checked with the App')).toBeInTheDocument()
-    expect(within(screen.getByRole('checkbox', { name: codeItem }).closest('li')!).queryByText(/Better checked/)).toBeNull()
+    expect(within(screen.getByRole('checkbox', { name: 'Item 2' }).closest('li')!).queryByText(/Better checked/)).toBeNull()
   })
 
   it('caps the picker at 10 with the same style of message as the app', async () => {

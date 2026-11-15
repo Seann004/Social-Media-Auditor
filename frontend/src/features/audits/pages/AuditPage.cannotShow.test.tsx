@@ -1,4 +1,5 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
@@ -30,6 +31,7 @@ vi.mock('../../evidence/api', async (orig) => ({
   getSuggestions: vi.fn(),
   getSources: vi.fn(),
   getAppSetup: vi.fn(),
+  getItemKinds: vi.fn(),
 }))
 
 // The store first: lib/db imports the store, so loading the store first gives it the mocked lib/db.
@@ -37,6 +39,7 @@ import { useStore } from '../../../store/useStore'
 import * as db from '../../../lib/db'
 import * as api from '../../evidence/api'
 import { makeRun, makeSuggestion } from '../../evidence/testFixtures'
+import { forgetItemKinds } from '../../evidence/useItemKinds'
 import AuditPage from './AuditPage'
 
 const NOTE = "This source can't show this item."
@@ -66,18 +69,28 @@ function answer(run = makeRun({ source: 'app', checkedItemIds: ['i1', 'i2'] })) 
 }
 
 beforeEach(() => {
-  for (const m of [vi.mocked(api.getSuggestions), vi.mocked(api.getLatestRun), vi.mocked(api.getSources), vi.mocked(api.getAppSetup), vi.mocked(db.fetchProjectComplianceSummary)]) m.mockReset()
+  for (const m of [vi.mocked(api.getSuggestions), vi.mocked(api.getLatestRun), vi.mocked(api.getSources), vi.mocked(api.getAppSetup), vi.mocked(api.getItemKinds), vi.mocked(db.fetchProjectComplianceSummary)]) m.mockReset()
+  forgetItemKinds()
+  // The AI's high-confidence kinds: i1 is a policy item, i2 an app item.
+  vi.mocked(api.getItemKinds).mockResolvedValue({ kinds: { i1: { kind: 'neither', reason: 'A company policy, not a screen or code.' }, i2: { kind: 'app', reason: 'A setting a user can see.' } } })
   vi.mocked(db.fetchProjectComplianceSummary).mockResolvedValue({ p1: { percentage: 0, answered: 0, total: 2 } } as never)
   vi.mocked(api.getSources).mockResolvedValue({ source: null, permission: null } as never)
   vi.mocked(api.getAppSetup).mockResolvedValue({ app: null, accounts: [], secretKeyConfigured: true } as never)
 })
 
+/** The kinds are asked for when the drawer first opens; the cards read the same answer. */
+async function openDrawerOnce() {
+  await userEvent.click(await screen.findByRole('button', { name: 'Open AI evidence' }))
+  await userEvent.keyboard('{Escape}')
+}
+
 describe("the audit page says when an app check can't show an item", () => {
   it('notes it on the policy item only, keeping its reason, its review label and the flagged counts', async () => {
     setup(); answer(); mount()
+    await openDrawerOnce()
     const note = await screen.findByText(NOTE)
     expect(screen.getAllByText(NOTE)).toHaveLength(1)
-    expect(note.closest('[data-tone="hint"]')).toHaveTextContent(`${NOTE} It is a policy or process item (it mentions “policy”).`)
+    expect(note.closest('[data-tone="hint"]')).toHaveTextContent(`${NOTE} A company policy, not a screen or code.`)
     const cards = screen.getAllByRole('region', { name: 'AI suggestion' })
     expect(cards).toHaveLength(2)
     const withNote = cards.find((card) => within(card).queryByText(NOTE) !== null)!
@@ -87,8 +100,17 @@ describe("the audit page says when an app check can't show an item", () => {
     expect(screen.getByLabelText('2 flagged by AI')).toBeInTheDocument()
   })
 
+  it('says nothing before the kinds are known: the page itself asks for none', async () => {
+    setup(); answer(); mount()
+    expect(await screen.findAllByRole('region', { name: 'AI suggestion' })).toHaveLength(2)
+    expect(api.getItemKinds).not.toHaveBeenCalled()
+    expect(screen.queryByText(NOTE)).toBeNull()
+  })
+
   it('says nothing for an item the run left unchecked', async () => {
     setup(); answer(makeRun({ source: 'app', status: 'partial', checkedItemIds: ['i1', 'i2'], uncheckedItemIds: ['i1'] })); mount()
+    await openDrawerOnce()
+    await waitFor(() => expect(api.getItemKinds).toHaveBeenCalled())
     expect(await screen.findAllByRole('region', { name: 'AI suggestion' })).toHaveLength(2)
     expect(screen.queryByText(NOTE)).toBeNull()
   })

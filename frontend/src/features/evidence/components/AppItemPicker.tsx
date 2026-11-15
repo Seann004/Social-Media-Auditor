@@ -4,7 +4,8 @@ import SeverityBadge from '../../audits/components/SeverityBadge'
 import { useStore } from '../../../store/useStore'
 import { MAX_APP_ITEMS, PICK_TIP, groupPickItemsByGuideline, guidelineTitle } from '../appState'
 import type { GuidelineLabel, PickItem } from '../appState'
-import { betterSourceHint, suggestEvidenceKind, type CheckSource, type EvidenceKindSuggestion } from '../evidenceKind'
+import { betterSourceHint, type CheckSource } from '../kindHints'
+import type { ItemKindView } from '../types'
 import EvidenceKindChip from './EvidenceKindChip'
 
 interface Props {
@@ -19,19 +20,18 @@ interface Props {
   guidelines?: readonly GuidelineLabel[]
   /** The source the run will use. Items that suit another source get a muted line saying so; none is blocked. */
   source?: CheckSource
+  /** The AI's high-confidence kind of each item, by id. An item without one gets no chip and no line. */
+  kinds?: ReadonlyMap<string, ItemKindView>
 }
-
-/** The kind toPickItems suggested, or one from the label for an item made elsewhere. */
-const kindOf = (item: PickItem): EvidenceKindSuggestion => item.evidenceKind ?? suggestEvidenceKind({ text: item.label, category: item.category })
 
 const SMALL_BUTTON =
   'rounded-md px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-transparent'
 
 /**
  * Tickboxes grouped under their guideline and then by category, each category folding away. Once `limit` are picked the rest are
- * disabled. Each box is named by its item text alone; the code, the suggested evidence kind and the severity sit beside it.
+ * disabled. Each box is named by its item text alone; the code, the AI's suggested source (when known) and the severity sit beside it.
  */
-export default function AppItemPicker({ items, picked, onChange, limit = MAX_APP_ITEMS, verb = 'app', guidelines, source }: Props) {
+export default function AppItemPicker({ items, picked, onChange, limit = MAX_APP_ITEMS, verb = 'app', guidelines, source, kinds }: Props) {
   const full = picked.size >= limit
   const noteId = useId()
   const baseId = useId()
@@ -146,8 +146,8 @@ export default function AppItemPicker({ items, picked, onChange, limit = MAX_APP
                         {group.items.map((item) => {
                           const checked = picked.has(item.id)
                           const boxId = `${baseId}-${item.id}`
-                          const kind = kindOf(item)
-                          const hint = source ? betterSourceHint(kind.kind, source) : null
+                          const kind = kinds?.get(item.id)
+                          const hint = kind && source ? betterSourceHint(kind.kind, source) : null
                           return (
                             <li key={item.id} className="flex items-start gap-2.5 px-3 py-2">
                               <input
@@ -166,9 +166,11 @@ export default function AppItemPicker({ items, picked, onChange, limit = MAX_APP
                                 </label>
                                 {hint ? <p className="mt-0.5 text-2xs text-slate-500">{hint}</p> : null}
                               </div>
-                              <span className="mt-0.5 shrink-0">
-                                <EvidenceKindChip suggestion={kind} />
-                              </span>
+                              {kind ? (
+                                <span className="mt-0.5 shrink-0">
+                                  <EvidenceKindChip kind={kind} />
+                                </span>
+                              ) : null}
                               {item.severity ? (
                                 <span className="mt-0.5 shrink-0">
                                   <SeverityBadge severity={item.severity} />

@@ -7,6 +7,7 @@ import { useStore } from '../../../store/useStore'
 import { makeRun, makeSuggestion } from '../testFixtures'
 import type { AppChangeView, AppSetupResponse, TestAccountView } from '../types'
 import { useEvidence } from '../useEvidence'
+import { forgetItemKinds } from '../useItemKinds'
 import type { ChecklistItem, UserRole } from '../../../types'
 import EvidencePanel from './EvidencePanel'
 
@@ -28,6 +29,7 @@ vi.mock('../api', async (importOriginal) => {
     deleteTestAccount: vi.fn(),
     startAppRun: vi.fn(),
     getRunChanges: vi.fn(),
+    getItemKinds: vi.fn(),
   }
 })
 
@@ -46,6 +48,7 @@ const m = {
   updateTestAccount: vi.mocked(api.updateTestAccount),
   startAppRun: vi.mocked(api.startAppRun),
   getRunChanges: vi.mocked(api.getRunChanges),
+  getItemKinds: vi.mocked(api.getItemKinds),
 }
 
 const item = (n: number, category = 'Privacy'): ChecklistItem => ({
@@ -101,6 +104,8 @@ beforeEach(() => {
   m.getSuggestions.mockResolvedValue({ run: null, suggestions: [], decisions: [] })
   m.getAppSetup.mockResolvedValue(setup())
   m.getRunChanges.mockResolvedValue({ changes: [] })
+  m.getItemKinds.mockResolvedValue({ kinds: {} })
+  forgetItemKinds()
 })
 
 /** The panel lives in a drawer: open it from the bar, as a user does. */
@@ -373,16 +378,31 @@ describe('App source in the evidence panel', () => {
     expect(await screen.findByText('Checking in the app: Item 2 · starting')).toBeInTheDocument()
   })
 
-  it('tells the picker it is the App, so a code item is better checked with Code', async () => {
+  it('asks for the item kinds once, when the drawer first opens, and shows them on the App source', async () => {
     const user = userEvent.setup()
-    const appItem = 'Accounts of users under 16 are private by default.'
-    const codeItem = 'Passwords are stored hashed, never in plain text.'
-    render(<Harness items={[appItem, codeItem].map((text, n) => ({ ...item(n + 1), itemName: undefined, text }))} />)
+    m.getItemKinds.mockResolvedValue({ kinds: { i1: { kind: 'app', reason: 'A setting a user can see.' }, i2: { kind: 'code', reason: 'Only the server shows it.' } } })
+    render(<Harness />)
+    await screen.findByRole('button', { name: 'Open AI evidence' })
+    expect(m.getItemKinds).not.toHaveBeenCalled()
     await openApp(user)
-    const codeRow = screen.getByRole('checkbox', { name: codeItem }).closest('li')!
+    const codeRow = (await screen.findByText('Better checked with Code')).closest('li')!
+    expect(within(codeRow).getByRole('checkbox', { name: 'Item 2' })).toBeInTheDocument()
     expect(within(codeRow).getByText('Code')).toBeInTheDocument()
-    expect(within(codeRow).getByText('Better checked with Code')).toBeInTheDocument()
-    expect(within(screen.getByRole('checkbox', { name: appItem }).closest('li')!).queryByText(/Better checked/)).toBeNull()
+    expect(within(screen.getByRole('checkbox', { name: 'Item 1' }).closest('li')!).queryByText(/Better checked/)).toBeNull()
+    expect(m.getItemKinds).toHaveBeenCalledTimes(1)
+    expect(m.getItemKinds).toHaveBeenCalledWith('p1')
+  })
+
+  it('shows no chip and no hint when the item kinds cannot be loaded', async () => {
+    const user = userEvent.setup()
+    m.getItemKinds.mockRejectedValue(new EvidenceApiError(503, 'AI assessment is not configured on this server: GROQ_API_KEY is missing.'))
+    render(<Harness />)
+    await openApp(user)
+    await waitFor(() => expect(m.getItemKinds).toHaveBeenCalled())
+    const row = screen.getByRole('checkbox', { name: 'Item 2' }).closest('li')!
+    expect(within(row).queryByText(/^(App|Code|App \+ Code|Policy \/ process)$/)).toBeNull()
+    expect(screen.queryByText(/Better checked|Usually can't/)).toBeNull()
+    expect(screen.queryByText('AI assessment is not configured on this server: GROQ_API_KEY is missing.')).toBeNull()
   })
 
   it('links the cap note to the disabled boxes and drops picked items that left the checklist', async () => {

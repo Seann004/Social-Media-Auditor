@@ -9,6 +9,7 @@ import type {
   DecisionRequest,
   DecisionResponse,
   EvidencePermission,
+  ItemKindsResponse,
   LatestRunResponse,
   RunScope,
   RunStartResponse,
@@ -121,6 +122,11 @@ export function getLatestRun(projectId: string): Promise<LatestRunResponse> {
 
 export function getSuggestions(projectId: string): Promise<SuggestionsResponse> {
   return call(`${project(projectId)}/ai-suggestions`)
+}
+
+/** The AI's high-confidence kind of each checklist item. POST: it may cost an AI call on the server. */
+export function getItemKinds(projectId: string): Promise<ItemKindsResponse> {
+  return call(`${project(projectId)}/item-kinds`, 'POST')
 }
 
 export function postDecision(suggestionId: string, decision: DecisionRequest): Promise<DecisionResponse> {

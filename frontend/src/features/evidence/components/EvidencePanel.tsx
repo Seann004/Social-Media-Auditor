@@ -9,6 +9,7 @@ import type { EvidencePermission, RunScope, RunSource } from '../types'
 import type { UseEvidenceResult } from '../useEvidence'
 import { isRunActive } from '../useItemRun'
 import { useAppSetup } from '../useAppSetup'
+import { useItemKinds } from '../useItemKinds'
 import type { UseAppSetupResult } from '../useAppSetup'
 import { useRepoSetup } from '../useRepoSetup'
 import type { UseRepoSetupResult } from '../useRepoSetup'
@@ -116,6 +117,8 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
   const pickItems = useMemo(() => toPickItems(checklistItems ?? []), [checklistItems])
   // The drawer's open state lives here, is not saved, and starts closed.
   const [open, setOpen] = useState(false)
+  // Asked for when the drawer first opens, and kept for the session; the audit page's cards read it too.
+  const itemKinds = useItemKinds(projectId, open)
   const openerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const drawerId = useId()
@@ -274,7 +277,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
         </DrawerStep>
 
         {source === 'repo' ? (
-          <RepoRunSection projectId={projectId} setup={repoSetup} items={pickItems} evidence={evidence} locked={locked} onStarted={refresh} />
+          <RepoRunSection projectId={projectId} setup={repoSetup} items={pickItems} evidence={evidence} locked={locked} onStarted={refresh} kinds={itemKinds.kinds} />
         ) : source === 'app' ? (
           appSetup.setup ? (
             <AppRunSection
@@ -285,6 +288,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
               locked={locked}
               onStarted={refresh}
               onSetupSaved={appSetup.reload}
+              kinds={itemKinds.kinds}
             />
           ) : (
             <AppSetupPending app={appSetup} />

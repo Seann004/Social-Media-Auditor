@@ -1,6 +1,6 @@
 // When a result card may say "This source can't show this item". Pure: no store, no fetch.
-import { fitsSource, suggestEvidenceKind, type CheckSource, type EvidenceKindInput } from './evidenceKind'
-import type { RunSource, SuggestionView } from './types'
+import { fitsSource, type CheckSource } from './kindHints'
+import type { ItemKindView, RunSource, SuggestionView } from './types'
 
 export const CANNOT_SHOW_NOTE = "This source can't show this item."
 
@@ -21,22 +21,21 @@ function checkFailed(suggestion: SuggestionView): boolean {
 
 export interface CannotShowInput {
   suggestion: SuggestionView
-  /** The checklist item. Without it nothing is said. */
-  item?: EvidenceKindInput
+  /** The AI's kind of the item. The server sends only high-confidence kinds; without one nothing is said. */
+  kind?: ItemKindView
   /** The result run listed the item as not checked. */
   unchecked?: boolean
 }
 
 /**
- * The reason to show after "This source can't show this item", or null to leave the card as it is.
- * Only for an App or Code repository suggestion with no result, from a check that did not fail, on an
- * item the run did not leave unchecked, whose suggested kind does not include the suggestion's own
- * source. The suggestion's source is used, not the run's, so a suggestion carried forward from an
- * earlier run of another source is judged by the source that made it.
+ * The AI's reason to show after "This source can't show this item", or null to leave the card as it is.
+ * Only with a high-confidence kind from the AI, for an App or Code repository suggestion with no result,
+ * from a check that did not fail, on an item the run did not leave unchecked, whose kind does not include
+ * the suggestion's own source. The suggestion's source is used, not the run's, so a suggestion carried
+ * forward from an earlier run of another source is judged by the source that made it.
  */
-export function cannotShowReason({ suggestion, item, unchecked = false }: CannotShowInput): string | null {
-  if (!item || unchecked || suggestion.suggestedResult !== null) return null
+export function cannotShowReason({ suggestion, kind, unchecked = false }: CannotShowInput): string | null {
+  if (!kind || unchecked || suggestion.suggestedResult !== null) return null
   if (!isCheckSource(suggestion.source) || checkFailed(suggestion)) return null
-  const kind = suggestEvidenceKind(item)
   return fitsSource(kind.kind, suggestion.source) ? null : kind.reason
 }
