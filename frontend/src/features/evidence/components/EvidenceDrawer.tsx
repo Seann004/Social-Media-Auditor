@@ -18,8 +18,8 @@ interface Props {
 }
 
 /**
- * A slide-over from the right. Non-modal: from the lg breakpoint up there is no backdrop and the
- * page behind stays usable; below it a backdrop covers the page and closes the drawer on a click.
+ * A slide-over from the right: half the window from the lg breakpoint up, most of it below. A grey
+ * backdrop dims the page behind at every width, and a click on it closes the drawer.
  * It stays mounted while closed (hidden and out of the accessibility tree), so the hooks and the
  * picked items inside it live on between openings.
  */
@@ -53,7 +53,7 @@ export default function EvidenceDrawer({ id, open, onClose, panelRef, children }
             exit={{ opacity: 0 }}
             transition={reduce ? INSTANT : FADE}
             onClick={onClose}
-            className="fixed inset-0 z-40 bg-slate-900/40 lg:hidden print:hidden"
+            className="fixed inset-0 z-40 bg-slate-900/40 print:hidden"
           />
         ) : null}
       </AnimatePresence>
@@ -73,7 +73,7 @@ export default function EvidenceDrawer({ id, open, onClose, panelRef, children }
           if (!open) setShown(false)
         }}
         style={{ visibility: shown ? 'visible' : 'hidden' }}
-        className="fixed inset-y-0 right-0 z-40 flex w-[92vw] max-w-[640px] flex-col border-l border-slate-200 bg-white shadow-2xl focus:outline-none lg:w-[min(640px,50vw)] print:hidden"
+        className="fixed inset-y-0 right-0 z-40 flex w-[92vw] max-w-[640px] flex-col border-l border-slate-200 bg-white shadow-2xl focus:outline-none lg:w-[50vw] lg:min-w-[480px] lg:max-w-none print:hidden"
       >
         <div className="flex items-start gap-3 border-b border-slate-200 px-5 py-4">
           <div className="min-w-0 flex-1">

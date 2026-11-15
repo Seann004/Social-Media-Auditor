@@ -158,7 +158,7 @@ describe('EvidenceDrawer', () => {
     expect(openButton()).toHaveFocus()
   })
 
-  it('has a backdrop only below the lg breakpoint, which closes the drawer', async () => {
+  it('dims the page behind with a grey backdrop at every width, and a click on it closes the drawer', async () => {
     const user = userEvent.setup()
     const { container } = render(<Harness />)
     await within(bar()).findByText('Ready')
@@ -166,17 +166,19 @@ describe('EvidenceDrawer', () => {
     await user.click(openButton())
     const backdrop = container.querySelector('[data-drawer-backdrop]')!
     expect(backdrop).not.toBeNull()
-    expect(backdrop.className).toMatch(/(^|\s)lg:hidden(\s|$)/)
+    expect(backdrop.className).not.toMatch(/(^|\s)lg:hidden(\s|$)/)
+    expect(backdrop.className).toMatch(/(^|\s)bg-slate-900\/40(\s|$)/)
     await user.click(backdrop as HTMLElement)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('is about 440 px wide on desktop and covers most of a narrow screen', async () => {
+  it('is half the window wide on desktop and covers most of a narrow screen', async () => {
     const user = userEvent.setup()
     render(<Harness />)
     await user.click(openButton())
     const classes = screen.getByRole('dialog').className.split(/\s+/)
-    expect(classes).toEqual(expect.arrayContaining(['fixed', 'right-0', 'w-[92vw]', 'lg:w-[440px]']))
+    expect(classes).toEqual(expect.arrayContaining(['fixed', 'right-0', 'w-[92vw]', 'lg:w-[50vw]', 'lg:max-w-none']))
+    expect(classes).not.toContain('lg:w-[440px]')
   })
 
   it('keeps picked items while it is closed and opened again', async () => {
