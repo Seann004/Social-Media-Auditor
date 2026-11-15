@@ -1,0 +1,872 @@
+{
+  "meta": {
+    "label": "item-kinds",
+    "date": "2026-11-15T18:14:49.477Z",
+    "model": "openai/gpt-oss-120b",
+    "promptVersion": "item-kinds-v1",
+    "commit": "0a0dde0",
+    "calls": 2,
+    "tokens": 2244,
+    "failedCalls": 1,
+    "stoppedByCap": false,
+    "seconds": 15.189,
+    "maxTokens": 30000
+  },
+  "summary": {
+    "all": {
+      "total": 79,
+      "answered": 40,
+      "agreed": 27,
+      "agreement": 0.34177215189873417,
+      "asserted": 35,
+      "assertedCorrect": 27,
+      "precision": 0.7714285714285715,
+      "coverage": 0.4430379746835443
+    },
+    "heldOut": {
+      "total": 12,
+      "answered": 0,
+      "agreed": 0,
+      "agreement": 0,
+      "asserted": 0,
+      "assertedCorrect": 0,
+      "precision": null,
+      "coverage": 0
+    },
+    "byGroup": {
+      "tuning": {
+        "total": 37,
+        "answered": 37,
+        "agreed": 25,
+        "agreement": 0.6756756756756757,
+        "asserted": 32,
+        "assertedCorrect": 25,
+        "precision": 0.78125,
+        "coverage": 0.8648648648648649
+      },
+      "round_two": {
+        "total": 15,
+        "answered": 3,
+        "agreed": 2,
+        "agreement": 0.13333333333333333,
+        "asserted": 3,
+        "assertedCorrect": 2,
+        "precision": 0.6666666666666666,
+        "coverage": 0.2
+      },
+      "round_three": {
+        "total": 15,
+        "answered": 0,
+        "agreed": 0,
+        "agreement": 0,
+        "asserted": 0,
+        "assertedCorrect": 0,
+        "precision": null,
+        "coverage": 0
+      },
+      "held_out": {
+        "total": 12,
+        "answered": 0,
+        "agreed": 0,
+        "agreement": 0,
+        "asserted": 0,
+        "assertedCorrect": 0,
+        "precision": null,
+        "coverage": 0
+      }
+    }
+  },
+  "confusion": {
+    "all": {
+      "app": {
+        "app": 15,
+        "code": 1,
+        "both": 0,
+        "neither": 0,
+        "none": 13
+      },
+      "code": {
+        "app": 0,
+        "code": 7,
+        "both": 2,
+        "neither": 0,
+        "none": 10
+      },
+      "both": {
+        "app": 4,
+        "code": 1,
+        "both": 0,
+        "neither": 0,
+        "none": 5
+      },
+      "neither": {
+        "app": 2,
+        "code": 0,
+        "both": 3,
+        "neither": 5,
+        "none": 11
+      }
+    },
+    "high": {
+      "app": {
+        "app": 15,
+        "code": 1,
+        "both": 0,
+        "neither": 0,
+        "none": 13
+      },
+      "code": {
+        "app": 0,
+        "code": 7,
+        "both": 0,
+        "neither": 0,
+        "none": 12
+      },
+      "both": {
+        "app": 4,
+        "code": 1,
+        "both": 0,
+        "neither": 0,
+        "none": 5
+      },
+      "neither": {
+        "app": 2,
+        "code": 0,
+        "both": 0,
+        "neither": 5,
+        "none": 14
+      }
+    }
+  },
+  "results": [
+    {
+      "group": "tuning",
+      "text": "Accounts of users under 16 are private by default.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "privacy default shown in settings",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Direct messages are off by default for users under 16.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "DM toggle visible for under‑16",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Users can report a video, comment or account from the app.",
+      "label": "app",
+      "also": [
+        "both"
+      ],
+      "kind": "app",
+      "confidence": "high",
+      "reason": "report button present in UI",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Parents can link to a teen account to manage safety settings.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "parent link option in account settings",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "A safety centre explains the tools available to teens and parents.",
+      "label": "neither",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "safety centre page accessible",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "The privacy policy for younger users is easy to find.",
+      "label": "neither",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "policy link shown in app/help",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "Teens can block or mute any account that contacts them.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "block/mute UI available",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Adults who do not follow a teen cannot send them a direct message.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "DM restriction visible in UI",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Location sharing is turned off for teen accounts until they turn it on.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "location sharing toggle default off",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Autoplay of videos is switched off for users under 18.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "autoplay setting visible for under‑18",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "A teen's follower list is not visible to accounts they don't follow.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "follower list visibility rule observable",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Users under 18 get a reminder to take a break after an hour of scrolling.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "break reminder appears in app",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Teens can turn off comments on their own posts.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "comment toggle on posts",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Teen accounts do not appear in 'suggested accounts' for adults.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "suggested accounts filter observable",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Search results for self-harm terms show support resources instead of content.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "search results show resources",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Passwords are stored hashed, never in plain text.",
+      "label": "code",
+      "kind": "code",
+      "confidence": "high",
+      "reason": "hashing implementation in source",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Direct messages are encrypted in transit and at rest.",
+      "label": "code",
+      "kind": "code",
+      "confidence": "high",
+      "reason": "encryption handled server‑side",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Failed login attempts are rate limited.",
+      "label": "code",
+      "kind": "code",
+      "confidence": "high",
+      "reason": "rate‑limit logic in code",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Chat messages of under-18 users are deleted after 90 days.",
+      "label": "code",
+      "kind": "code",
+      "confidence": "high",
+      "reason": "deletion schedule in backend",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Every moderation action is written to an audit log.",
+      "label": "code",
+      "kind": "code",
+      "confidence": "high",
+      "reason": "audit log writes in code",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Precise location data of children is not stored on the server.",
+      "label": "code",
+      "kind": "code",
+      "confidence": "high",
+      "reason": "no precise location stored in DB",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Uploaded images are checked against a hash list of known abuse material.",
+      "label": "code",
+      "kind": "code",
+      "confidence": "high",
+      "reason": "hash‑list check in upload pipeline",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Parental consent is recorded with the date and the parent's account.",
+      "label": "code",
+      "kind": "both",
+      "confidence": "low",
+      "reason": "consent recorded in UI and stored",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "Personal data of users under 18 is not shared with advertisers.",
+      "label": "code",
+      "also": [
+        "neither"
+      ],
+      "kind": "both",
+      "confidence": "low",
+      "reason": "ad‑targeting UI and backend restrictions",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "Staff who review reports receive child safety training every year.",
+      "label": "neither",
+      "kind": "neither",
+      "confidence": "high",
+      "reason": "training process, not in app/code",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "The service carries out an annual children's risk assessment.",
+      "label": "neither",
+      "kind": "neither",
+      "confidence": "high",
+      "reason": "annual risk assessment is organisational",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "A named senior manager is accountable for children's safety.",
+      "label": "neither",
+      "kind": "neither",
+      "confidence": "high",
+      "reason": "manager accountability policy",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "The terms of service are written in language a 13-year-old can understand.",
+      "label": "neither",
+      "kind": "neither",
+      "confidence": "high",
+      "reason": "legal wording, not in app/code",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Reports of child sexual abuse material are passed to law enforcement.",
+      "label": "neither",
+      "kind": "both",
+      "confidence": "low",
+      "reason": "report flow visible, law‑enforcement handoff in code",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "Moderators are available around the clock to handle urgent reports.",
+      "label": "neither",
+      "kind": "both",
+      "confidence": "low",
+      "reason": "availability shown, staffing in code/ops",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "The company publishes a yearly transparency report on child safety.",
+      "label": "neither",
+      "kind": "neither",
+      "confidence": "high",
+      "reason": "public report, not in app/code",
+      "agrees": true
+    },
+    {
+      "group": "tuning",
+      "text": "Appeals against a moderation decision are answered within seven days.",
+      "label": "neither",
+      "kind": "both",
+      "confidence": "low",
+      "reason": "appeal UI and backend SLA tracking",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "Users must enter their date of birth when they sign up.",
+      "label": "both",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "DOB field on sign‑up screen",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "Children under 13 who give their real age are blocked from creating an account.",
+      "label": "both",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "age check blocks under‑13 accounts",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "Users can delete their account and their data from the settings page.",
+      "label": "both",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "delete account option in settings",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "Teen accounts are switched to private when an age check shows the user is under 16.",
+      "label": "both",
+      "kind": "code",
+      "confidence": "high",
+      "reason": "automatic private switch in backend",
+      "agrees": false
+    },
+    {
+      "group": "tuning",
+      "text": "Users can download a copy of the data stored about them.",
+      "label": "both",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "data download feature in settings",
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Teen accounts cannot receive gifts or payments from adults.",
+      "label": "app",
+      "kind": "code",
+      "confidence": "high",
+      "reason": "gift/payment restriction enforced server‑side",
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Users under 18 cannot go live.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "live‑stream button disabled for under‑18",
+      "agrees": true
+    },
+    {
+      "group": "round_two",
+      "text": "The app asks teens to confirm before posting their location.",
+      "label": "app",
+      "kind": "app",
+      "confidence": "high",
+      "reason": "location confirm dialog shown to teens",
+      "agrees": true
+    },
+    {
+      "group": "round_two",
+      "text": "Young users see a warning before they view sensitive content.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Direct messages from unknown adults go to a separate requests folder.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Session tokens expire after 30 minutes of inactivity.",
+      "label": "code",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "The API refuses requests that try to read another user's private messages.",
+      "label": "code",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Images uploaded by under-18s have their location metadata removed.",
+      "label": "code",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Account deletion removes the user's messages from the database within 30 days.",
+      "label": "code",
+      "also": [
+        "both"
+      ],
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Every new feature is reviewed for child safety risks before launch.",
+      "label": "neither",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Parents can contact a support team that answers within two working days.",
+      "label": "neither",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Content moderators have access to wellbeing support.",
+      "label": "neither",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "The service has a clear process for removing illegal content quickly.",
+      "label": "neither",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Teens are asked their age at sign-up, and the answer is checked against other signals.",
+      "label": "both",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_two",
+      "text": "Users can turn off personalised ads, and their data is then no longer used for ads.",
+      "label": "both",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Teens can hide their like counts.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Users under 16 cannot be added to group chats by people they don't know.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Teens are reminded to review their privacy settings every six months.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Live streams by users under 18 cannot receive gifts.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "A teen's exact location is never shown on their profile.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Users can see why a post was recommended to them.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Messages are scanned for grooming patterns before delivery.",
+      "label": "code",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Deleted photos are removed from backups within 90 days.",
+      "label": "code",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Parents receive an email when their child changes a safety setting.",
+      "label": "code",
+      "also": [
+        "both"
+      ],
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Access to children's personal data is limited to staff who need it.",
+      "label": "neither",
+      "also": [
+        "code"
+      ],
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "The age estimation model is tested for bias across skin tones.",
+      "label": "neither",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Content policies are translated into every language the service supports.",
+      "label": "neither",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "The company consults young people when designing new features.",
+      "label": "neither",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Teen accounts default to the strictest content filter, and this is enforced on the server.",
+      "label": "both",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "round_three",
+      "text": "Users who enter a birthday under 13 at sign-up cannot try again with a different date.",
+      "label": "both",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "Teens can choose who sees their stories.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "Adults cannot comment on posts by users under 16 unless they are friends.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "The app pauses notifications at night for users under 18.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "Profile photos of teens cannot be downloaded by other users.",
+      "label": "app",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "Reported accounts are hidden from a teen's search while a review is open.",
+      "label": "app",
+      "also": [
+        "both"
+      ],
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "Uploaded videos are compressed and their GPS tags stripped on the server.",
+      "label": "code",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "A user's age is stored separately from their public profile.",
+      "label": "code",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "Moderation decisions are saved with the moderator's ID.",
+      "label": "code",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "The service tells the regulator about serious incidents within 72 hours.",
+      "label": "neither",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "Safety features are designed with input from child development experts.",
+      "label": "neither",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "Volunteers who run community groups are vetted.",
+      "label": "neither",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    },
+    {
+      "group": "held_out",
+      "text": "Every report is acknowledged by email, and the reporter can follow its progress in the app.",
+      "label": "both",
+      "kind": null,
+      "confidence": null,
+      "reason": null,
+      "agrees": false
+    }
+  ]
+}
