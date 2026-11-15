@@ -73,7 +73,7 @@ export default function EvidenceDrawer({ id, open, onClose, panelRef, children }
           if (!open) setShown(false)
         }}
         style={{ visibility: shown ? 'visible' : 'hidden' }}
-        className="fixed inset-y-0 right-0 z-40 flex w-[92vw] max-w-[640px] flex-col border-l border-slate-200 bg-white shadow-2xl focus:outline-none lg:w-[440px] print:hidden"
+        className="fixed inset-y-0 right-0 z-40 flex w-[92vw] max-w-[640px] flex-col border-l border-slate-200 bg-white shadow-2xl focus:outline-none lg:w-[min(640px,50vw)] print:hidden"
       >
         <div className="flex items-start gap-3 border-b border-slate-200 px-5 py-4">
           <div className="min-w-0 flex-1">
