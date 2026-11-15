@@ -136,6 +136,19 @@ describe('executeCases', () => {
     expect(lines[0]).toMatch(/a #1: no suggestion → not_settled/)
   })
 
+  it('hands over the records after every repeat, and stops before the next repeat once the signal aborts', async () => {
+    const seen: number[] = []
+    const controller = new AbortController()
+    const onRecord = async (records: readonly RepeatRecord[]) => {
+      seen.push(records.length)
+      if (records.length === 2) controller.abort()
+    }
+    const result = await executeCases(CASES, 2, createBudget(1_000_000), fakeRepeat(1, 10), quiet, { signal: controller.signal, onRecord })
+    expect(seen).toEqual([1, 2])
+    expect(result.records).toHaveLength(2)
+    expect(result.stoppedEarly).toBe('Interrupted; 2 of 4 repeats were not run.')
+  })
+
   it('logs one progress line per repeat', async () => {
     const lines: string[] = []
     await executeCases(CASES, 1, createBudget(1_000_000), fakeRepeat(1, 10), (line) => lines.push(line))

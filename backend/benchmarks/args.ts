@@ -28,7 +28,11 @@ export const USAGE = `Usage: npm run benchmark --prefix backend -- [options]
   --label <name>    a name for the report file (default "${DEFAULT_LABEL}")
   --dry-run         list the cases and the estimated AI calls; calls nothing, needs no key
   --max-tokens N    stop starting AI calls after N tokens (default ${DEFAULT_MAX_TOKENS.toLocaleString('en-US')})
-  --help            show this help`
+  --help            show this help
+
+       npm run benchmark --prefix backend -- merge <a.json> <b.json> ... [--label <name>]
+
+  merge             combine reports (for example an app-only and a code-only run) into one report`
 
 const WITH_VALUE = new Set(['--repeats', '--only', '--source', '--label', '--max-tokens'])
 const WITHOUT_VALUE = new Set(['--dry-run', '--help', '-h'])

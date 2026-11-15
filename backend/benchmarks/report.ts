@@ -1,10 +1,7 @@
 /**
- * The benchmark report: Markdown for people and JSON for tools, built with no side effects, then
- * written next to each other under a name that never overwrites an earlier report. Everything that
- * goes in is first cleared of anything that looks like a key.
+ * The benchmark report: Markdown for people and JSON for tools, built with no side effects
+ * (reportFiles.ts writes them). Everything that goes in is first cleared of anything that looks like a key.
  */
-import { access, mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { BASE_APP_MODE, PLATFORM } from './cases.js'
 import { counted, num, pct, ratioText } from './format.js'
 import { REPO_FILES } from './repoFixture.js'
@@ -32,6 +29,8 @@ export interface ReportMeta {
   commit: string | null
   /** Why the benchmark stopped before every repeat ran; null when it ran them all. */
   stoppedEarly: string | null
+  /** For a merged report: the report files it was made from. */
+  mergedFrom?: string[]
 }
 
 export interface ReportInput {
@@ -237,6 +236,7 @@ function markdownOf(meta: ReportMeta, cases: BenchmarkCase[], records: RepeatRec
     '',
     header,
     '',
+    ...((meta.mergedFrom ?? []).length === 0 ? [] : [`Merged from ${(meta.mergedFrom ?? []).join(', ')}.`, '']),
     ...(meta.stoppedEarly === null ? [] : [`> Stopped early: ${meta.stoppedEarly}`, '']),
     '## What this measures',
     '',
@@ -276,36 +276,4 @@ export function buildReport(input: ReportInput): BuiltReport {
   })
   const json = JSON.stringify({ meta, summary: scored.summaries, cases: caseRows, records }, null, 2)
   return { markdown, json }
-}
-
-const pad = (n: number): string => String(n).padStart(2, '0')
-
-/** `<local date>-<label>`, with the label cut down to lower-case letters, digits and dashes. */
-export function reportBaseName(date: Date, label: string): string {
-  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
-  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '')
-  return `${day}-${slug || 'run'}`
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path)
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** Writes `<base>.md` and `<base>.json`, or `<base>-2`, `-3` and so on when a report of that name exists. */
-export async function writeReport(dir: string, baseName: string, report: BuiltReport): Promise<{ markdownPath: string; jsonPath: string }> {
-  await mkdir(dir, { recursive: true })
-  for (let n = 1; ; n += 1) {
-    const base = n === 1 ? baseName : `${baseName}-${n}`
-    const markdownPath = join(dir, `${base}.md`)
-    const jsonPath = join(dir, `${base}.json`)
-    if ((await exists(markdownPath)) || (await exists(jsonPath))) continue
-    await writeFile(markdownPath, report.markdown, { encoding: 'utf8', flag: 'wx' })
-    await writeFile(jsonPath, report.json, { encoding: 'utf8', flag: 'wx' })
-    return { markdownPath, jsonPath }
-  }
 }

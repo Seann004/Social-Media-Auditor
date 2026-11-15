@@ -111,18 +111,30 @@ function progressLine(index: number, total: number, c: BenchmarkCase, r: RepeatR
   return `${head} (${counted(r.tokens, 'token')}, ${r.seconds.toFixed(1)} s${steps})${error}`
 }
 
+export interface ExecuteOptions {
+  /** Once it aborts (Ctrl+C), no further repeat starts. */
+  signal?: AbortSignal
+  /** Called after every repeat with the records so far, to write them down. */
+  onRecord?: (records: readonly RepeatRecord[]) => Promise<void>
+}
+
 export async function executeCases(
   cases: readonly BenchmarkCase[],
   repeats: number,
   budget: Budget,
   runRepeat: RunRepeat,
   log: (line: string) => void,
+  options: ExecuteOptions = {},
 ): Promise<ExecuteResult> {
   const total = cases.length * repeats
   const records: RepeatRecord[] = []
   let stoppedEarly: string | null = null
   rounds: for (let repeat = 1; repeat <= repeats; repeat++) {
     for (const c of cases) {
+      if (options.signal?.aborted) {
+        stoppedEarly = `Interrupted; ${total - records.length} of ${total} repeats were not run.`
+        break rounds
+      }
       if (budget.isReached()) {
         stoppedEarly = `The token cap of ${num(budget.cap)} tokens was reached after ${num(budget.spent())} tokens; ${total - records.length} of ${total} repeats were not run. Raise the cap with --max-tokens.`
         break rounds
@@ -142,6 +154,7 @@ export async function executeCases(
       if (record.excluded === 'daily_limit') budget.noteLimit()
       records.push(record)
       log(progressLine(records.length, total, c, record))
+      await options.onRecord?.([...records])
     }
   }
   if (stoppedEarly === null && records.some((r) => r.excluded === 'token_cap')) {

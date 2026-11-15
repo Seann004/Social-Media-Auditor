@@ -45,10 +45,10 @@ A repeat of an app case makes about 10 step calls and one judge call. The first 
 12,048 tokens for one app repeat (8 steps). A code repeat makes one search-words call and one judge
 call, and sometimes a second of each. `--dry-run` prints the estimate for the cases you chose.
 
-The full set (22 cases, 3 repeats) is estimated at about 850,000 tokens, so it needs a higher cap,
-for example `--max-tokens 1000000`, or several smaller runs with `--source` or `--only`. Groq's
-own limits apply: a short wait is retried, and when the **daily** limit is reached the benchmark
-stops and says so.
+The full set (26 cases, 3 repeats) is estimated at about 1,040,000 tokens, so it needs a higher
+cap, for example `--max-tokens 1100000`, or several smaller runs with `--source` or `--only`, merged
+afterwards (see "Stopped and split runs"). Groq's own limits apply: a short wait is retried, and
+when the **daily** limit is reached the benchmark stops and says so.
 
 **What the token cap guarantees:** every request to Groq goes through a gate, and once the tokens
 counted so far reach the cap, no request to Groq is sent at all (not a step, not a judge call, not a
@@ -57,10 +57,32 @@ counted when each call answers, except a code run's search-words call, which is 
 ends. So the total can pass the cap by the call that was already in progress, plus at most one
 search-words call (about 2,000 tokens). The report is still written, and says the run stopped early.
 
+## Stopped and split runs
+
+The JSON report is written when a run starts and again after every repeat (through a temporary file
+and a rename, so it is always whole). Until the run ends it says "Still running: N of M repeats
+done". If the process dies, what it did is kept.
+
+**Ctrl+C** writes the partial report (Markdown and JSON) with the repeats done so far, drops the
+repeat in progress, closes the browser and exits with code 130. A second Ctrl+C stops at once.
+
+To build one baseline from several runs (for example `--source app` today and `--source repo`
+tomorrow, to stay within Groq's daily limit), merge their JSON reports:
+
+```
+npm run benchmark --prefix backend -- merge docs/testing/benchmarks/2026-11-17-app.json docs/testing/benchmarks/2026-11-18-repo.json --label baseline
+```
+
+Every report must come from the same model, and a case found in two reports must be the same case
+(same item, same expected answers) in both; otherwise merge refuses and says why. When the same case
+is in two reports, its repeats are numbered on (1, 2, 3, then 4, 5, 6). The merged report says which
+files it came from. Merge calls nothing and needs no key.
+
 ## The report
 
 Each run writes `docs/testing/benchmarks/<date>-<label>.md` and `.json`. An earlier report with the
-same name is never overwritten: the new one gets `-2`, `-3` and so on.
+same name is never overwritten: the new one gets `-2`, `-3` and so on. The commit in the header is
+marked "(uncommitted changes)" when the working tree had any.
 
 Each repeat is scored as one of:
 
@@ -137,11 +159,13 @@ are allowed, every case has a `why`, and the set still covers every kind.
 | File | What it holds |
 | --- | --- |
 | `run.ts` | The script: loads the environment and calls `cli.ts`. |
-| `cli.ts` | Options, dry run, key check, the run, the report. |
+| `cli.ts` | Options, dry run, key check, the run, the report, Ctrl+C, `merge`. |
 | `args.ts` | The option parser. |
 | `plan.ts` | Choosing cases, and the estimates. |
 | `execute.ts` | The rounds of repeats and the token cap. |
-| `appRepeat.ts`, `repoRepeat.ts`, `world.ts` | One repeat through the real pipeline. |
+| `merge.ts` | Combining reports. |
+| `reportFiles.ts` | Report names and atomic writes. |
+| `appRepeat.ts`, `repoRepeat.ts`, `world.ts` | One repeat through the real pipeline, the metered AI and the Groq gate. |
 | `realRun.ts` | The real AI and browser. |
 | `cases.ts`, `repoFixture.ts` | The cases and the synthetic repository. |
 | `score.ts`, `report.ts`, `format.ts` | Scoring, floors and the report, with no side effects. |

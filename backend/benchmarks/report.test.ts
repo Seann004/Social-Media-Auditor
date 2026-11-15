@@ -2,7 +2,8 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildReport, redactSecrets, reportBaseName, writeReport, type ReportMeta } from './report.js'
+import { buildReport, redactSecrets, type ReportMeta } from './report.js'
+import { reportBaseName, reserveReportPaths, writeAtomic, writeReport } from './reportFiles.js'
 import type { BenchmarkCase, RepeatRecord } from './types.js'
 
 const CASES: BenchmarkCase[] = [
@@ -167,5 +168,18 @@ describe('writeReport', () => {
     expect(again.jsonPath).toBe(join(dir, '2026-11-16-baseline-2.json'))
     expect(await readFile(join(dir, '2026-11-16-baseline.md'), 'utf8')).toBe('earlier')
     expect((await readdir(dir)).sort()).toEqual(['2026-11-16-baseline-2.json', '2026-11-16-baseline-2.md', '2026-11-16-baseline.md', 'nested'])
+  })
+
+  it('reserves a free name by writing its JSON at once, and rewrites a file atomically, leaving no temporary file', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'bench-report-'))
+    const first = await reserveReportPaths(dir, '2026-11-16-x', '{"records":[]}')
+    const second = await reserveReportPaths(dir, '2026-11-16-x', '{"records":[]}')
+    expect(first.jsonPath).toBe(join(dir, '2026-11-16-x.json'))
+    expect(second.jsonPath).toBe(join(dir, '2026-11-16-x-2.json'))
+
+    await writeAtomic(first.jsonPath, '{"records":[1]}')
+    await writeAtomic(first.jsonPath, '{"records":[1,2]}')
+    expect(await readFile(first.jsonPath, 'utf8')).toBe('{"records":[1,2]}')
+    expect((await readdir(dir)).sort()).toEqual(['2026-11-16-x-2.json', '2026-11-16-x.json'])
   })
 })
