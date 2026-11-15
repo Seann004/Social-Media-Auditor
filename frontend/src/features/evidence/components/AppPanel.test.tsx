@@ -100,7 +100,19 @@ beforeEach(() => {
   m.getRunChanges.mockResolvedValue({ changes: [] })
 })
 
+/** The panel lives in a drawer: open it from the bar, as a user does. */
+async function openDrawer() {
+  await userEvent.click(await screen.findByRole('button', { name: 'Open AI evidence' }))
+}
+
+async function renderOpen(ui: React.ReactElement) {
+  const view = render(ui)
+  await openDrawer()
+  return view
+}
+
 async function openApp(user: ReturnType<typeof userEvent.setup>) {
+  await openDrawer()
   await user.click(await screen.findByRole('radio', { name: /app \(test accounts\)/i }))
   await screen.findByLabelText(/app address/i)
 }
@@ -108,7 +120,7 @@ async function openApp(user: ReturnType<typeof userEvent.setup>) {
 describe('App source in the evidence panel', () => {
   it('switches between App and Public pages; Public pages shows the existing link form unchanged', async () => {
     const user = userEvent.setup()
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByLabelText(/website links/i)).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: /public pages/i })).toBeChecked()
     await openApp(user)
@@ -120,14 +132,14 @@ describe('App source in the evidence panel', () => {
 
   it('defaults to App when the last result run was an app run', async () => {
     m.getSuggestions.mockResolvedValue({ run: makeRun({ source: 'app' }), suggestions: [], decisions: [] })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await waitFor(() => expect(screen.getByRole('radio', { name: /app \(test accounts\)/i })).toBeChecked())
   })
 
   it('saves the app address and login domains and shows a server sentence on 400', async () => {
     const user = userEvent.setup()
     m.saveAppSource.mockResolvedValueOnce({ app: setup().app! })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openApp(user)
     const address = screen.getByLabelText(/app address/i)
     const domains = screen.getByLabelText(/login domains/i)
@@ -148,7 +160,7 @@ describe('App source in the evidence panel', () => {
   it('confirms a saved app address near the button, and clears it when either field is edited', async () => {
     const user = userEvent.setup()
     m.saveAppSource.mockResolvedValue({ app: { appUrl: 'https://new.example', loginDomains: [], updatedAt: '2026-11-11T09:00:00.000Z' } })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openApp(user)
     const address = screen.getByLabelText(/app address/i)
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
@@ -169,7 +181,7 @@ describe('App source in the evidence panel', () => {
   it('shows no confirmation when the save fails', async () => {
     const user = userEvent.setup()
     m.saveAppSource.mockRejectedValueOnce(new EvidenceApiError(400, 'That address points at a private network.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openApp(user)
     await user.click(screen.getByRole('button', { name: /save app address/i }))
     expect(await screen.findByRole('alert')).toBeInTheDocument()
@@ -179,7 +191,7 @@ describe('App source in the evidence panel', () => {
   it('adds a test account; the password field is type password and is cleared after saving', async () => {
     const user = userEvent.setup()
     m.addTestAccount.mockResolvedValue({ account: account({ id: 'a2', label: 'Adult' }) })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openApp(user)
     await user.click(screen.getByRole('button', { name: /add test account/i }))
     const password = screen.getByLabelText(/^password/i)
@@ -207,7 +219,7 @@ describe('App source in the evidence panel', () => {
     useStore.setState({ authToken: 'tok' })
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ account: account() }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openApp(user)
     await user.click(await screen.findByRole('button', { name: /edit teen 15/i }))
     const password = screen.getByLabelText(/^password/i)
@@ -224,7 +236,7 @@ describe('App source in the evidence panel', () => {
 
   it('lists accounts with label, age group and "Password saved", never a password', async () => {
     const user = userEvent.setup()
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openApp(user)
     const row = (await screen.findByText('Teen 15')).closest('li')!
     expect(within(row).getByText(/under 18/i)).toBeInTheDocument()
@@ -234,7 +246,7 @@ describe('App source in the evidence panel', () => {
 
   it('the item picker groups by category, caps at 10 and shows the cap note', async () => {
     const user = userEvent.setup()
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openApp(user)
     expect(screen.getByRole('group', { name: 'Privacy' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Safety' })).toBeInTheDocument()
@@ -251,7 +263,7 @@ describe('App source in the evidence panel', () => {
     const user = userEvent.setup()
     m.getAppSetup.mockResolvedValue(setup({ app: null, accounts: [] }))
     m.startAppRun.mockResolvedValue({ run: makeRun({ source: 'app', status: 'queued' }) })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await user.click(await screen.findByRole('radio', { name: /app \(test accounts\)/i }))
     const run = await screen.findByRole('button', { name: /run app check/i })
     expect(run).toBeDisabled()
@@ -273,7 +285,7 @@ describe('App source in the evidence panel', () => {
       run: makeRun({ source: 'app', status: 'assessing', finishedAt: null, currentItemId: 'i2', currentStep: 3, categoriesDone: 1, categoriesTotal: 4, checkedItemIds: ['i1', 'i2'] }),
       pages: [],
     })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByText('Checking in the app: Item 2 · step 3 of 15')).toBeInTheDocument()
     expect(screen.getByText('Items checked: 1 of 4')).toBeInTheDocument()
   })
@@ -285,7 +297,7 @@ describe('App source in the evidence panel', () => {
     m.getRunChanges.mockResolvedValue({
       changes: [change(), change({ id: 'c2', control: 'Location', before: 'on', after: 'off', restored: true, restoreDetail: 'Put back.' })],
     })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByText('Not checked: Item 3, Item 4')).toBeInTheDocument()
     expect(screen.queryByText(/steps/i)).not.toBeInTheDocument()
     expect(m.getRunChanges).toHaveBeenCalledWith('p1', 'run-1')
@@ -299,7 +311,7 @@ describe('App source in the evidence panel', () => {
     const run = makeRun({ source: 'app', status: 'partial', checkedItemIds: ['i1'], uncheckedItemIds: ['i3', 'gone'] })
     m.getLatestRun.mockResolvedValue({ run, pages: [] })
     m.getSuggestions.mockResolvedValue({ run, suggestions: [], decisions: [] })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByText('Not checked: Item 3, 1 item no longer on the checklist')).toBeInTheDocument()
   })
 
@@ -309,7 +321,7 @@ describe('App source in the evidence panel', () => {
     m.getLatestRun.mockResolvedValue({ run, pages: [] })
     m.getSuggestions.mockResolvedValue({ run, suggestions: [], decisions: [] })
     m.getRunChanges.mockRejectedValueOnce(new EvidenceApiError(500, 'x'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByText('The changed settings of this run could not be loaded.')).toBeInTheDocument()
     m.getRunChanges.mockResolvedValue({ changes: [change()] })
     await user.click(screen.getByRole('button', { name: /retry/i }))
@@ -323,7 +335,7 @@ describe('App source in the evidence panel', () => {
     m.getLatestRun.mockResolvedValue({ run, pages: [] })
     m.getSuggestions.mockResolvedValue({ run, suggestions: [], decisions: [] })
     m.reassess.mockResolvedValue({ run })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await user.click(await screen.findByRole('button', { name: 'Re-assess unfinished items' }))
     expect(m.reassess).toHaveBeenCalledWith('p1', 'run-1', 'unfinished')
     await user.click(screen.getByRole('button', { name: 'Re-assess all checked items' }))
@@ -337,7 +349,7 @@ describe('App source in the evidence panel', () => {
     const run = makeRun({ source: 'app' })
     m.getLatestRun.mockResolvedValue({ run, pages: [] })
     m.getSuggestions.mockResolvedValue({ run, suggestions: [], decisions: [] })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await screen.findByRole('button', { name: 'Re-assess unfinished items' })
     await user.click(screen.getByRole('radio', { name: /public pages/i }))
     expect(screen.getByRole('button', { name: 'Re-assess unfinished items' })).toBeInTheDocument()
@@ -350,7 +362,7 @@ describe('App source in the evidence panel', () => {
       run: makeRun({ source: 'app', status: 'assessing', finishedAt: null, currentItemId: 'i2', currentStep: 0, categoriesTotal: 2 }),
       pages: [],
     })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByText('Checking in the app: Item 2 · starting')).toBeInTheDocument()
   })
 
@@ -373,7 +385,7 @@ describe('App source in the evidence panel', () => {
     m.getAppSetup.mockResolvedValue(setup({ secretKeyConfigured: false }))
     m.getSources.mockResolvedValue({ source: { id: 's', projectId: 'p1', startUrls: ['https://a.example/'], createdBy: 'u1', createdAt: '2026-11-04T09:00:00.000Z' }, permission: null })
     m.startRun.mockResolvedValue({ run: makeRun({ status: 'queued' }) })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await user.click(await screen.findByRole('radio', { name: /app \(test accounts\)/i }))
     expect(await screen.findByText("Checking inside the app isn't set up on the server yet.")).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /run app check/i })).toBeDisabled()

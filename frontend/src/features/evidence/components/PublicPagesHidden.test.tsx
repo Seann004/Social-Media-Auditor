@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import { PUBLIC_PAGES_ENABLED } from '../config'
@@ -35,6 +36,13 @@ function Harness({ role = 'auditor' as 'auditor' | 'head_auditor' }) {
   return <EvidencePanel projectId="p1" role={role} evidence={evidence} locked={false} checklistItems={[]} />
 }
 
+/** The panel lives in a drawer: open it from the bar, as a user does. */
+async function renderOpen(ui: React.ReactElement) {
+  const view = render(ui)
+  await userEvent.click(await screen.findByRole('button', { name: 'Open AI evidence' }))
+  return view
+}
+
 beforeEach(() => {
   useStore.setState({ authToken: null })
   Object.values(m).forEach((fn) => fn.mockReset())
@@ -51,7 +59,7 @@ describe('Public pages hidden by default', () => {
   })
 
   it('offers exactly App and Code repository, App selected', async () => {
-    render(<Harness />)
+    await renderOpen(<Harness />)
     const radios = await screen.findAllByRole('radio')
     expect(radios.map((r) => (r as HTMLInputElement).value)).toEqual(['app', 'repo'])
     expect(screen.getByRole('radio', { name: 'App (test accounts)' })).toBeChecked()
@@ -59,7 +67,7 @@ describe('Public pages hidden by default', () => {
   })
 
   it('shows no page-links form, run button or permission control, even for a head auditor', async () => {
-    render(<Harness role="head_auditor" />)
+    await renderOpen(<Harness role="head_auditor" />)
     await screen.findAllByRole('radio')
     await waitFor(() => expect(m.getSources).toHaveBeenCalled())
     expect(screen.queryByLabelText(/website links/i)).not.toBeInTheDocument()
@@ -71,7 +79,7 @@ describe('Public pages hidden by default', () => {
     const run = makeRun({ source: 'pages' })
     m.getLatestRun.mockResolvedValue({ run, pages: [makePage()] })
     m.getSuggestions.mockResolvedValue({ run, suggestions: [makeSuggestion()], decisions: [] })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByRole('button', { name: 'Re-assess unfinished' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Re-assess all categories' })).toBeInTheDocument()
     expect(screen.queryByLabelText(/website links/i)).not.toBeInTheDocument()

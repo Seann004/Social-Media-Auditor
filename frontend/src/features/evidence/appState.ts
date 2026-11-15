@@ -1,12 +1,16 @@
 // Pure rules for the "check inside the app" panel. No store access, no mutation.
 import type { ChecklistItem } from '../../types'
 import { categoryKey } from './state'
-import type { AppStepOutcome, RunView } from './types'
+import type { AppSetupResponse, AppStepOutcome, RunView } from './types'
 
 /** Mirrors APP_MAX_STEPS_PER_CHECK in backend/src/features/evidence/config.ts. */
 export const APP_STEPS_PER_CHECK = 15
 /** Mirrors the backend's per-run item limit. */
-const MAX_APP_ITEMS = 10
+export const MAX_APP_ITEMS = 10
+
+/** Everything an app run needs from set-up: an address, an account and the server's key. */
+export const isAppSetupComplete = (setup: AppSetupResponse): boolean =>
+  setup.app !== null && setup.accounts.length > 0 && setup.secretKeyConfigured
 
 export const OUTCOME_LABEL: Record<AppStepOutcome, string> = {
   done: 'Done',

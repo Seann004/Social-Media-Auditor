@@ -1,16 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowsClockwiseIcon as ArrowsClockwise, PlayIcon as Play, RobotIcon as Robot } from '@phosphor-icons/react'
+import { ArrowsClockwiseIcon as ArrowsClockwise, PlayIcon as Play } from '@phosphor-icons/react'
 import { useStore } from '../../../store/useStore'
 import { EvidenceApiError, getSources, reassess, saveSources, setPermission, startRun } from '../api'
-import { toPickItems } from '../appState'
+import { isAppSetupComplete, toPickItems } from '../appState'
+import { SOURCE_LABEL, barStatus } from '../barStatus'
+import type { SetupState } from '../barStatus'
 import { PUBLIC_PAGES_ENABLED_IN_BUILD } from '../config'
 import type { EvidencePermission, RunScope, RunSource } from '../types'
 import type { UseEvidenceResult } from '../useEvidence'
 import { isRunActive } from '../useItemRun'
 import { useAppSetup } from '../useAppSetup'
+import type { UseAppSetupResult } from '../useAppSetup'
+import { useRepoSetup } from '../useRepoSetup'
+import type { UseRepoSetupResult } from '../useRepoSetup'
 import type { ChecklistItem, UserRole } from '../../../types'
 import AppRunSection from './AppRunSection'
+import EvidenceBar, { BlockedBar } from './EvidenceBar'
+import EvidenceDrawer from './EvidenceDrawer'
 import RepoRunSection from './RepoRunSection'
 import PanelBoundary from './PanelBoundary'
 import PermissionControl from './PermissionControl'
@@ -30,7 +37,6 @@ interface Props {
 }
 
 const SIGN_IN_AGAIN = 'AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.'
-const spring = { type: 'spring', stiffness: 100, damping: 20 } as const
 /** Page runs work by category, app runs by checklist item. */
 const REASSESS_LABELS: Record<RunSource, { unfinished: string; all: string }> = {
   pages: { unfinished: 'Re-assess unfinished', all: 'Re-assess all categories' },
@@ -47,6 +53,21 @@ const asApiError = (err: unknown): EvidenceApiError =>
   err instanceof EvidenceApiError ? err : new EvidenceApiError(0, 'Something went wrong. Try again.')
 
 const isBlocking = (err: EvidenceApiError | null): boolean => err !== null && (err.status === 401 || err.status === 403 || err.status === 503)
+
+/** Whether the chosen source has what a run needs, for the bar. */
+function setupStateOf(
+  source: RunSource,
+  app: UseAppSetupResult,
+  repo: UseRepoSetupResult,
+  pages: { state: 'loading' | 'ok' | 'error'; links: string[] },
+): SetupState {
+  if (source === 'app') {
+    if (app.setup) return isAppSetupComplete(app.setup) ? 'ready' : 'needed'
+    return app.error ? 'needed' : 'loading'
+  }
+  if (source === 'repo') return repo.state === 'loading' ? 'loading' : repo.repo ? 'ready' : 'needed'
+  return pages.state === 'loading' ? 'loading' : pages.links.length > 0 ? 'ready' : 'needed'
+}
 
 export default function EvidencePanel(props: Props) {
   if (props.role !== 'auditor' && props.role !== 'head_auditor') return null
@@ -76,7 +97,13 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
   const wanted: RunSource = chosenSource ?? resultRun?.source ?? (publicPagesEnabled ? 'pages' : 'app')
   const source: RunSource = wanted === 'pages' && !publicPagesEnabled ? 'app' : wanted
   const appSetup = useAppSetup(projectId, { enabled: source === 'app' })
+  const repoSetup = useRepoSetup(projectId, { enabled: source === 'repo' })
   const pickItems = useMemo(() => toPickItems(checklistItems ?? []), [checklistItems])
+  // The drawer's open state lives here, is not saved, and starts closed.
+  const [open, setOpen] = useState(false)
+  const openerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const drawerId = useId()
 
   useEffect(() => {
     let alive = true
@@ -114,24 +141,35 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
 
   const blocking = [evidence.error, sourcesError, actionError].find(isBlocking) ?? null
   if (blocking) {
+    const retry = () => {
+      setActionError(null)
+      void refresh()
+    }
     return (
-      <div className="mx-4 my-3 flex flex-wrap items-center gap-2 text-xs text-slate-500 md:mx-8">
-        <p role="alert">{blocking.status === 401 ? SIGN_IN_AGAIN : blocking.message}</p>
-        {blocking === actionError && blocking.status !== 401 ? (
-          <button
-            type="button"
-            onClick={() => {
-              setActionError(null)
-              void refresh()
-            }}
-            className="rounded text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            Try again
-          </button>
-        ) : null}
-      </div>
+      <BlockedBar
+        message={blocking.status === 401 ? SIGN_IN_AGAIN : blocking.message}
+        onRetry={blocking === actionError && blocking.status !== 401 ? retry : undefined}
+      />
     )
   }
+
+  const openDrawer = (): void => {
+    if (open) panelRef.current?.focus()
+    else setOpen(true)
+  }
+  const closeDrawer = (): void => {
+    setOpen(false)
+    openerRef.current?.focus()
+  }
+  const status = barStatus({
+    locked,
+    run,
+    resultRun,
+    suggestionCount: suggestionsByItem.size,
+    flaggedCount,
+    items: pickItems,
+    setup: setupStateOf(source, appSetup, repoSetup, { state: sourcesState, links: savedLinks }),
+  })
 
   const running = isRunActive(run)
   const canStart = !locked && sourcesState === 'ok' && !busy && !running
@@ -193,25 +231,21 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
   }
 
   return (
-    <motion.section
-      aria-labelledby="evidence-panel-title"
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={spring}
-      className="mx-4 my-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_8px_-2px_oklch(0.3_0.01_250/0.06)] md:mx-8"
-    >
-      <div className="flex items-center gap-2">
-        <Robot size={16} className="text-blue-600" aria-hidden="true" />
-        <h2 id="evidence-panel-title" className="text-sm font-semibold text-slate-900">AI evidence assessment</h2>
-      </div>
-      <p className="max-w-[65ch] text-xs text-slate-500">
-        Suggestions only. Nothing changes your answers or the score until you accept or override it.
-      </p>
-
+    <>
+      <EvidenceBar
+        sourceLabel={SOURCE_LABEL[source]}
+        status={status}
+        locked={locked}
+        open={open}
+        drawerId={drawerId}
+        onOpen={openDrawer}
+        openerRef={openerRef}
+      />
+      <EvidenceDrawer id={drawerId} open={open} onClose={closeDrawer} panelRef={panelRef}>
       <SourceChoice value={source} onChange={setChosenSource} publicPagesEnabled={publicPagesEnabled} />
 
       {source === 'repo' ? (
-        <RepoRunSection projectId={projectId} items={pickItems} evidence={evidence} locked={locked} onStarted={refresh} />
+        <RepoRunSection projectId={projectId} setup={repoSetup} items={pickItems} evidence={evidence} locked={locked} onStarted={refresh} />
       ) : source === 'app' ? (
         appSetup.setup ? (
           <AppRunSection
@@ -327,6 +361,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
       {role === 'head_auditor' && sourcesState === 'ok' && source === 'pages' ? (
         <PermissionControl permission={permission} onSave={onSavePermission} />
       ) : null}
-    </motion.section>
+      </EvidenceDrawer>
+    </>
   )
 }

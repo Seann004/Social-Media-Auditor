@@ -2,11 +2,13 @@ import { startRepoRun } from '../api'
 import type { PickItem } from '../appState'
 import type { UseEvidenceResult } from '../useEvidence'
 import { useItemRun } from '../useItemRun'
-import { useRepoSetup } from '../useRepoSetup'
+import type { UseRepoSetupResult } from '../useRepoSetup'
 import RepoSetup, { REPO_ITEM_LIMIT } from './RepoSetup'
 
 interface Props {
   projectId: string
+  /** The saved repository, loaded by the panel while this source is chosen. */
+  setup: UseRepoSetupResult
   items: PickItem[]
   evidence: UseEvidenceResult
   locked: boolean
@@ -23,8 +25,7 @@ function blocker(input: { hasRepo: boolean; picked: number; locked: boolean; run
 }
 
 /** The Code repository branch of the evidence panel. */
-export default function RepoRunSection({ projectId, items, evidence, locked, onStarted }: Props) {
-  const setup = useRepoSetup(projectId, { enabled: true })
+export default function RepoRunSection({ projectId, setup, items, evidence, locked, onStarted }: Props) {
   const { setChosen, pickedIds, picked, busy, message, running, start } = useItemRun({
     items,
     run: evidence.run,
