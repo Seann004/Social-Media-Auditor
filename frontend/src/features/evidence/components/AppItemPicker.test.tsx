@@ -105,9 +105,9 @@ describe('AppItemPicker', () => {
     it('keeps every category under the guideline it belongs to, even when guidelines interleave', () => {
       render(<WithGuidelines all={two} known={guidelines} />)
       const first = screen.getByRole('heading', { name: /Demo Child Safety Checklist/ }).closest('section')!
-      expect(within(first).getByRole('button', { name: /Privacy/ })).toBeInTheDocument()
-      expect(within(first).getByRole('button', { name: /Safety/ })).toBeInTheDocument()
-      expect(within(first).queryByRole('button', { name: /Reporting/ })).toBeNull()
+      expect(within(first).getByRole('button', { name: 'Privacy' })).toBeInTheDocument()
+      expect(within(first).getByRole('button', { name: 'Safety' })).toBeInTheDocument()
+      expect(within(first).queryByRole('button', { name: 'Reporting' })).toBeNull()
     })
 
     it('shows a count of items per guideline', () => {
@@ -120,6 +120,62 @@ describe('AppItemPicker', () => {
       render(<WithGuidelines all={two} known={[]} />)
       expect(screen.queryAllByRole('heading', { level: 4 })).toHaveLength(0)
       expect(screen.getByRole('checkbox', { name: 'Item 1' })).toBeInTheDocument()
+    })
+  })
+
+  describe('select all per category', () => {
+    const three = (limit?: number) => {
+      const all = [
+        { ...item(1, 'Privacy'), guidelineId: 'g1' },
+        { ...item(2, 'Privacy'), guidelineId: 'g1' },
+        { ...item(3, 'Safety'), guidelineId: 'g1' },
+        { ...item(4, 'Safety'), guidelineId: 'g1' },
+      ]
+      function Wrapper() {
+        const [picked, setPicked] = useState<Set<string>>(new Set())
+        return <AppItemPicker items={toPickItems(all)} picked={picked} onChange={setPicked} limit={limit} guidelines={[]} />
+      }
+      return render(<Wrapper />)
+    }
+
+    it('picks every item of that category only, and leaves the other category alone', async () => {
+      const user = userEvent.setup()
+      three()
+      await user.click(screen.getByRole('button', { name: 'Select all in Privacy' }))
+      expect(screen.getByRole('checkbox', { name: 'Item 1' })).toBeChecked()
+      expect(screen.getByRole('checkbox', { name: 'Item 2' })).toBeChecked()
+      expect(screen.getByRole('checkbox', { name: 'Item 3' })).not.toBeChecked()
+      expect(screen.getByText(`2 of ${MAX_APP_ITEMS} picked`)).toBeInTheDocument()
+    })
+
+    it('turns into Clear once the whole category is picked, and clears only that category', async () => {
+      const user = userEvent.setup()
+      three()
+      await user.click(screen.getByRole('button', { name: 'Select all in Privacy' }))
+      await user.click(screen.getByRole('button', { name: 'Select all in Safety' }))
+      expect(screen.queryByRole('button', { name: 'Select all in Privacy' })).toBeNull()
+      await user.click(screen.getByRole('button', { name: 'Clear Privacy' }))
+      expect(screen.getByRole('checkbox', { name: 'Item 1' })).not.toBeChecked()
+      expect(screen.getByRole('checkbox', { name: 'Item 3' })).toBeChecked()
+      expect(screen.getByRole('checkbox', { name: 'Item 4' })).toBeChecked()
+    })
+
+    it('stops at the limit, in checklist order, and is disabled when nothing more fits', async () => {
+      const user = userEvent.setup()
+      three(3)
+      await user.click(screen.getByRole('button', { name: 'Select all in Privacy' }))
+      await user.click(screen.getByRole('button', { name: 'Select all in Safety' }))
+      expect(screen.getByRole('checkbox', { name: 'Item 3' })).toBeChecked()
+      expect(screen.getByRole('checkbox', { name: 'Item 4' })).not.toBeChecked()
+      expect(screen.getByText('3 of 3 picked')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Select all in Safety' })).toBeDisabled()
+    })
+
+    it('does not fold the category when the button is pressed', async () => {
+      const user = userEvent.setup()
+      three()
+      await user.click(screen.getByRole('button', { name: 'Select all in Privacy' }))
+      expect(screen.getByRole('checkbox', { name: 'Item 1' })).toBeVisible()
     })
   })
 })

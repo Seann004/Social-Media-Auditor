@@ -49,6 +49,19 @@ export default function AppItemPicker({ items, picked, onChange, limit = MAX_APP
     }
     onChange(next)
   }
+  /** Picks the rest of one category in checklist order, up to the limit; clears it when it is already all picked. */
+  const toggleGroup = (groupItems: readonly PickItem[]): void => {
+    const next = new Set(picked)
+    if (groupItems.every((item) => next.has(item.id))) {
+      for (const item of groupItems) next.delete(item.id)
+    } else {
+      for (const item of groupItems) {
+        if (next.size >= limit) break
+        next.add(item.id)
+      }
+    }
+    onChange(next)
+  }
   const fold = (key: string): void => {
     const next = new Set(folded)
     if (next.has(key)) next.delete(key)
@@ -91,24 +104,36 @@ export default function AppItemPicker({ items, picked, onChange, limit = MAX_APP
               // Category names hold spaces, so the list id uses the position.
               const listId = `${baseId}-group-${positions.get(group.key)}`
               const pickedHere = group.items.filter((item) => picked.has(item.id)).length
+                const allHere = pickedHere === group.items.length
               return (
                 <div key={group.key} className="overflow-hidden rounded-lg border border-slate-200">
-                  <fieldset>
+                  <fieldset aria-labelledby={`${listId}-title`}>
                     <legend className="w-full">
-                      <button
-                        type="button"
-                        onClick={() => fold(group.key)}
-                        aria-expanded={open}
-                        aria-controls={listId}
-                        className="flex w-full items-center gap-2 bg-slate-50 px-3 py-2 text-left hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
-                      >
-                        <CaretDown size={12} weight="bold" aria-hidden="true" className={`shrink-0 text-slate-500 transition-transform motion-reduce:transition-none ${open ? '' : '-rotate-90'}`} />
-                        <span className="min-w-0 flex-1 text-xs font-semibold text-slate-900">{group.category}</span>
-                        <span aria-hidden="true" className="shrink-0 text-2xs tabular-nums text-slate-500">
-                          {pickedHere}/{group.items.length}
-                        </span>
-                      </button>
-                    </legend>
+                <div className="flex items-center bg-slate-50 hover:bg-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => fold(group.key)}
+                    aria-expanded={open}
+                    aria-controls={listId}
+                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+                  >
+                    <CaretDown size={12} weight="bold" aria-hidden="true" className={`shrink-0 text-slate-500 transition-transform motion-reduce:transition-none ${open ? '' : '-rotate-90'}`} />
+                    <span id={`${listId}-title`} className="min-w-0 flex-1 text-xs font-semibold text-slate-900">{group.category}</span>
+                    <span aria-hidden="true" className="shrink-0 text-2xs tabular-nums text-slate-500">
+                      {pickedHere}/{group.items.length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.items)}
+                    disabled={!allHere && full}
+                    aria-label={`${allHere ? 'Clear' : 'Select all in'} ${group.category}`}
+                    className={`mr-2 shrink-0 ${SMALL_BUTTON}`}
+                  >
+                    {allHere ? 'Clear' : 'Select all'}
+                  </button>
+                </div>
+              </legend>
                     {open ? (
                       <ul id={listId} className="divide-y divide-slate-100 border-t border-slate-200">
                         {group.items.map((item) => {
