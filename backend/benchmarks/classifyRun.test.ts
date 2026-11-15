@@ -146,7 +146,9 @@ describe('main', () => {
     expect(code).toBe(0)
     const [items, opts] = classify.mock.calls[0]
     expect(items).toHaveLength(79)
-    expect(items[0]).toEqual({ id: 's1', text: 'Accounts of users under 16 are private by default.' })
+    // The never-tuned held-out items go first, so a run cut short by Groq's limit still measures them.
+    expect(items.slice(0, 12).map((i) => i.id)).toEqual(Array.from({ length: 12 }, (_, n) => `s${68 + n}`))
+    expect(items.find((i) => i.id === 's1')).toEqual({ id: 's1', text: 'Accounts of users under 16 are private by default.' })
     expect(opts).toMatchObject({ apiKey: KEY, model: 'model-b', cache: null, maxTokens: 9000 })
     const files = (await readdir(dir)).sort()
     expect(files).toEqual(['2026-11-16-item-kinds.json', '2026-11-16-item-kinds.md'])

@@ -297,7 +297,10 @@ export async function main(argv: readonly string[], env: Env, io: ClassifyIo, de
     return 0
   }
   const samples = await loadSamples(deps.samplesPath)
-  const items: KindItem[] = samples.map((s, i) => ({ id: `s${i + 1}`, text: s.text }))
+  // Ids follow the file's order; the never-tuned held-out items are sent first, so a run that Groq's
+  // limit cuts short still measures them.
+  const indexed = samples.map((s, i): [LabelledSample, KindItem] => [s, { id: `s${i + 1}`, text: s.text }])
+  const items: KindItem[] = [...indexed.filter(([s]) => s.group === 'held_out'), ...indexed.filter(([s]) => s.group !== 'held_out')].map(([, item]) => item)
   const model = env.EVIDENCE_GROQ_MODEL?.trim() || DEFAULT_EVIDENCE_MODEL
   const calls = Math.ceil(items.length / ITEM_KINDS_MAX_ITEMS_PER_CALL)
   io.log(`${items.length} labelled items, ${calls} AI calls of at most ${ITEM_KINDS_MAX_ITEMS_PER_CALL} items, model ${model}.`)
