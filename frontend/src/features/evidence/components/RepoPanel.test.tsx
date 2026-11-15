@@ -72,10 +72,11 @@ async function renderOpen(ui: React.ReactElement) {
   return view
 }
 
+/** Opens the drawer on the repository source: the form, or its folded line once one is saved. */
 async function openRepo(user: ReturnType<typeof userEvent.setup>) {
   await openDrawer()
   await user.click(await screen.findByRole('radio', { name: 'Code repository' }))
-  await screen.findByLabelText('Repository address')
+  await waitFor(() => expect(screen.queryByLabelText('Repository address') ?? screen.queryByRole('button', { name: 'Edit set-up' })).not.toBeNull())
 }
 
 describe('Code repository source in the evidence panel', () => {

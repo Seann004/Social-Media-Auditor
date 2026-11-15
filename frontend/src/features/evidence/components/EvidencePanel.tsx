@@ -1,6 +1,4 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
-import { ArrowsClockwiseIcon as ArrowsClockwise, PlayIcon as Play } from '@phosphor-icons/react'
 import { useStore } from '../../../store/useStore'
 import { EvidenceApiError, getSources, reassess, saveSources, setPermission, startRun } from '../api'
 import { isAppSetupComplete, toPickItems } from '../appState'
@@ -16,12 +14,13 @@ import { useRepoSetup } from '../useRepoSetup'
 import type { UseRepoSetupResult } from '../useRepoSetup'
 import type { ChecklistItem, UserRole } from '../../../types'
 import AppRunSection from './AppRunSection'
+import DrawerStep from './DrawerStep'
 import EvidenceBar, { BlockedBar } from './EvidenceBar'
 import EvidenceDrawer from './EvidenceDrawer'
-import RepoRunSection from './RepoRunSection'
+import PagesSection from './PagesSection'
 import PanelBoundary from './PanelBoundary'
-import PermissionControl from './PermissionControl'
-import { RunProgress, RunSummary } from './RunSummary'
+import RepoRunSection from './RepoRunSection'
+import RunResults from './RunResults'
 import SourceChoice from './SourceChoice'
 
 interface Props {
@@ -37,12 +36,6 @@ interface Props {
 }
 
 const SIGN_IN_AGAIN = 'AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.'
-/** Page runs work by category, app runs by checklist item. */
-const REASSESS_LABELS: Record<RunSource, { unfinished: string; all: string }> = {
-  pages: { unfinished: 'Re-assess unfinished', all: 'Re-assess all categories' },
-  app: { unfinished: 'Re-assess unfinished items', all: 'Re-assess all checked items' },
-  repo: { unfinished: 'Re-assess from the code', all: 'Re-assess all from the code' },
-}
 
 export const parseLinks = (text: string): string[] =>
   text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '')
@@ -69,6 +62,28 @@ function setupStateOf(
   return pages.state === 'loading' ? 'loading' : pages.links.length > 0 ? 'ready' : 'needed'
 }
 
+/** Step ② of the App source while its set-up is loading or failed to load. */
+function AppSetupPending({ app }: { app: UseAppSetupResult }) {
+  return (
+    <DrawerStep n={2} title="Set up" state="current">
+      {app.error ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <p role="alert" className="text-xs text-rose-600">{app.error.message}</p>
+          <button
+            type="button"
+            onClick={() => void app.reload()}
+            className="rounded text-xs text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            Try again
+          </button>
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500">Loading…</p>
+      )}
+    </DrawerStep>
+  )
+}
+
 export default function EvidencePanel(props: Props) {
   if (props.role !== 'auditor' && props.role !== 'head_auditor') return null
   return (
@@ -93,7 +108,7 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
   const authToken = useStore((s) => s.authToken)
   const [chosenSource, setChosenSource] = useState<RunSource | null>(null)
   // With Public pages off, the screen never shows the page-links flow, even over an old pages run:
-  // that run's summary and cards still render below, and Re-assess still works on it.
+  // that run's summary and cards still render, and Re-assess still works on it.
   const wanted: RunSource = chosenSource ?? resultRun?.source ?? (publicPagesEnabled ? 'pages' : 'app')
   const source: RunSource = wanted === 'pages' && !publicPagesEnabled ? 'app' : wanted
   const appSetup = useAppSetup(projectId, { enabled: source === 'app' })
@@ -214,8 +229,6 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
     })
 
   const onReassess = (scope: RunScope) => perform(() => reassess(projectId, resultRun!.id, scope), true)
-  // Re-assess acts on the result run, so its labels follow that run's source: app runs work by item.
-  const reassessLabels = REASSESS_LABELS[resultRun?.source ?? 'pages']
 
   /** Resolves to an error sentence to show beside the control, or null when saved. */
   const onSavePermission = async (granted: boolean, note: string | undefined): Promise<string | null> => {
@@ -242,125 +255,56 @@ function PanelBody({ projectId, role, evidence, locked, checklistItems, publicPa
         openerRef={openerRef}
       />
       <EvidenceDrawer id={drawerId} open={open} onClose={closeDrawer} panelRef={panelRef}>
-      <SourceChoice value={source} onChange={setChosenSource} publicPagesEnabled={publicPagesEnabled} />
-
-      {source === 'repo' ? (
-        <RepoRunSection projectId={projectId} setup={repoSetup} items={pickItems} evidence={evidence} locked={locked} onStarted={refresh} />
-      ) : source === 'app' ? (
-        appSetup.setup ? (
-          <AppRunSection
-            projectId={projectId}
-            setup={appSetup.setup}
-            items={pickItems}
-            evidence={evidence}
-            locked={locked}
-            onStarted={refresh}
-            onSetupSaved={appSetup.reload}
-          />
-        ) : appSetup.error ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <p role="alert" className="text-xs text-rose-600">{appSetup.error.message}</p>
-            <button
-              type="button"
-              onClick={() => void appSetup.reload()}
-              className="rounded text-xs text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              Try again
-            </button>
-          </div>
-        ) : (
-          <p className="text-xs text-slate-500">Loading…</p>
-        )
-      ) : sourcesState === 'loading' ? (
-        <p className="text-xs text-slate-500">Loading…</p>
-      ) : sourcesState === 'error' ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <p role="alert" className="text-xs text-rose-600">{sourcesError?.message}</p>
-          <button
-            type="button"
-            onClick={() => setSourcesTry((n) => n + 1)}
-            className="rounded text-xs text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            Try again
-          </button>
-        </div>
-      ) : (
-        <div>
-          <label htmlFor="evidence-links" className="mb-1 block text-xs font-medium text-slate-700">
-            Website links (one per line)
-          </label>
-          <textarea
-            id="evidence-links"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            disabled={locked}
-            rows={3}
-            spellCheck={false}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
-          />
-        </div>
-      )}
-
-      {evidence.error ? <p role="alert" className="text-xs text-rose-600">{evidence.error.message}</p> : null}
-      {message ? <p role="alert" className="text-xs text-rose-600">{message}</p> : null}
-
-      {!locked ? (
-        <div className="flex flex-wrap items-center gap-2">
-          {source === 'pages' ? (
-          <motion.button
-            type="button"
-            whileTap={{ scale: 0.97 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-            onClick={() => void onRun()}
-            disabled={!canStart}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Play size={14} weight="fill" aria-hidden="true" />
-            Run assessment
-          </motion.button>
-          ) : null}
-          {resultRun ? (
-            <>
-              <button
-                type="button"
-                onClick={() => void onReassess('unfinished')}
-                disabled={!canReassess}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <ArrowsClockwise size={14} aria-hidden="true" />
-                {reassessLabels.unfinished}
-              </button>
-              <button
-                type="button"
-                onClick={() => void onReassess('all')}
-                disabled={!canReassess}
-                className="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {reassessLabels.all}
-              </button>
-            </>
-          ) : null}
-        </div>
-      ) : null}
-
-      {run && running ? <RunProgress run={run} pages={pages} items={pickItems} /> : null}
-      {run && run.status === 'failed' && run.error ? (
-        <p role="alert" className="text-xs text-rose-600">{run.error}</p>
-      ) : null}
-      {resultRun ? (
-        <RunSummary
+        {evidence.error ? <p role="alert" className="text-xs text-rose-600">{evidence.error.message}</p> : null}
+        {message ? <p role="alert" className="text-xs text-rose-600">{message}</p> : null}
+        <RunResults
+          run={run}
+          pages={pages}
           resultRun={resultRun}
           suggestionCount={suggestionsByItem.size}
           flaggedCount={flaggedCount}
-          pages={pages}
-          pagesBelongToResult={run?.id === resultRun.id}
           items={pickItems}
+          locked={locked}
+          canReassess={canReassess}
+          onReassess={(scope) => void onReassess(scope)}
         />
-      ) : null}
 
-      {role === 'head_auditor' && sourcesState === 'ok' && source === 'pages' ? (
-        <PermissionControl permission={permission} onSave={onSavePermission} />
-      ) : null}
+        <DrawerStep n={1} title="Source" state="done">
+          <SourceChoice value={source} onChange={setChosenSource} publicPagesEnabled={publicPagesEnabled} />
+        </DrawerStep>
+
+        {source === 'repo' ? (
+          <RepoRunSection projectId={projectId} setup={repoSetup} items={pickItems} evidence={evidence} locked={locked} onStarted={refresh} />
+        ) : source === 'app' ? (
+          appSetup.setup ? (
+            <AppRunSection
+              projectId={projectId}
+              setup={appSetup.setup}
+              items={pickItems}
+              evidence={evidence}
+              locked={locked}
+              onStarted={refresh}
+              onSetupSaved={appSetup.reload}
+            />
+          ) : (
+            <AppSetupPending app={appSetup} />
+          )
+        ) : (
+          <PagesSection
+            text={text}
+            onText={setText}
+            locked={locked}
+            state={sourcesState}
+            error={sourcesError}
+            onRetry={() => setSourcesTry((n) => n + 1)}
+            hasSavedLinks={savedLinks.length > 0}
+            canStart={canStart}
+            onRun={() => void onRun()}
+            showPermission={role === 'head_auditor' && sourcesState === 'ok'}
+            permission={permission}
+            onSavePermission={onSavePermission}
+          />
+        )}
       </EvidenceDrawer>
     </>
   )

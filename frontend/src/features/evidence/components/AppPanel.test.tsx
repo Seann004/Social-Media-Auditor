@@ -111,9 +111,13 @@ async function renderOpen(ui: React.ReactElement) {
   return view
 }
 
+/** Opens the drawer on the App source with its set-up unfolded (a complete set-up starts folded). */
 async function openApp(user: ReturnType<typeof userEvent.setup>) {
   await openDrawer()
   await user.click(await screen.findByRole('radio', { name: /app \(test accounts\)/i }))
+  await waitFor(() => expect(screen.queryByLabelText(/app address/i) ?? screen.queryByRole('button', { name: 'Edit set-up' })).not.toBeNull())
+  const edit = screen.queryByRole('button', { name: 'Edit set-up' })
+  if (edit) await user.click(edit)
   await screen.findByLabelText(/app address/i)
 }
 
