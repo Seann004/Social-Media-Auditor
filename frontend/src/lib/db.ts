@@ -500,18 +500,80 @@ export interface MappedItem {
   clause: string | null
 }
 
+export type ConfidenceLevel = 'high' | 'medium' | 'low'
+
+/** How many projects use each item of a pair, and how many use both. */
+export interface MappingUsage {
+  projectsA: number
+  projectsB: number
+  together: number
+}
+
 /** A pair of similar checklist items from two guidelines, with the AI's confidence and the admin's decision. */
 export interface ItemMapping {
   mappingId: string
   relation: MappingRelation
+  /** The AI's own confidence. */
   confidence: number | null
+  /** The confidence after learning from the admin's past decisions (the same as `confidence` while there are none). */
+  learnedConfidence: number | null
+  /** How many past decisions the learned score rests on. */
+  learnedFrom: number
+  /** The score the list is ranked and grouped by. */
+  score: number | null
+  level: ConfidenceLevel
   rationale: string | null
   status: MappingStatus
   createdAt: string
   reviewedAt: string | null
+  usage: MappingUsage
   itemA: MappedItem
   itemB: MappedItem
 }
+
+export interface MappingFilters {
+  status: MappingStatus
+  guidelineId?: string
+  relation?: MappingRelation
+  /** Only pairs whose two items are both used by a project. */
+  inUse?: boolean
+}
+
+export interface MappingPage {
+  items: ItemMapping[]
+  /** Pairs matching the filters, across all pages. */
+  total: number
+  counts: Record<MappingStatus, number>
+  /** Pairs per status with no filter at all. */
+  totals: Record<MappingStatus, number>
+  levels: Record<ConfidenceLevel, number>
+  linkedGuidelineIds: string[]
+}
+
+export interface LearningBand {
+  relation: MappingRelation
+  fromPercent: number
+  toPercent: number
+  decided: number
+  approved: number
+  approvalRate: number
+}
+
+export interface MappingLearning {
+  decided: number
+  approved: number
+  rejected: number
+  minDecisionsToShow: number
+  bands: LearningBand[]
+}
+
+export type BulkReviewRequest = {
+  status: MappingStatus
+  relation?: MappingRelation
+} & (
+  | { ids: string[] }
+  | { filter: MappingFilters & { level: ConfidenceLevel }; expectedCount: number }
+)
 
 /** An admin-approved pair whose two items are both in one project. */
 export interface SimilarPair {
@@ -546,9 +608,21 @@ export async function generateMappings(guidelineId: string): Promise<{ checked: 
   return request(`/guidelines/${guidelineId}/mappings/generate`, { method: 'POST' })
 }
 
-export async function fetchMappings(guidelineId?: string): Promise<ItemMapping[]> {
-  const query = guidelineId ? `?guidelineId=${encodeURIComponent(guidelineId)}` : ''
-  return request<ItemMapping[]>(`/mappings${query}`)
+export async function fetchMappingsPage(filters: MappingFilters, offset: number, limit: number): Promise<MappingPage> {
+  const query = new URLSearchParams({ status: filters.status, offset: String(offset), limit: String(limit) })
+  if (filters.guidelineId) query.set('guidelineId', filters.guidelineId)
+  if (filters.relation) query.set('relation', filters.relation)
+  if (filters.inUse) query.set('inUse', 'true')
+  return request<MappingPage>(`/mappings?${query.toString()}`)
+}
+
+export async function fetchMappingLearning(): Promise<MappingLearning> {
+  return request<MappingLearning>('/mappings/learning')
+}
+
+/** Decides several pairs at once. Returns how many were changed. */
+export async function bulkReviewMappings(body: BulkReviewRequest): Promise<{ updated: number }> {
+  return request<{ updated: number }>('/mappings/bulk', { method: 'POST', body: JSON.stringify(body) })
 }
 
 export async function reviewMapping(mappingId: string, status: MappingStatus, relation?: MappingRelation): Promise<void> {

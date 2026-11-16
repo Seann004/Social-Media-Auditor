@@ -8,6 +8,9 @@ const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 /** Waits before each extra try when the connection to Groq itself fails (a connect time-out, a reset). Each try can take 10 s to time out. */
 export const MAPPING_NETWORK_RETRY_DELAYS_MS: readonly number[] = [2_000, 5_000, 10_000]
 
+/** Groq's rate-limit waits are honoured up to this long. A longer one (a daily limit can ask for 20 minutes or more) fails the batch at once instead of holding the check for hours. */
+export const MAX_RATE_LIMIT_WAIT_SECONDS = 90
+
 interface GroqReply {
   choices?: { message?: { content?: string } }[]
   usage?: { prompt_tokens?: number; completion_tokens?: number }
@@ -40,7 +43,7 @@ export async function askMappingModel(
         response_format: { type: 'json_object' },
         temperature: 0.1,
       }),
-    })
+    }, 3, MAX_RATE_LIMIT_WAIT_SECONDS)
     if (!response.ok) throw new Error(`Groq API error: ${await response.text()}`)
     return (await response.json()) as GroqReply
   }, { label: `matching call (model ${model})`, delaysMs })

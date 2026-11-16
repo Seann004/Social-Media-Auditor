@@ -60,6 +60,21 @@ describe('askMappingModel', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('waits out a short rate limit and then succeeds', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockResolvedValueOnce(new Response('slow down', { status: 429, headers: { 'retry-after': '5' } })).mockResolvedValueOnce(groqReply({ matches: [] }))
+    const result = askMappingModel('s', 'u', ENV, NO_WAIT)
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(await result).toEqual({ matches: [] })
+    vi.useRealTimers()
+  })
+
+  it('gives up at once when Groq asks for a long wait, such as a daily limit', async () => {
+    fetchMock.mockResolvedValue(new Response('daily limit', { status: 429, headers: { 'retry-after': '1500' } }))
+    await expect(askMappingModel('s', 'u', ENV, NO_WAIT)).rejects.toThrow(/rate limit/i)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('throws a clear message when the key is missing, without calling Groq', async () => {
     await expect(askMappingModel('s', 'u', {}, NO_WAIT)).rejects.toThrow(/GROQ_API_KEY/)
     expect(fetchMock).not.toHaveBeenCalled()
