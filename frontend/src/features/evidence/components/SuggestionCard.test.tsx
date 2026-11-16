@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import { makeDecision, makeSuggestion } from '../testFixtures'
-import type { QuoteView, SuggestionView } from '../types'
+import type { ItemKindView, QuoteView, SuggestionView } from '../types'
 import OverrideDialog from './OverrideDialog'
 import SuggestionCard from './SuggestionCard'
 
@@ -466,5 +466,48 @@ describe('SuggestionCard: the reason is shown once', () => {
     renderCard({ suggestion: makeSuggestion({ reason, flags: [{ type: 'missing_evidence', reason }, { type: 'conflicting', reason: 'Help centre says otherwise.' }] }) })
     expect(screen.getAllByText(reason)).toHaveLength(1)
     expect(screen.getByText('Help centre says otherwise.')).toBeInTheDocument()
+  })
+})
+
+describe("SuggestionCard: the source can't show this item", () => {
+  // The AI's high-confidence kinds: the only ones the server sends.
+  const POLICY: ItemKindView = { kind: 'neither', reason: 'A company policy, not a screen or code.' }
+  const APP: ItemKindView = { kind: 'app', reason: 'A setting a user can see.' }
+  const aiReason = 'No step of the check showed the privacy policy.'
+  const flags = [{ type: 'missing_evidence' as const, reason: aiReason }]
+  const noResult = (over: Partial<SuggestionView> = {}) => makeSuggestion({ source: 'app', suggestedResult: null, reason: aiReason, flags, ...over })
+  const NOTE = "This source can't show this item."
+
+  it('says so calmly, with the reason, and keeps the reason, the flags and the review label', () => {
+    renderCard({ suggestion: noResult(), kind: POLICY })
+    const note = screen.getByText(NOTE).closest('[data-tone="hint"]')!
+    expect(note).toHaveTextContent(`${NOTE} A company policy, not a screen or code.`)
+    expect(note).toHaveClass('bg-sky-50', 'text-sky-700')
+    expect(screen.getByText('The AI could not suggest an answer')).toBeInTheDocument()
+    expect(screen.getByText(aiReason)).toBeInTheDocument()
+    expect(screen.getByText('Needs human review')).toBeInTheDocument()
+  })
+
+  it('says so for a code repository suggestion on a policy or process item', () => {
+    renderCard({ suggestion: noResult({ source: 'repo' }), kind: POLICY })
+    expect(screen.getByText(NOTE).closest('[data-tone="hint"]')).toHaveTextContent(`${NOTE} A company policy, not a screen or code.`)
+  })
+
+  it('is not shown for a result, an app or code item on either source, a failed check, an unchecked item or an item without an AI kind', () => {
+    const cases: Partial<CardProps>[] = [
+      { suggestion: noResult({ suggestedResult: 'no' }), kind: POLICY },
+      { suggestion: noResult(), kind: APP },
+      // The other source would suit it: the picker says so, the card does not.
+      { suggestion: noResult({ source: 'repo' }), kind: APP },
+      { suggestion: noResult(), kind: { kind: 'code', reason: 'Only the server shows it.' } },
+      { suggestion: noResult({ flags: [...flags, { type: 'inaccessible', reason: 'The check stopped at https://app.example/: a captcha.' }] }), kind: POLICY },
+      { suggestion: noResult(), kind: POLICY, unchecked: true },
+      { suggestion: noResult() },
+    ]
+    for (const over of cases) {
+      const { unmount } = render(<SuggestionCard decision={null} currentStatus={undefined} canDecide onAccept={vi.fn()} onOverride={vi.fn()} onKeepMine={vi.fn()} {...(over as CardProps)} />)
+      expect(screen.queryByText(NOTE)).toBeNull()
+      unmount()
+    }
   })
 })

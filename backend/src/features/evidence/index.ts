@@ -6,6 +6,7 @@ import type { AppRepository } from './appRepository.js'
 import { createAppRouter } from './appRoutes.js'
 import { createAuditData, type AuditData } from './auditData.js'
 import { MAX_ROUTE_PARAM_LENGTH, ROUTE_ID_PATTERN } from './config.js'
+import { createItemKindRouter } from './itemKindRoutes.js'
 import { createRunQueue } from './queue.js'
 import { createRepoRouter } from './repoRoutes.js'
 import type { RepoRepository } from './repoRepository.js'
@@ -74,6 +75,7 @@ const EVIDENCE_PATHS = [
   '/projects/:id/repo-source',
   '/projects/:id/repo-runs',
   '/suggestions/:id/code',
+  '/projects/:id/item-kinds',
 ]
 
 function unconfiguredRouter(): Router {
@@ -103,7 +105,7 @@ const disabled = (): EvidenceModule => ({
 })
 
 /**
- * Builds the evidence feature: the evidence, app and repo routers, the job queue and the start-up step.
+ * Builds the evidence feature: the evidence, app, repo and item kinds routers, the job queue and the start-up step.
  * Importing this file opens no connection and starts no browser; that happens when a job runs.
  * The routes accept the app login token (`POST /api/auth/login`), checked with JWT_SECRET. Without a
  * JWT_SECRET of at least 32 characters, or without the service key, the feature is off (its routes
@@ -167,6 +169,7 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
       }),
       createAppRouter({ repo, appRepo, audit, queue, guard, sessions, acquire, aiConfigured, secretKey, requestsPerMinute }),
       createRepoRouter({ repo, repoRepo, audit, queue, sessions, acquire, aiConfigured, requestsPerMinute }),
+      createItemKindRouter({ audit, sessions, aiConfigured, apiKey, model, requestsPerMinute }),
     ],
     async start() {
       try {

@@ -259,6 +259,17 @@ export interface CodeEvidence {
   pieces: CodePieceView[]
 }
 
+// Mirrors ItemKind in backend/src/features/evidence/itemKinds.ts and the reply of itemKindRoutes.ts
+export type EvidenceKind = 'app' | 'code' | 'both' | 'neither'
+/** A high-confidence answer of the AI classifier: the only kind the server sends. */
+export interface ItemKindView {
+  kind: EvidenceKind
+  reason: string
+}
+export interface ItemKindsResponse {
+  kinds: Record<string, ItemKindView>
+}
+
 /** Shown label for each flag type that needs a short name. */
 export const FLAG_LABEL: Partial<Record<FlagType, string>> = {
   comments_only: 'Comments only',

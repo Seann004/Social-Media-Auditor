@@ -1,0 +1,424 @@
+{
+  "about": "Labelled checklist items for measuring which source can answer an item: 'app' (seen in a signed-in app), 'code' (seen in the code), 'both', or 'neither' (policy, process, organisation, offline). Labels come from a person reading the item, never from running a classifier. 'also' lists a second answer that is just as fair for a genuinely mixed item. This file is the one copy: the frontend reads it through evidenceKind.samples.ts, and the backend benchmark (npm run benchmark:classify) reads it directly.",
+  "groups": {
+    "tuning": "Written first. They shaped the first keyword lists of the old keyword classifier.",
+    "round_two": "Written as a held-out set after the first keyword lists, then used to widen them.",
+    "round_three": "Written as a held-out set after the second keyword lists, then used to fix them.",
+    "held_out": "Written after the last keyword change and never used to change any rule."
+  },
+  "items": [
+    {
+      "group": "tuning",
+      "text": "Accounts of users under 16 are private by default.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "Direct messages are off by default for users under 16.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "Users can report a video, comment or account from the app.",
+      "label": "app",
+      "also": [
+        "both"
+      ]
+    },
+    {
+      "group": "tuning",
+      "text": "Parents can link to a teen account to manage safety settings.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "A safety centre explains the tools available to teens and parents.",
+      "label": "neither"
+    },
+    {
+      "group": "tuning",
+      "text": "The privacy policy for younger users is easy to find.",
+      "label": "neither"
+    },
+    {
+      "group": "tuning",
+      "text": "Teens can block or mute any account that contacts them.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "Adults who do not follow a teen cannot send them a direct message.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "Location sharing is turned off for teen accounts until they turn it on.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "Autoplay of videos is switched off for users under 18.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "A teen's follower list is not visible to accounts they don't follow.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "Users under 18 get a reminder to take a break after an hour of scrolling.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "Teens can turn off comments on their own posts.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "Teen accounts do not appear in 'suggested accounts' for adults.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "Search results for self-harm terms show support resources instead of content.",
+      "label": "app"
+    },
+    {
+      "group": "tuning",
+      "text": "Passwords are stored hashed, never in plain text.",
+      "label": "code"
+    },
+    {
+      "group": "tuning",
+      "text": "Direct messages are encrypted in transit and at rest.",
+      "label": "code"
+    },
+    {
+      "group": "tuning",
+      "text": "Failed login attempts are rate limited.",
+      "label": "code"
+    },
+    {
+      "group": "tuning",
+      "text": "Chat messages of under-18 users are deleted after 90 days.",
+      "label": "code"
+    },
+    {
+      "group": "tuning",
+      "text": "Every moderation action is written to an audit log.",
+      "label": "code"
+    },
+    {
+      "group": "tuning",
+      "text": "Precise location data of children is not stored on the server.",
+      "label": "code"
+    },
+    {
+      "group": "tuning",
+      "text": "Uploaded images are checked against a hash list of known abuse material.",
+      "label": "code"
+    },
+    {
+      "group": "tuning",
+      "text": "Parental consent is recorded with the date and the parent's account.",
+      "label": "code"
+    },
+    {
+      "group": "tuning",
+      "text": "Personal data of users under 18 is not shared with advertisers.",
+      "label": "code",
+      "also": [
+        "neither"
+      ]
+    },
+    {
+      "group": "tuning",
+      "text": "Staff who review reports receive child safety training every year.",
+      "label": "neither"
+    },
+    {
+      "group": "tuning",
+      "text": "The service carries out an annual children's risk assessment.",
+      "label": "neither"
+    },
+    {
+      "group": "tuning",
+      "text": "A named senior manager is accountable for children's safety.",
+      "label": "neither"
+    },
+    {
+      "group": "tuning",
+      "text": "The terms of service are written in language a 13-year-old can understand.",
+      "label": "neither"
+    },
+    {
+      "group": "tuning",
+      "text": "Reports of child sexual abuse material are passed to law enforcement.",
+      "label": "neither"
+    },
+    {
+      "group": "tuning",
+      "text": "Moderators are available around the clock to handle urgent reports.",
+      "label": "neither"
+    },
+    {
+      "group": "tuning",
+      "text": "The company publishes a yearly transparency report on child safety.",
+      "label": "neither"
+    },
+    {
+      "group": "tuning",
+      "text": "Appeals against a moderation decision are answered within seven days.",
+      "label": "neither"
+    },
+    {
+      "group": "tuning",
+      "text": "Users must enter their date of birth when they sign up.",
+      "label": "both"
+    },
+    {
+      "group": "tuning",
+      "text": "Children under 13 who give their real age are blocked from creating an account.",
+      "label": "both"
+    },
+    {
+      "group": "tuning",
+      "text": "Users can delete their account and their data from the settings page.",
+      "label": "both"
+    },
+    {
+      "group": "tuning",
+      "text": "Teen accounts are switched to private when an age check shows the user is under 16.",
+      "label": "both"
+    },
+    {
+      "group": "tuning",
+      "text": "Users can download a copy of the data stored about them.",
+      "label": "both"
+    },
+    {
+      "group": "round_two",
+      "text": "Teen accounts cannot receive gifts or payments from adults.",
+      "label": "app"
+    },
+    {
+      "group": "round_two",
+      "text": "Users under 18 cannot go live.",
+      "label": "app"
+    },
+    {
+      "group": "round_two",
+      "text": "The app asks teens to confirm before posting their location.",
+      "label": "app"
+    },
+    {
+      "group": "round_two",
+      "text": "Young users see a warning before they view sensitive content.",
+      "label": "app"
+    },
+    {
+      "group": "round_two",
+      "text": "Direct messages from unknown adults go to a separate requests folder.",
+      "label": "app"
+    },
+    {
+      "group": "round_two",
+      "text": "Session tokens expire after 30 minutes of inactivity.",
+      "label": "code"
+    },
+    {
+      "group": "round_two",
+      "text": "The API refuses requests that try to read another user's private messages.",
+      "label": "code"
+    },
+    {
+      "group": "round_two",
+      "text": "Images uploaded by under-18s have their location metadata removed.",
+      "label": "code"
+    },
+    {
+      "group": "round_two",
+      "text": "Account deletion removes the user's messages from the database within 30 days.",
+      "label": "code",
+      "also": [
+        "both"
+      ]
+    },
+    {
+      "group": "round_two",
+      "text": "Every new feature is reviewed for child safety risks before launch.",
+      "label": "neither"
+    },
+    {
+      "group": "round_two",
+      "text": "Parents can contact a support team that answers within two working days.",
+      "label": "neither"
+    },
+    {
+      "group": "round_two",
+      "text": "Content moderators have access to wellbeing support.",
+      "label": "neither"
+    },
+    {
+      "group": "round_two",
+      "text": "The service has a clear process for removing illegal content quickly.",
+      "label": "neither"
+    },
+    {
+      "group": "round_two",
+      "text": "Teens are asked their age at sign-up, and the answer is checked against other signals.",
+      "label": "both"
+    },
+    {
+      "group": "round_two",
+      "text": "Users can turn off personalised ads, and their data is then no longer used for ads.",
+      "label": "both"
+    },
+    {
+      "group": "round_three",
+      "text": "Teens can hide their like counts.",
+      "label": "app"
+    },
+    {
+      "group": "round_three",
+      "text": "Users under 16 cannot be added to group chats by people they don't know.",
+      "label": "app"
+    },
+    {
+      "group": "round_three",
+      "text": "Teens are reminded to review their privacy settings every six months.",
+      "label": "app"
+    },
+    {
+      "group": "round_three",
+      "text": "Live streams by users under 18 cannot receive gifts.",
+      "label": "app"
+    },
+    {
+      "group": "round_three",
+      "text": "A teen's exact location is never shown on their profile.",
+      "label": "app"
+    },
+    {
+      "group": "round_three",
+      "text": "Users can see why a post was recommended to them.",
+      "label": "app"
+    },
+    {
+      "group": "round_three",
+      "text": "Messages are scanned for grooming patterns before delivery.",
+      "label": "code"
+    },
+    {
+      "group": "round_three",
+      "text": "Deleted photos are removed from backups within 90 days.",
+      "label": "code"
+    },
+    {
+      "group": "round_three",
+      "text": "Parents receive an email when their child changes a safety setting.",
+      "label": "code",
+      "also": [
+        "both"
+      ]
+    },
+    {
+      "group": "round_three",
+      "text": "Access to children's personal data is limited to staff who need it.",
+      "label": "neither",
+      "also": [
+        "code"
+      ]
+    },
+    {
+      "group": "round_three",
+      "text": "The age estimation model is tested for bias across skin tones.",
+      "label": "neither"
+    },
+    {
+      "group": "round_three",
+      "text": "Content policies are translated into every language the service supports.",
+      "label": "neither"
+    },
+    {
+      "group": "round_three",
+      "text": "The company consults young people when designing new features.",
+      "label": "neither"
+    },
+    {
+      "group": "round_three",
+      "text": "Teen accounts default to the strictest content filter, and this is enforced on the server.",
+      "label": "both"
+    },
+    {
+      "group": "round_three",
+      "text": "Users who enter a birthday under 13 at sign-up cannot try again with a different date.",
+      "label": "both"
+    },
+    {
+      "group": "held_out",
+      "text": "Teens can choose who sees their stories.",
+      "label": "app"
+    },
+    {
+      "group": "held_out",
+      "text": "Adults cannot comment on posts by users under 16 unless they are friends.",
+      "label": "app"
+    },
+    {
+      "group": "held_out",
+      "text": "The app pauses notifications at night for users under 18.",
+      "label": "app"
+    },
+    {
+      "group": "held_out",
+      "text": "Profile photos of teens cannot be downloaded by other users.",
+      "label": "app"
+    },
+    {
+      "group": "held_out",
+      "text": "Reported accounts are hidden from a teen's search while a review is open.",
+      "label": "app",
+      "also": [
+        "both"
+      ]
+    },
+    {
+      "group": "held_out",
+      "text": "Uploaded videos are compressed and their GPS tags stripped on the server.",
+      "label": "code"
+    },
+    {
+      "group": "held_out",
+      "text": "A user's age is stored separately from their public profile.",
+      "label": "code"
+    },
+    {
+      "group": "held_out",
+      "text": "Moderation decisions are saved with the moderator's ID.",
+      "label": "code"
+    },
+    {
+      "group": "held_out",
+      "text": "The service tells the regulator about serious incidents within 72 hours.",
+      "label": "neither"
+    },
+    {
+      "group": "held_out",
+      "text": "Safety features are designed with input from child development experts.",
+      "label": "neither"
+    },
+    {
+      "group": "held_out",
+      "text": "Volunteers who run community groups are vetted.",
+      "label": "neither"
+    },
+    {
+      "group": "held_out",
+      "text": "Every report is acknowledged by email, and the reporter can follow its progress in the app.",
+      "label": "both"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
@@ -6,6 +6,7 @@ import { EvidenceApiError } from '../api'
 import { useStore } from '../../../store/useStore'
 import { makeRun, makeSuggestion } from '../testFixtures'
 import { useEvidence } from '../useEvidence'
+import { forgetItemKinds } from '../useItemKinds'
 import type { ChecklistItem } from '../../../types'
 import EvidencePanel from './EvidencePanel'
 
@@ -21,6 +22,7 @@ vi.mock('../api', async (importOriginal) => {
     saveRepoSource: vi.fn(),
     startRepoRun: vi.fn(),
     reassess: vi.fn(),
+    getItemKinds: vi.fn(),
   }
 })
 
@@ -33,6 +35,7 @@ const m = {
   saveRepoSource: vi.mocked(api.saveRepoSource),
   startRepoRun: vi.mocked(api.startRepoRun),
   reassess: vi.mocked(api.reassess),
+  getItemKinds: vi.mocked(api.getItemKinds),
 }
 
 const item = (n: number, category = 'Privacy'): ChecklistItem => ({
@@ -59,17 +62,32 @@ beforeEach(() => {
   m.getSuggestions.mockResolvedValue({ run: null, suggestions: [], decisions: [] })
   m.getAppSetup.mockResolvedValue({ app: null, accounts: [], secretKeyConfigured: true })
   m.getRepoSource.mockResolvedValue({ repo: null })
+  m.getItemKinds.mockResolvedValue({ kinds: {} })
+  forgetItemKinds()
 })
 
+/** The panel lives in a drawer: open it from the bar, as a user does. */
+async function openDrawer() {
+  await userEvent.click(await screen.findByRole('button', { name: 'Open AI evidence' }))
+}
+
+async function renderOpen(ui: React.ReactElement) {
+  const view = render(ui)
+  await openDrawer()
+  return view
+}
+
+/** Opens the drawer on the repository source: the form, or its folded line once one is saved. */
 async function openRepo(user: ReturnType<typeof userEvent.setup>) {
+  await openDrawer()
   await user.click(await screen.findByRole('radio', { name: 'Code repository' }))
-  await screen.findByLabelText('Repository address')
+  await waitFor(() => expect(screen.queryByLabelText('Repository address') ?? screen.queryByRole('button', { name: 'Edit set-up' })).not.toBeNull())
 }
 
 describe('Code repository source in the evidence panel', () => {
   it('shows the form with its exact texts', async () => {
     const user = userEvent.setup()
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openRepo(user)
     expect(screen.getByLabelText('Repository address')).toHaveAttribute('placeholder', 'https://github.com/owner/name')
     expect(screen.getByLabelText('Branch (optional)')).toBeInTheDocument()
@@ -82,7 +100,7 @@ describe('Code repository source in the evidence panel', () => {
   it('saves the repository and shows the saved address', async () => {
     const user = userEvent.setup()
     m.saveRepoSource.mockResolvedValue({ repo: { ...repo, branch: 'dev' } })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openRepo(user)
     await user.type(screen.getByLabelText('Repository address'), repo.repoUrl)
     await user.type(screen.getByLabelText('Branch (optional)'), 'dev')
@@ -94,7 +112,7 @@ describe('Code repository source in the evidence panel', () => {
   it('sends a blank branch as null and shows a refusal sentence under the field', async () => {
     const user = userEvent.setup()
     m.saveRepoSource.mockRejectedValue(new EvidenceApiError(400, 'Enter a public GitHub repository address, like https://github.com/owner/name.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openRepo(user)
     await user.type(screen.getByLabelText('Repository address'), 'nope')
     await user.click(screen.getByRole('button', { name: 'Save repository' }))
@@ -105,7 +123,7 @@ describe('Code repository source in the evidence panel', () => {
   it('links the error and the hint to the address field', async () => {
     const user = userEvent.setup()
     m.saveRepoSource.mockRejectedValue(new EvidenceApiError(400, 'Nope.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openRepo(user)
     const input = screen.getByLabelText('Repository address')
     expect(input).not.toHaveAttribute('aria-invalid')
@@ -119,7 +137,7 @@ describe('Code repository source in the evidence panel', () => {
   it('says "Something went wrong. Try again." when saving fails without a server reply', async () => {
     const user = userEvent.setup()
     m.saveRepoSource.mockRejectedValue(new Error('boom'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openRepo(user)
     await user.type(screen.getByLabelText('Repository address'), 'x')
     await user.click(screen.getByRole('button', { name: 'Save repository' }))
@@ -130,7 +148,7 @@ describe('Code repository source in the evidence panel', () => {
     const user = userEvent.setup()
     m.getRepoSource.mockResolvedValue({ repo })
     m.startRepoRun.mockRejectedValue(new Error('boom'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openRepo(user)
     await screen.findByText(repo.repoUrl, { selector: 'span' })
     await user.click(screen.getByRole('checkbox', { name: 'Item 1' }))
@@ -138,9 +156,21 @@ describe('Code repository source in the evidence panel', () => {
     expect(await screen.findByText('Something went wrong. Try again.')).toBeInTheDocument()
   })
 
+  it('shows the item kinds on the Code repository source, so an app item is better checked with the App', async () => {
+    const user = userEvent.setup()
+    m.getItemKinds.mockResolvedValue({ kinds: { i1: { kind: 'app', reason: 'A setting a user can see.' }, i2: { kind: 'code', reason: 'Only the server shows it.' } } })
+    m.getRepoSource.mockResolvedValue({ repo })
+    await renderOpen(<Harness />)
+    await openRepo(user)
+    const appRow = (await screen.findByText('Better checked with the App')).closest('li')!
+    expect(within(appRow).getByRole('checkbox', { name: 'Item 1' })).toBeInTheDocument()
+    expect(within(appRow).getByText('App')).toBeInTheDocument()
+    expect(within(screen.getByRole('checkbox', { name: 'Item 2' }).closest('li')!).queryByText(/Better checked/)).toBeNull()
+  })
+
   it('caps the picker at 10 with the same style of message as the app', async () => {
     const user = userEvent.setup()
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openRepo(user)
     for (let n = 1; n <= 10; n += 1) await user.click(screen.getByRole('checkbox', { name: `Item ${n}` }))
     expect(screen.getByText('Up to 10 items per repository run.')).toBeInTheDocument()
@@ -151,7 +181,7 @@ describe('Code repository source in the evidence panel', () => {
     const user = userEvent.setup()
     m.getRepoSource.mockResolvedValue({ repo })
     m.startRepoRun.mockResolvedValue({ run: makeRun({ source: 'repo', status: 'queued' }) })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openRepo(user)
     await screen.findByText(repo.repoUrl, { selector: 'span' })
     await user.click(screen.getByRole('checkbox', { name: 'Item 9' }))
@@ -164,7 +194,7 @@ describe('Code repository source in the evidence panel', () => {
     const user = userEvent.setup()
     m.getRepoSource.mockResolvedValue({ repo })
     m.startRepoRun.mockRejectedValue(new EvidenceApiError(429, 'Too many runs today.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openRepo(user)
     await screen.findByText(repo.repoUrl, { selector: 'span' })
     await user.click(screen.getByRole('checkbox', { name: 'Item 1' }))
@@ -177,12 +207,12 @@ describe('Code repository source in the evidence panel', () => {
       run: makeRun({ source: 'repo', status: 'assessing', finishedAt: null, currentItemId: 'i2', categoriesDone: 1, categoriesTotal: 3 }),
       pages: [],
     })
-    const view = render(<Harness />)
+    const view = await renderOpen(<Harness />)
     expect(await screen.findByText('Checking the code: Item 2')).toBeInTheDocument()
     expect(screen.getByText('Items checked: 1 of 3')).toBeInTheDocument()
     view.unmount()
     m.getLatestRun.mockResolvedValue({ run: makeRun({ source: 'repo', status: 'capturing', finishedAt: null }), pages: [] })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByText('Reading the code')).toBeInTheDocument()
   })
 
@@ -192,7 +222,7 @@ describe('Code repository source in the evidence panel', () => {
     m.getLatestRun.mockResolvedValue({ run, pages: [] })
     m.getSuggestions.mockResolvedValue({ run, suggestions: [makeSuggestion({ source: 'repo' })], decisions: [] })
     m.reassess.mockResolvedValue({ run })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await waitFor(() => expect(screen.getByRole('radio', { name: 'Code repository' })).toBeChecked())
     expect(await screen.findByText('Not checked: Item 3')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Re-assess from the code' }))
@@ -201,7 +231,7 @@ describe('Code repository source in the evidence panel', () => {
 
   it('App and Public pages still show their own panels', async () => {
     const user = userEvent.setup()
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await openRepo(user)
     await user.click(screen.getByRole('radio', { name: /public pages/i }))
     expect(await screen.findByLabelText(/website links/i)).toBeInTheDocument()

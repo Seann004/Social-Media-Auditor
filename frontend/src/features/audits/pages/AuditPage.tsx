@@ -41,6 +41,7 @@ import ScoreRing from '../../audits/components/ScoreRing'
 import { useEvidence } from '../../evidence/useEvidence'
 import EvidencePanel from '../../evidence/components/EvidencePanel'
 import ItemSuggestion from '../../evidence/components/ItemSuggestion'
+import { useItemKinds } from '../../evidence/useItemKinds'
 import SimilarItemsNotice from '../components/SimilarItemsNotice'
 import OverrideDialog from '../../evidence/components/OverrideDialog'
 import FlaggedFilterToggle from '../../evidence/components/FlaggedFilterToggle'
@@ -155,6 +156,8 @@ function AuditPageContent() {
   const isAuditor = currentUser?.role === 'auditor'
   const isAdmin = currentUser?.role === 'admin'
   const aiEvidence = useEvidence(id ?? '', { enabled: Boolean(id) && (isAuditor || isHeadAuditor) })
+  // Read only: the evidence drawer asks for the kinds when it first opens.
+  const itemKinds = useItemKinds(id ?? '', false)
 
   const projectGuidelines = useMemo(
     () => guidelines.filter((g) => project?.guidelineIds.includes(g.id)),
@@ -2091,6 +2094,8 @@ helpText: newItemHelp.trim() || undefined,
                               suggestion={aiEvidence.suggestionsByItem.get(ci.id)}
                               decision={aiEvidence.decisionsByItem.get(ci.id) ?? null}
                               currentStatus={resp?.status}
+                              kind={itemKinds.kinds.get(ci.id)}
+                              resultRun={aiEvidence.resultRun}
                             />
                           )}
 

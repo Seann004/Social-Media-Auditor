@@ -39,6 +39,17 @@ function Harness({ role = 'auditor', locked = false, projectId = 'p1' }: { role?
   return <EvidencePanel projectId={projectId} role={role} evidence={evidence} locked={locked} publicPagesEnabled />
 }
 
+/** The panel lives in a drawer: open it from the bar, as a user does. */
+async function openDrawer() {
+  await userEvent.click(await screen.findByRole('button', { name: 'Open AI evidence' }))
+}
+
+async function renderOpen(ui: React.ReactElement) {
+  const view = render(ui)
+  await openDrawer()
+  return view
+}
+
 const sources = (urls: string[] = ['https://a.example/'], granted = false): SourcesResponse => ({
   source: { id: 'src', projectId: 'p1', startUrls: urls, createdBy: 'u1', createdAt: '2026-11-04T09:00:00.000Z' },
   permission: granted
@@ -76,7 +87,7 @@ describe('EvidencePanel', () => {
     const user = userEvent.setup()
     m.saveSources.mockResolvedValue({ source: sources().source! })
     m.startRun.mockResolvedValue({ run: running({ status: 'queued' }) })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     const box = await screen.findByLabelText(/website links/i)
     await waitFor(() => expect(box).toHaveValue('https://a.example/'))
     await user.clear(box)
@@ -92,7 +103,7 @@ describe('EvidencePanel', () => {
   it('shows a validation message from the server and does not start a run', async () => {
     const user = userEvent.setup()
     m.saveSources.mockRejectedValue(new EvidenceApiError(400, 'Link 2 points to a private address.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     const box = await screen.findByLabelText(/website links/i)
     await waitFor(() => expect(box).toHaveValue('https://a.example/'))
     await user.type(box, '{Enter}http://10.0.0.1/')
@@ -104,7 +115,7 @@ describe('EvidencePanel', () => {
   it('does not save when the links are unchanged', async () => {
     const user = userEvent.setup()
     m.startRun.mockResolvedValue({ run: running() })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://a.example/'))
     await user.click(runButton())
     expect(m.startRun).toHaveBeenCalledTimes(1)
@@ -115,7 +126,7 @@ describe('EvidencePanel', () => {
     const user = userEvent.setup()
     const pending = deferred<{ run: ReturnType<typeof makeRun> }>()
     m.startRun.mockReturnValue(pending.promise)
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://a.example/'))
     await user.dblClick(runButton())
     expect(m.startRun).toHaveBeenCalledTimes(1)
@@ -126,7 +137,7 @@ describe('EvidencePanel', () => {
   it('shows the run in progress when the server says one is already running (409)', async () => {
     const user = userEvent.setup()
     m.startRun.mockRejectedValue(new EvidenceApiError(409, 'A run is already in progress.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://a.example/'))
     m.getLatestRun.mockResolvedValue(latest(running()))
     await user.click(runButton())
@@ -137,7 +148,7 @@ describe('EvidencePanel', () => {
   it('shows the server sentence on a 429', async () => {
     const user = userEvent.setup()
     m.startRun.mockRejectedValue(new EvidenceApiError(429, 'The daily limit of 5 runs was reached.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://a.example/'))
     await user.click(runButton())
     expect(await screen.findByRole('alert')).toHaveTextContent('The daily limit of 5 runs was reached.')
@@ -147,7 +158,7 @@ describe('EvidencePanel', () => {
     m.getLatestRun.mockResolvedValue(
       latest(running(), [makePage(), makePage({ id: 'pg-2', url: 'https://a.example/x', accessStatus: 'timeout', accessDetail: 'Timed out after 30 s' })]),
     )
-    render(<Harness />)
+    await renderOpen(<Harness />)
     const progress = await screen.findByText(/pages captured/i)
     expect(progress.closest('[aria-live="polite"]')).not.toBeNull()
     expect(progress.closest('[aria-live="polite"]')).toHaveTextContent('2 of 5')
@@ -188,7 +199,7 @@ describe('EvidencePanel', () => {
         ],
       }),
     )
-    render(<Harness />)
+    await renderOpen(<Harness />)
     const summary = await screen.findByRole('region', { name: /last run/i })
     expect(summary).toHaveTextContent(/3 pages/i)
     expect(summary).toHaveTextContent(/3 suggestions/i)
@@ -206,7 +217,7 @@ describe('EvidencePanel', () => {
     })
     m.getLatestRun.mockResolvedValue(latest(partial))
     m.getSuggestions.mockResolvedValue(results({ run: partial }))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByText(/AI daily limit reached/)).toBeInTheDocument()
     expect(screen.getByText(/Privacy/)).toBeInTheDocument()
     expect(screen.getByText(/Content Moderation/)).toBeInTheDocument()
@@ -218,7 +229,7 @@ describe('EvidencePanel', () => {
     m.getLatestRun.mockResolvedValue(latest(result))
     m.getSuggestions.mockResolvedValue(results({ run: result }))
     m.reassess.mockResolvedValue({ run: running({ scope: 'unfinished' }) })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     const unfinished = await screen.findByRole('button', { name: 'Re-assess unfinished' })
     await user.click(unfinished)
     expect(m.reassess).toHaveBeenCalledWith('p1', 'run-9', 'unfinished')
@@ -234,14 +245,14 @@ describe('EvidencePanel', () => {
     m.getLatestRun.mockResolvedValue(latest(result))
     m.getSuggestions.mockResolvedValue(results({ run: result }))
     m.reassess.mockRejectedValue(new EvidenceApiError(409, 'Nothing is unfinished.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await user.click(await screen.findByRole('button', { name: /re-assess unfinished/i }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Nothing is unfinished.')
     expect(screen.getByRole('button', { name: /re-assess unfinished/i })).toBeInTheDocument()
   })
 
   it('has no Re-assess before a result run exists', async () => {
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await screen.findByLabelText(/website links/i)
     expect(screen.queryByRole('button', { name: /re-assess/i })).toBeNull()
   })
@@ -250,7 +261,7 @@ describe('EvidencePanel', () => {
     const older = makeRun({ id: 'run-1' })
     m.getLatestRun.mockResolvedValue(latest(makeRun({ id: 'run-2', status: 'failed', error: 'Every page failed to load.', pagesDone: 0, pagesTotal: 0 }), []))
     m.getSuggestions.mockResolvedValue(results({ run: older, suggestions: [makeSuggestion()] }))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     const failure = await screen.findByText('Every page failed to load.')
     const summary = screen.getByRole('region', { name: /last run/i })
     expect(summary).toHaveTextContent(/1 suggestion/i)
@@ -261,14 +272,14 @@ describe('EvidencePanel', () => {
     const odd = makeRun({ startedAt: null, finishedAt: null, pagesTotal: 0, pagesDone: 0, categoriesTotal: 0, categoriesDone: 0, status: 'partial', unassessedCategories: [] })
     m.getLatestRun.mockResolvedValue(latest(odd, []))
     m.getSuggestions.mockResolvedValue(results({ run: odd }))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByRole('region', { name: /last run/i })).toBeInTheDocument()
   })
 
   it('shows the Permission checkbox and note to a Head Auditor only, and saves them', async () => {
     const user = userEvent.setup()
     m.setPermission.mockResolvedValue({ permission: sources(['x'], true).permission! })
-    const head = render(<Harness role="head_auditor" />)
+    const head = await renderOpen(<Harness role="head_auditor" />)
     const box = await screen.findByRole('checkbox', { name: /permission/i })
     expect(screen.getByText(/robots\.txt is no longer respected/i)).toBeInTheDocument()
     await user.click(box)
@@ -277,7 +288,7 @@ describe('EvidencePanel', () => {
     expect(m.setPermission).toHaveBeenCalledWith('p1', true, 'Emailed on 3 Nov')
     head.unmount()
 
-    render(<Harness role="auditor" />)
+    await renderOpen(<Harness role="auditor" />)
     await screen.findByLabelText(/website links/i)
     expect(screen.queryByRole('checkbox', { name: /permission/i })).toBeNull()
   })
@@ -304,6 +315,7 @@ describe('EvidencePanel', () => {
 
     act(() => useStore.setState({ authToken: 'tok' }))
 
+    await openDrawer()
     expect(await screen.findByLabelText(/website links/i)).toBeInTheDocument()
     expect(screen.queryByText('AI evidence assessment is not available in this session. Sign out and sign in again. If this message stays, the server is not set up for it yet.')).toBeNull()
   })
@@ -322,7 +334,7 @@ describe('EvidencePanel', () => {
     const result = makeRun()
     m.getLatestRun.mockResolvedValue(latest(result))
     m.getSuggestions.mockResolvedValue(results({ run: result }))
-    render(<Harness role="head_auditor" locked />)
+    await renderOpen(<Harness role="head_auditor" locked />)
     expect(await screen.findByRole('region', { name: /last run/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^run/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /re-assess/i })).toBeNull()
@@ -343,7 +355,7 @@ describe('EvidencePanel', () => {
       ]),
     )
     m.getSuggestions.mockResolvedValue(results({ run: makeRun() }))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     const link = await screen.findByRole('link', { name: /ok\.example\/page/ })
     expect(link).toHaveAttribute('href', 'https://ok.example/page')
     expect(link).toHaveAttribute('target', '_blank')
@@ -355,7 +367,7 @@ describe('EvidencePanel', () => {
   it('shows a failed sources load with a retry, and keeps Run unavailable until it loads', async () => {
     const user = userEvent.setup()
     m.getSources.mockRejectedValueOnce(new EvidenceApiError(500, 'Something went wrong on the server.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong on the server.')
     expect(runButton()).toBeDisabled()
     expect(screen.queryByLabelText(/website links/i)).toBeNull()
@@ -366,7 +378,7 @@ describe('EvidencePanel', () => {
 
   it('shows a non-blocking load error in an alert', async () => {
     m.getLatestRun.mockRejectedValue(new EvidenceApiError(500, 'Something went wrong on the server.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     expect(await screen.findByText('Something went wrong on the server.')).toBeInTheDocument()
     expect(screen.getAllByRole('alert').some((a) => a.textContent?.includes('Something went wrong'))).toBe(true)
   })
@@ -385,7 +397,7 @@ describe('EvidencePanel', () => {
   it('puts the checkbox back and shows the error when saving the permission fails', async () => {
     const user = userEvent.setup()
     m.setPermission.mockRejectedValue(new EvidenceApiError(500, 'Could not record the permission.'))
-    render(<Harness role="head_auditor" />)
+    await renderOpen(<Harness role="head_auditor" />)
     const box = await screen.findByRole('checkbox', { name: /permission/i })
     await user.click(box)
     expect(box).toBeChecked()
@@ -401,12 +413,14 @@ describe('EvidencePanel', () => {
     m.getSources.mockImplementation(async (id) => (id === 'pB' ? sources(['https://b.example/']) : sources(['https://a.example/'])))
     m.saveSources.mockReturnValue(pendingSave.promise)
     m.startRun.mockResolvedValue({ run: running() })
-    const view = render(<Harness projectId="pA" />)
+    const view = await renderOpen(<Harness projectId="pA" />)
     const box = await screen.findByLabelText(/website links/i)
     await waitFor(() => expect(box).toHaveValue('https://a.example/'))
     await user.type(box, '{Enter}https://a2.example/')
     await user.click(runButton())
     view.rerender(<Harness projectId="pB" />)
+    // Another project starts afresh, with its drawer closed.
+    await openDrawer()
     await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://b.example/'))
     await act(async () => { pendingSave.resolve({ source: sources().source! }) })
     m.getLatestRun.mockResolvedValue(latest(null))
@@ -418,7 +432,7 @@ describe('EvidencePanel', () => {
   it('recovers from a 503 on Run once the user tries again', async () => {
     const user = userEvent.setup()
     m.startRun.mockRejectedValue(new EvidenceApiError(503, 'The service is temporarily unavailable.'))
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://a.example/'))
     await user.click(runButton())
     expect(await screen.findByText('The service is temporarily unavailable.')).toBeInTheDocument()
@@ -430,7 +444,7 @@ describe('EvidencePanel', () => {
   it('keeps the buttons disabled until the refresh after an action has finished', async () => {
     const user = userEvent.setup()
     m.startRun.mockResolvedValue({ run: makeRun({ id: 'run-3', status: 'completed' }) })
-    render(<Harness />)
+    await renderOpen(<Harness />)
     await waitFor(() => expect(screen.getByLabelText(/website links/i)).toHaveValue('https://a.example/'))
     const slow = deferred<LatestRunResponse>()
     m.getLatestRun.mockReturnValue(slow.promise)

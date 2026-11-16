@@ -13,6 +13,21 @@ async function openAudit(page: Page, user: TestUser, options: { withRun: boolean
 }
 
 const row = (page: Page, index: number): Locator => page.locator('div.px-6.py-5').filter({ hasText: ITEMS[index].text })
+const barOf = (page: Page): Locator => page.getByRole('region', { name: 'AI evidence assessment' })
+
+/** The panel lives in a drawer opened from the slim bar at the top of the audit page. */
+async function openPanel(page: Page): Promise<Locator> {
+  await barOf(page).getByRole('button', { name: 'Open AI evidence' }).click()
+  const panel = page.getByRole('dialog', { name: 'AI evidence assessment' })
+  await expect(panel).toBeVisible()
+  return panel
+}
+
+/** Closes the drawer so it no longer covers the checklist rows. */
+async function closePanel(panel: Locator): Promise<void> {
+  await panel.getByRole('button', { name: 'Close AI evidence' }).click()
+  await expect(panel).toBeHidden()
+}
 
 async function snap(target: Page | Locator, name: string): Promise<void> {
   if (!SHOTS) return
@@ -23,7 +38,7 @@ async function snap(target: Page | Locator, name: string): Promise<void> {
 test.describe('AI evidence assessment', () => {
   test('auditor runs an assessment, accepts one suggestion and overrides another', async ({ page }) => {
     const stub = await openAudit(page, AUDITOR, { withRun: false })
-    const panel = page.getByRole('region', { name: 'AI evidence assessment' })
+    const panel = await openPanel(page)
 
     // Run: the links are saved, then progress shows, then the cards arrive.
     await panel.getByLabel('Website links (one per line)').fill('https://example.test/safety')
@@ -34,6 +49,8 @@ test.describe('AI evidence assessment', () => {
     await expect(panel.getByText('3 pages · 3 suggestions · 1 flagged')).toBeVisible()
     await expect(answeredCount(page)).toHaveText('0/3')
     await snap(panel, 'panel')
+    await closePanel(panel)
+    await expect(barOf(page).getByText('Last run: 3 suggestions · 1 flagged')).toBeVisible()
 
     // Nothing was answered by the suggestions alone.
     await expect(row(page, 0).getByRole('region', { name: 'AI suggestion' })).toContainText('No')

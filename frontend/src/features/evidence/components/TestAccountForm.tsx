@@ -48,8 +48,9 @@ export default function TestAccountForm({ initial, onSubmit, onCancel }: Props) 
 
   return (
     <form onSubmit={(e) => void submit(e)} className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
+      {/* Sized for the drawer: only the two short age fields share a line. */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2">
           <label htmlFor="acct-label" className={LABEL}>Account name</label>
           <input id="acct-label" value={label} onChange={(e) => setLabel(e.target.value)} className={FIELD} />
         </div>
@@ -64,11 +65,11 @@ export default function TestAccountForm({ initial, onSubmit, onCancel }: Props) 
           <label htmlFor="acct-age" className={LABEL}>Age (optional)</label>
           <input id="acct-age" type="number" min={0} value={age} onChange={(e) => setAge(e.target.value)} className={FIELD} />
         </div>
-        <div>
+        <div className="col-span-2">
           <label htmlFor="acct-login" className={LABEL}>Login name</label>
           <input id="acct-login" value={loginName} onChange={(e) => setLoginName(e.target.value)} autoComplete="off" className={FIELD} />
         </div>
-        <div>
+        <div className="col-span-2">
           <label htmlFor="acct-password" className={LABEL}>Password</label>
           <input
             id="acct-password"
@@ -80,7 +81,7 @@ export default function TestAccountForm({ initial, onSubmit, onCancel }: Props) 
             className={FIELD}
           />
         </div>
-        <div>
+        <div className="col-span-2">
           <label htmlFor="acct-handles" className={LABEL}>Display handles (one per line)</label>
           <textarea id="acct-handles" rows={2} value={handles} onChange={(e) => setHandles(e.target.value)} spellCheck={false} className={`${FIELD} font-mono text-xs`} />
         </div>

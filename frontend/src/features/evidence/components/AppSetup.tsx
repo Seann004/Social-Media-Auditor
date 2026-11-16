@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
+import { CaretRightIcon as CaretRight, PlusIcon as Plus } from '@phosphor-icons/react'
 import { EvidenceApiError, addTestAccount, deleteTestAccount, saveAppSource, updateTestAccount } from '../api'
 import type { AppSetupResponse, TestAccountInput, TestAccountView } from '../types'
+import AccountRow from './AccountRow'
 import TestAccountForm from './TestAccountForm'
 
 interface Props {
@@ -12,9 +14,7 @@ interface Props {
   canWriteAccounts?: boolean
 }
 
-const AGE_LABEL = { under_18: 'Under 18', adult: 'Adult' } as const
 const FIELD = 'w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50'
-const LINK_BUTTON = 'rounded text-xs text-blue-600 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50'
 
 const lines = (text: string): string[] => text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '')
 const sentence = (err: unknown): string => (err instanceof EvidenceApiError ? err.message : 'Something went wrong. Try again.')
@@ -30,6 +30,9 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false, 
   const [savedUrl, setSavedUrl] = useState<string | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [editing, setEditing] = useState<Editing>(null)
+  // Login domains are rarely needed: folded away unless some are saved.
+  const [advanced, setAdvanced] = useState(() => (setup.app?.loginDomains ?? []).length > 0)
+  const advancedId = useId()
 
   /** Any edit to the address or the domains clears the "Saved" note: it no longer describes the form. */
   function edit(set: (value: string) => void, value: string): void {
@@ -75,46 +78,69 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false, 
 
   return (
     <div className="space-y-4">
-      <form onSubmit={(e) => void saveSource(e)} className="space-y-2">
+      <form onSubmit={(e) => void saveSource(e)} className="space-y-3">
         <div>
           <label htmlFor="app-url" className="mb-1 block text-xs font-medium text-slate-700">App address</label>
           <input id="app-url" value={appUrl} onChange={(e) => edit(setAppUrl, e.target.value)} disabled={disabled} spellCheck={false} className={FIELD} />
         </div>
         <div>
-          <label htmlFor="app-login-domains" className="mb-1 block text-xs font-medium text-slate-700">Login domains (one per line)</label>
-          <textarea id="app-login-domains" rows={2} value={domains} onChange={(e) => edit(setDomains, e.target.value)} disabled={disabled} spellCheck={false} className={`${FIELD} font-mono text-xs`} />
+          <button
+            type="button"
+            onClick={() => setAdvanced((v) => !v)}
+            aria-expanded={advanced}
+            aria-controls={advancedId}
+            className="inline-flex items-center gap-1 rounded text-xs font-medium text-slate-600 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <CaretRight size={12} weight="bold" aria-hidden="true" className={`transition-transform motion-reduce:transition-none ${advanced ? 'rotate-90' : ''}`} />
+            Advanced
+          </button>
+          {advanced ? (
+            <div id={advancedId} className="mt-2">
+              <label htmlFor="app-login-domains" className="mb-1 block text-xs font-medium text-slate-700">Login domains (one per line)</label>
+              <textarea
+                id="app-login-domains"
+                rows={2}
+                value={domains}
+                onChange={(e) => edit(setDomains, e.target.value)}
+                disabled={disabled}
+                spellCheck={false}
+                aria-describedby="app-login-domains-help"
+                className={`${FIELD} font-mono text-xs`}
+              />
+              <p id="app-login-domains-help" className="mt-1 text-xs text-slate-500">Only needed if sign-in goes through another website.</p>
+            </div>
+          ) : null}
         </div>
         {sourceError ? <p role="alert" className="text-xs text-rose-600">{sourceError}</p> : null}
-        <button
-          type="submit"
-          disabled={disabled}
-          className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Save app address
-        </button>
-        {savedUrl !== null ? (
-          <p role="status" className="text-xs text-slate-700">
-            Saved: <span className="break-all font-medium">{savedUrl}</span>
-          </p>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <button
+            type="submit"
+            disabled={disabled}
+            className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Save app address
+          </button>
+          {savedUrl !== null ? (
+            <p role="status" className="min-w-0 text-xs text-slate-700">
+              Saved: <span className="break-all font-medium">{savedUrl}</span>
+            </p>
+          ) : null}
+        </div>
       </form>
 
       <div className="space-y-2">
-        <h3 className="text-xs font-medium text-slate-700">Test accounts</h3>
+        <h4 className="text-xs font-medium text-slate-700">Test accounts</h4>
         {setup.accounts.length > 0 ? (
           <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
             {setup.accounts.map((a) => (
-              <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs">
-                <div>
-                  <span className="font-medium text-slate-900">{a.label}</span>
-                  <span className="text-slate-500"> · {AGE_LABEL[a.ageGroup]}{a.age !== null ? ` (${a.age})` : ''} · {a.loginName}</span>
-                  <span className="block text-slate-500">Password saved</span>
-                </div>
-                <div className="flex gap-3">
-                  {canWriteAccounts ? <button type="button" disabled={disabled} onClick={() => setEditing({ kind: 'edit', account: a })} aria-label={`Edit ${a.label}`} className={LINK_BUTTON}>Edit</button> : null}
-                  <button type="button" disabled={disabled} onClick={() => void remove(a)} aria-label={`Remove ${a.label}`} className="rounded text-xs text-rose-600 hover:text-rose-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50">Remove</button>
-                </div>
-              </li>
+              <AccountRow
+                key={a.id}
+                account={a}
+                disabled={disabled}
+                canEdit={canWriteAccounts}
+                onEdit={() => setEditing({ kind: 'edit', account: a })}
+                onRemove={() => void remove(a)}
+              />
             ))}
           </ul>
         ) : (
@@ -129,7 +155,15 @@ export default function AppSetup({ projectId, setup, onSaved, disabled = false, 
             onCancel={() => setEditing(null)}
           />
         ) : canWriteAccounts ? (
-          <button type="button" disabled={disabled} onClick={() => setEditing({ kind: 'new' })} className={LINK_BUTTON}>Add test account</button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => setEditing({ kind: 'new' })}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:border-blue-300 hover:bg-blue-50/50 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Plus size={14} weight="bold" aria-hidden="true" />
+            Add test account
+          </button>
         ) : null}
       </div>
     </div>

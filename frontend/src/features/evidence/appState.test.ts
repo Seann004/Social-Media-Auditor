@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChecklistItem } from '../../types'
-import { APP_STEPS_PER_CHECK, OUTCOME_LABEL, appRunBlocker, currentItemLabel, groupPickItems, toPickItems } from './appState'
+import { APP_STEPS_PER_CHECK, MAX_APP_ITEMS, OUTCOME_LABEL, appRunBlocker, currentItemLabel, groupPickItems, isAppSetupComplete, toPickItems } from './appState'
 import { makeRun } from './testFixtures'
 
 const item = (over: Partial<ChecklistItem>): ChecklistItem => ({
@@ -21,6 +21,13 @@ describe('pick items', () => {
       { id: 'a', guidelineId: 'g1', category: 'Privacy', label: 'Private profiles' },
       { id: 'b', guidelineId: 'g1', category: 'Privacy', label: 'Profiles are private by default' },
     ])
+  })
+
+  it('toPickItems carries the item code and a known severity for the picker', () => {
+    const [coded, plain] = toPickItems([item({ id: 'a', itemCode: 'P-1', severity: 'critical' }), item({ id: 'b', itemCode: '' })])
+    expect(coded).toMatchObject({ code: 'P-1', severity: 'critical' })
+    expect(plain.code).toBeUndefined()
+    expect(plain.severity).toBeUndefined() // 'high' is not a severity the app knows
   })
 
   it('groups the same category name in two guidelines separately', () => {
@@ -59,8 +66,20 @@ describe('appRunBlocker', () => {
   })
 })
 
+describe('isAppSetupComplete', () => {
+  const app = { appUrl: 'https://app.example', loginDomains: [], updatedAt: '2026-11-04T09:00:00.000Z' }
+  const account = { id: 'a1', label: 'Teen', ageGroup: 'under_18' as const, age: 15, loginName: 't', handles: [], hasPassword: true as const, updatedAt: '' }
+  it('needs an address, an account and the server key', () => {
+    expect(isAppSetupComplete({ app, accounts: [account], secretKeyConfigured: true })).toBe(true)
+    expect(isAppSetupComplete({ app: null, accounts: [account], secretKeyConfigured: true })).toBe(false)
+    expect(isAppSetupComplete({ app, accounts: [], secretKeyConfigured: true })).toBe(false)
+    expect(isAppSetupComplete({ app, accounts: [account], secretKeyConfigured: false })).toBe(false)
+  })
+})
+
 describe('constants', () => {
   it('mirrors the backend step limit and outcome labels', () => {
+    expect(MAX_APP_ITEMS).toBe(10)
     expect(APP_STEPS_PER_CHECK).toBe(15)
     expect(OUTCOME_LABEL).toEqual({ done: 'Done', refused: 'Refused', failed: 'Failed', blocked: 'Stopped' })
   })

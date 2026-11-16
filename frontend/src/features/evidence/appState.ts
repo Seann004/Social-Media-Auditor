@@ -1,12 +1,18 @@
 // Pure rules for the "check inside the app" panel. No store access, no mutation.
-import type { ChecklistItem } from '../../types'
+import type { ChecklistItem, Severity } from '../../types'
 import { categoryKey } from './state'
-import type { AppStepOutcome, RunView } from './types'
+import type { AppSetupResponse, AppStepOutcome, RunView } from './types'
 
 /** Mirrors APP_MAX_STEPS_PER_CHECK in backend/src/features/evidence/config.ts. */
 export const APP_STEPS_PER_CHECK = 15
 /** Mirrors the backend's per-run item limit. */
-const MAX_APP_ITEMS = 10
+export const MAX_APP_ITEMS = 10
+/** Shown above the item picker: each item costs AI tokens. */
+export const PICK_TIP = "About 3 items works best on Groq's free plan"
+
+/** Everything an app run needs from set-up: an address, an account and the server's key. */
+export const isAppSetupComplete = (setup: AppSetupResponse): boolean =>
+  setup.app !== null && setup.accounts.length > 0 && setup.secretKeyConfigured
 
 export const OUTCOME_LABEL: Record<AppStepOutcome, string> = {
   done: 'Done',
@@ -20,7 +26,14 @@ export interface PickItem {
   guidelineId: string
   category: string
   label: string
+  /** The item code, such as "P-1", when the guideline has one. */
+  code?: string
+  /** Shown as a chip in the picker; left out when the value is not one the app knows. */
+  severity?: Severity
 }
+
+const SEVERITIES: readonly Severity[] = ['critical', 'major', 'minor']
+const isSeverity = (value: unknown): value is Severity => SEVERITIES.includes(value as Severity)
 
 export function toPickItems(items: readonly ChecklistItem[]): PickItem[] {
   return items.map((item) => ({
@@ -28,19 +41,63 @@ export function toPickItems(items: readonly ChecklistItem[]): PickItem[] {
     guidelineId: item.guidelineId,
     category: item.category,
     label: item.itemName ?? item.text,
+    code: item.itemCode || undefined,
+    severity: isSeverity(item.severity) ? item.severity : undefined,
   }))
 }
 
+export interface PickGroup {
+  key: string
+  guidelineId: string
+  category: string
+  items: PickItem[]
+}
+
 /** Items grouped by guideline and category, in the order they first appear. */
-export function groupPickItems(items: readonly PickItem[]): { key: string; category: string; items: PickItem[] }[] {
-  const groups = new Map<string, { key: string; category: string; items: PickItem[] }>()
+export function groupPickItems(items: readonly PickItem[]): PickGroup[] {
+  const groups = new Map<string, PickGroup>()
   for (const item of items) {
     const key = categoryKey(item.guidelineId, item.category)
     const group = groups.get(key)
     if (group) groups.set(key, { ...group, items: [...group.items, item] })
-    else groups.set(key, { key, category: item.category, items: [item] })
+    else groups.set(key, { key, guidelineId: item.guidelineId, category: item.category, items: [item] })
   }
   return [...groups.values()]
+}
+
+export interface PickSection {
+  guidelineId: string
+  /** How many items the guideline has in this list. */
+  itemCount: number
+  groups: PickGroup[]
+}
+
+/** The category groups gathered under their guideline, in the order each guideline first appears. */
+export function groupPickItemsByGuideline(items: readonly PickItem[]): PickSection[] {
+  const sections = new Map<string, PickSection>()
+  for (const group of groupPickItems(items)) {
+    const section = sections.get(group.guidelineId)
+    if (section) {
+      sections.set(group.guidelineId, { ...section, itemCount: section.itemCount + group.items.length, groups: [...section.groups, group] })
+    } else {
+      sections.set(group.guidelineId, { guidelineId: group.guidelineId, itemCount: group.items.length, groups: [group] })
+    }
+  }
+  return [...sections.values()]
+}
+
+/** What the picker needs to name a guideline. */
+export interface GuidelineLabel {
+  id: string
+  name: string
+  shortName: string
+  version: string
+}
+
+/** "Name · SHORT vX", leaving out what the guideline does not have. */
+export function guidelineTitle(guideline: GuidelineLabel): string {
+  const tag = [guideline.shortName, guideline.version ? `v${guideline.version}` : ''].filter(Boolean).join(' ')
+  return tag ? `${guideline.name} · ${tag}` : guideline.name
 }
 
 export interface AppRunBlockerInput {

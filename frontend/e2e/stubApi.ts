@@ -401,13 +401,15 @@ export async function installStub(page: Page, options: StubOptions): Promise<Stu
   }
 
   const evidence = (route: Route, method: string, path: string): Promise<void> | null => {
-    if (!/^\/(projects\/[^/]+\/(evidence-|ai-suggestions|app-|repo-|test-accounts)|suggestions\/|evidence\/)/.test(path)) return null
+    if (!/^\/(projects\/[^/]+\/(evidence-|ai-suggestions|app-|repo-|test-accounts|item-kinds)|suggestions\/|evidence\/)/.test(path)) return null
     if (options.evidenceDown) {
       return json(route, { error: 'AI evidence assessment is not set up on this server.' }, 503)
     }
     if (options.appDown && /\/(app-|test-accounts)|\/suggestions\/[^/]+\/steps$/.test(path)) {
       return json(route, { error: 'Checking inside the app is not set up on this server.' }, 503)
     }
+    // The AI's item kinds: none is sure here, so the picker and the cards show no hint.
+    if (path.endsWith('/item-kinds') && method === 'POST') return json(route, { kinds: {} })
     if (path.endsWith('/evidence-sources')) return sources(route, method)
     if (path.endsWith('/app-setup')) return json(route, { app: appSource, accounts, secretKeyConfigured: true })
     if (path.endsWith('/app-source') && method === 'PUT') {

@@ -7,7 +7,9 @@
     "dev": "npx tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "benchmark": "npx tsx benchmarks/run.ts",
+    "benchmark:classify": "npx tsx benchmarks/classifyMain.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",
