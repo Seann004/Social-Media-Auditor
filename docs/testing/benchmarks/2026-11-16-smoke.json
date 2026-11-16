@@ -1,0 +1,125 @@
+{
+  "meta": {
+    "startedAt": "2026-11-15T17:08:51.310Z",
+    "label": "smoke",
+    "model": "openai/gpt-oss-120b",
+    "repeats": 1,
+    "maxTokens": 400000,
+    "commit": "294c24f",
+    "stoppedEarly": null
+  },
+  "summary": {
+    "all": {
+      "cases": 1,
+      "repeats": 1,
+      "scored": 1,
+      "correct": 1,
+      "wrong": 0,
+      "notSettled": 0,
+      "unproven": 0,
+      "errors": 0,
+      "accuracy": 1,
+      "coverage": 1,
+      "wrongClaimRate": 0,
+      "stability": null,
+      "averageSteps": 8,
+      "totalTokens": 12048,
+      "averageTokens": 12048,
+      "totalSeconds": 33.876,
+      "averageSeconds": 33.876
+    },
+    "app": {
+      "cases": 1,
+      "repeats": 1,
+      "scored": 1,
+      "correct": 1,
+      "wrong": 0,
+      "notSettled": 0,
+      "unproven": 0,
+      "errors": 0,
+      "accuracy": 1,
+      "coverage": 1,
+      "wrongClaimRate": 0,
+      "stability": null,
+      "averageSteps": 8,
+      "totalTokens": 12048,
+      "averageTokens": 12048,
+      "totalSeconds": 33.876,
+      "averageSeconds": 33.876
+    },
+    "repo": {
+      "cases": 0,
+      "repeats": 0,
+      "scored": 0,
+      "correct": 0,
+      "wrong": 0,
+      "notSettled": 0,
+      "unproven": 0,
+      "errors": 0,
+      "accuracy": null,
+      "coverage": null,
+      "wrongClaimRate": null,
+      "stability": null,
+      "averageSteps": null,
+      "totalTokens": 0,
+      "averageTokens": null,
+      "totalSeconds": 0,
+      "averageSeconds": null
+    }
+  },
+  "cases": [
+    {
+      "caseId": "app-private-off",
+      "source": "app",
+      "expected": "no",
+      "alsoAcceptable": [],
+      "answers": [
+        "no"
+      ],
+      "outcomes": [
+        "correct"
+      ],
+      "stable": null,
+      "item": "Is the Teen 15 account currently private?",
+      "why": "teen15 is public (privateAccount.teen15 false). On /settings Teen 15's \"Private account\" switch reads Off, and Adult 30 opening /u/teen15 sees a Message link instead of \"This account is private\".",
+      "kinds": [
+        "clear"
+      ]
+    }
+  ],
+  "records": [
+    {
+      "caseId": "app-private-off",
+      "source": "app",
+      "repeat": 1,
+      "answer": "no",
+      "reason": "The Settings page for the Teen 15 account shows the \"Private account\" option is set to Off, indicating the account is not private.",
+      "quotes": [
+        {
+          "text": "Settings Private account Off Show activity status Save Delete account Change password Log out More settings Post privacy Notifications Contact and birthday Messaging Sharing",
+          "verified": true
+        },
+        {
+          "text": "e1 switch \"Private account\" [off]",
+          "verified": true
+        }
+      ],
+      "flags": [],
+      "runStatus": "completed",
+      "runError": null,
+      "tokens": 12048,
+      "seconds": 33.876,
+      "steps": 8,
+      "lines": [
+        "Step 1 · Teen 15 · switched to Teen 15 → page /login opened",
+        "Step 2 · Teen 15 · filled the login of Teen 15 into \"Username\" → page unchanged",
+        "Step 3 · Teen 15 · filled the password of Teen 15 into \"Password\" → page unchanged",
+        "Step 4 · Teen 15 · filled the login of Teen 15 into \"Username\" → page unchanged",
+        "Step 5 · Teen 15 · clicked button \"Sign in\" → page /home opened",
+        "Step 6 · Teen 15 · clicked link \"Settings\" → page /settings opened",
+        "Step 7 · Teen 15 · Asked to look further: finished the check. Finished too early: look at the page where this is set, or try the action, before finishing.",
+        "Step 8 · Teen 15 · finished the check"
+      ]
+    }
+  ]
+}
