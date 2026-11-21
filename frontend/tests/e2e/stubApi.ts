@@ -2,7 +2,8 @@
 // Shapes follow backend/src/features/evidence/views.ts through src/features/evidence/types.ts.
 import type { Locator, Page, Route } from '@playwright/test'
 
-export const APP_ORIGIN = 'http://127.0.0.1:5199'
+// Same port as playwright.config.ts, so the stubs let the app's own files through on any E2E_PORT.
+export const APP_ORIGIN = `http://127.0.0.1:${process.env.E2E_PORT ?? 5199}`
 const API_ORIGIN = 'http://127.0.0.1:5198'
 export const PROJECT_ID = 'p1'
 

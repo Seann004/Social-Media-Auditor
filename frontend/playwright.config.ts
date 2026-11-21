@@ -1,12 +1,14 @@
 import { defineConfig } from '@playwright/test'
 
 // A spare port, so a dev server on 5173 is never reused or disturbed.
-const APP_PORT = 5199
+const APP_PORT = Number(process.env.E2E_PORT ?? 5199)
 // Nothing listens here: every request to it is answered by a stub in the test.
 const API_PLACEHOLDER = 'http://127.0.0.1:5198'
 
 export default defineConfig({
   testDir: './tests/e2e',
+  // Compiles the app once before the first test, so that test is not charged for Vite's cold start.
+  globalSetup: './tests/e2e/warmUp.ts',
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
