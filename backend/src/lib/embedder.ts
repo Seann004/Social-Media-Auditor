@@ -3,6 +3,7 @@
  * Providers: Google's Gemini embedding API (free key from Google AI Studio) and Hugging Face's Inference API.
  * Without a key there is no embedder (null) and every caller falls back to word matching, so the feature is optional.
  */
+import { retryOnNetworkFailure } from '../features/evidence/networkRetry.js'
 import { wait } from './groq.js'
 
 export type EmbedPurpose = 'document' | 'query'
@@ -27,8 +28,11 @@ const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
 /** The most texts Gemini takes in one batch request. */
 const GEMINI_MAX_BATCH = 100
 const DEFAULT_BATCH_SIZE = 32
-const DEFAULT_RETRY_WAIT_MS = 5_000
-const RETRIES = 3
+const DEFAULT_RETRY_WAIT_MS = 10_000
+/** The free tier limits requests and tokens per minute, so a busy answer is waited out for a while. */
+const RETRIES = 5
+/** The longest single wait for a busy answer, whatever the server asks. */
+const MAX_RETRY_WAIT_MS = 65_000
 /** Texts are cut here before sending: a requirement or a passage never needs more for its meaning. */
 const MAX_TEXT_CHARS = 2_000
 
@@ -72,24 +76,42 @@ interface Call {
   /** Statuses that mean "try again in a moment". */
   retryOn: readonly number[]
   retryWaitMs: number
+  networkDelaysMs: readonly number[]
 }
 
-/** One request, tried again a few times on a busy or loading answer. Only the status is ever in an error: a body can echo the key. */
+/** Waits before each extra try when the connection itself fails (a reset, a time-out, "fetch failed"). */
+const NETWORK_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000, 8_000]
+
+/**
+ * One request, tried again a few times on a busy or loading answer, and again when the connection fails.
+ * Only the status is ever in an error: a body can echo the key.
+ */
 async function post(call: Call): Promise<unknown> {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(call.url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...call.headers },
-      body: JSON.stringify(call.body),
-      ...(call.signal === undefined ? {} : { signal: call.signal }),
-    })
+    const res = await retryOnNetworkFailure(
+      () =>
+        fetch(call.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...call.headers },
+          body: JSON.stringify(call.body),
+          ...(call.signal === undefined ? {} : { signal: call.signal }),
+        }),
+      { label: 'embedding call', delaysMs: call.networkDelaysMs, ...(call.signal === undefined ? {} : { signal: call.signal }) },
+    )
     if (call.retryOn.includes(res.status) && attempt < RETRIES) {
-      await wait(call.retryWaitMs * (attempt + 1), call.signal)
+      const asked = Number(res.headers.get('retry-after')) * 1000
+      const own = call.retryWaitMs * (attempt + 1)
+      await wait(call.retryWaitMs === 0 ? 0 : Math.min(MAX_RETRY_WAIT_MS, Number.isFinite(asked) && asked > 0 ? Math.max(asked, own) : own), call.signal)
       continue
     }
     if (!res.ok) throw new Error(`Embedding request failed with status ${res.status}`)
     return res.json()
   }
+}
+
+/** EMBEDDING_RETRY_WAIT_MS=0 (tests) also removes the waits between network tries. */
+function networkDelays(env: Env): readonly number[] {
+  return wholeNumber(env.EMBEDDING_RETRY_WAIT_MS, DEFAULT_RETRY_WAIT_MS) === 0 ? [0, 0, 0] : NETWORK_RETRY_DELAYS_MS
 }
 
 function chunks<T>(list: readonly T[], size: number): T[][] {
@@ -119,7 +141,7 @@ function createGeminiEmbedder(env: Env, key: string): Embedder {
           })),
         }
         // The key goes in a header, never in the address, so it is not in any log line that prints the address.
-        const reply = (await post({ url: base, headers: { 'x-goog-api-key': key }, body, signal, retryOn: [429, 500, 503], retryWaitMs })) as {
+        const reply = (await post({ url: base, headers: { 'x-goog-api-key': key }, body, signal, retryOn: [429, 500, 503], retryWaitMs, networkDelaysMs: networkDelays(env) })) as {
           embeddings?: { values?: unknown }[]
         }
         const vectors = (reply.embeddings ?? []).map((e) => e.values)
@@ -145,7 +167,7 @@ function createHuggingFaceEmbedder(env: Env, token: string): Embedder {
       const out: number[][] = []
       for (const part of chunks(texts, batchSize)) {
         const body = { inputs: part.map((t) => t.slice(0, MAX_TEXT_CHARS)), options: { wait_for_model: true } }
-        const reply = await post({ url, headers: { Authorization: `Bearer ${token}` }, body, signal, retryOn: [503], retryWaitMs })
+        const reply = await post({ url, headers: { Authorization: `Bearer ${token}` }, body, signal, retryOn: [503], retryWaitMs, networkDelaysMs: networkDelays(env) })
         if (!isVectorList(reply, part.length)) throw new Error('The embedding service returned an unexpected reply')
         out.push(...reply.map(normalise))
       }

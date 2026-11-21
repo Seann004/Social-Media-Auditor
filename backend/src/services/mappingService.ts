@@ -163,7 +163,7 @@ function stem(word: string): string {
   return w
 }
 
-function tokenize(text: string): Set<string> {
+export function tokenize(text: string): Set<string> {
   const words = text.toLowerCase().match(/[a-z]{3,}/g) ?? []
   const out = new Set<string>()
   for (const w of words) {
@@ -172,14 +172,18 @@ function tokenize(text: string): Set<string> {
   return out
 }
 
-function similarity(a: Set<string>, b: Set<string>): number {
+/** Rows such as "N/A" are not requirements: identical placeholders look alike to a vector, and there is nothing to compare. */
+const MIN_CONTENT_WORDS = 3
+export const isRequirement = (tokens: ReadonlySet<string>): boolean => tokens.size >= MIN_CONTENT_WORDS
+
+export function similarity(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0
   let shared = 0
   for (const w of a) if (b.has(w)) shared++
   return shared / Math.sqrt(a.size * b.size)
 }
 
-function itemText(item: GlobalItem): string {
+export function itemText(item: GlobalItem): string {
   return [item.itemName, item.itemDescription, (item.verbatimClauseText ?? '').slice(0, 300)].filter(Boolean).join(' ')
 }
 
@@ -200,7 +204,7 @@ function orderPair(x: string, y: string): [string, string] {
   return a < b ? [a, b] : [b, a]
 }
 
-const MATCH_PROMPT = `You compare requirements from different online child safety guidelines (e.g. Malaysia ONSA 2025, UK Children's Code).
+export const MATCH_PROMPT = `You compare requirements from different online child safety guidelines (e.g. Malaysia ONSA 2025, UK Children's Code).
 Each source item comes with a few candidate items from other guidelines. Decide which candidates check the same obligation.
 
 - "equivalent": an auditor checking one platform would give the same answer to both items.
@@ -213,6 +217,38 @@ Each source item comes with a few candidate items from other guidelines. Decide 
 Return JSON only:
 {"matches":[{"source":"S1","candidate":"C2","relation":"equivalent","confidence":0.85,"reason":"one short sentence"}]}`
 
+/**
+ * Chooses the items of other guidelines to show the AI for one item: by shared words, and by closeness in meaning when
+ * vectors are given, merged. `isNew` leaves out pairs that need no comparing. Exported so that its recall can be measured.
+ */
+export function candidatePicker(
+  others: readonly GlobalItem[],
+  vectors: ReadonlyMap<string, number[]>,
+  isNew: (a: string, b: string) => boolean = () => true,
+  limit: number = CANDIDATES_PER_ITEM,
+): (item: GlobalItem) => GlobalItem[] {
+  const otherTokens = others.map((o) => tokenize(itemText(o)))
+  const byId = new Map(others.map((o) => [o.itemId, o]))
+  const real = new Set(others.filter((o, idx) => isRequirement(otherTokens[idx])).map((o) => o.itemId))
+  return (item) => {
+    const t = tokenize(itemText(item))
+    if (!isRequirement(t)) return []
+    const lexical = others
+      .map((o, idx) => ({ id: o.itemId, score: similarity(t, otherTokens[idx]) }))
+      .filter(({ id, score }) => score >= MIN_SIMILARITY && isNew(item.itemId, id))
+    const mine = vectors.get(item.itemId.toLowerCase())
+    const semantic = mine === undefined
+      ? null
+      : others
+        .flatMap((o) => {
+          const theirs = vectors.get(o.itemId.toLowerCase())
+          return theirs === undefined || !real.has(o.itemId) ? [] : [{ id: o.itemId, score: cosine(mine, theirs) }]
+        })
+        .filter(({ id, score }) => score >= MIN_SEMANTIC_SIMILARITY && isNew(item.itemId, id))
+    return pickCandidates(lexical, semantic, limit).map((id) => byId.get(id) as GlobalItem)
+  }
+}
+
 /** Compares every item of one guideline with the items of all the other guidelines. New pairs are saved as "suggested" for an admin to review. */
 export async function generateMappingsForGuideline(guidelineId: string, ask: AskModel, embedder: Embedder | null = createEmbedder()) {
   const all = await fetchGlobalItems()
@@ -223,33 +259,16 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
 
   const existing = new Set((await fetchMappingRows()).map((m) => `${m.itemIdA}|${m.itemIdB}`))
   const checked = await loadCheckedPairs()
-  const otherTokens = others.map((o) => tokenize(itemText(o)))
   // Without vectors (no embedder, or it failed) this is empty and candidates come from shared words only.
-  const vectors = embedder === null ? new Map<string, number[]>() : await loadItemVectors(all.map((i) => ({ itemId: i.itemId, text: itemText(i) })), embedder)
+  const vectors = embedder === null ? new Map<string, number[]>() : await loadItemVectors(all.filter((i) => isRequirement(tokenize(itemText(i)))).map((i) => ({ itemId: i.itemId, text: itemText(i) })), embedder)
   const isNew = (a: string, b: string): boolean => {
     const key = orderPair(a, b).join('|')
     return !existing.has(key) && !checked.has(key)
   }
+  const pick = candidatePicker(others, vectors, isNew)
 
   const work = own
-    .map((item) => {
-      const t = tokenize(itemText(item))
-      const lexical = others
-        .map((o, idx) => ({ id: o.itemId, score: similarity(t, otherTokens[idx]) }))
-        .filter(({ id, score }) => score >= MIN_SIMILARITY && isNew(item.itemId, id))
-      const mine = vectors.get(item.itemId.toLowerCase())
-      const semantic = mine === undefined
-        ? null
-        : others
-          .flatMap((o) => {
-            const theirs = vectors.get(o.itemId.toLowerCase())
-            return theirs === undefined ? [] : [{ id: o.itemId, score: cosine(mine, theirs) }]
-          })
-          .filter(({ id, score }) => score >= MIN_SEMANTIC_SIMILARITY && isNew(item.itemId, id))
-      const byId = new Map(others.map((o) => [o.itemId, o]))
-      const candidates = pickCandidates(lexical, semantic, CANDIDATES_PER_ITEM).map((id) => byId.get(id) as GlobalItem)
-      return { item, candidates }
-    })
+    .map((item) => ({ item, candidates: pick(item) }))
     .filter((w) => w.candidates.length > 0)
 
   const batches: typeof work[] = []

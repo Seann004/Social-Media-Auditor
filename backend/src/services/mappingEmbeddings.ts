@@ -3,7 +3,7 @@ import { supabase } from '../config/supabase.js'
 import type { Embedder } from '../lib/embedder.js'
 import { fetchAllRows } from './mappingService.js'
 
-const WRITE_CHUNK = 200
+const EMBED_CHUNK = 100
 
 export const textHashOf = (text: string): string => createHash('sha1').update(text).digest('hex')
 
@@ -37,15 +37,22 @@ export async function loadItemVectors(
       if (found && found.textHash === hash) vectors.set(item.itemId.toLowerCase(), found.vector)
       else missing.push({ ...item, hash })
     }
-    if (missing.length > 0) {
-      const made = await embedder.embed(missing.map((m) => m.text))
-      missing.forEach((m, i) => vectors.set(m.itemId.toLowerCase(), made[i]))
-      const rows = missing.map((m, i) => ({ itemId: m.itemId, model: embedder.model, textHash: m.hash, vector: made[i], updatedAt: new Date().toISOString() }))
-      for (let at = 0; at < rows.length; at += WRITE_CHUNK) {
-        const { error } = await supabase.from('Item_Embedding').upsert(rows.slice(at, at + WRITE_CHUNK), { onConflict: 'itemId' })
-        // A vector that was made but not stored is still used now; it is only made again next time.
-        if (error) console.error('Could not store item vectors:', error)
+    // Made and stored a chunk at a time, so that a failure part-way (a rate limit on a first run over the whole
+    // library) keeps what is done, and the next run carries on from there.
+    for (let at = 0; at < missing.length; at += EMBED_CHUNK) {
+      const part = missing.slice(at, at + EMBED_CHUNK)
+      let made: number[][]
+      try {
+        made = await embedder.embed(part.map((m) => m.text))
+      } catch (err) {
+        console.error(`Made ${vectors.size} of ${items.length} item vectors before the embedding service failed; the rest use words only:`, err instanceof Error ? err.message : err)
+        break
       }
+      part.forEach((m, i) => vectors.set(m.itemId.toLowerCase(), made[i]))
+      const rows = part.map((m, i) => ({ itemId: m.itemId, model: embedder.model, textHash: m.hash, vector: made[i], updatedAt: new Date().toISOString() }))
+      const { error } = await supabase.from('Item_Embedding').upsert(rows, { onConflict: 'itemId' })
+      // A vector that was made but not stored is still used now; it is only made again next time.
+      if (error) console.error('Could not store item vectors:', error)
     }
     return vectors
   } catch (err) {

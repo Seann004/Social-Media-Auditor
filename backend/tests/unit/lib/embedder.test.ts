@@ -153,11 +153,25 @@ describe('the Gemini embedder', () => {
     const err = await createEmbedder(G)!.embed(['a']).catch((e: Error) => e)
     expect((err as Error).message).toContain('429')
     expect((err as Error).message).not.toContain('AIza')
-    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
   })
 
   it('throws when the reply has the wrong number of vectors', async () => {
     fetchMock.mockResolvedValueOnce(geminiReply([[1, 0]]))
     await expect(createEmbedder(G)!.embed(['a', 'b'])).rejects.toThrow(/unexpected/i)
+  })
+
+  it('tries again when the connection itself fails ("fetch failed"), then succeeds', async () => {
+    const down = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('reset'), { code: 'ECONNRESET' }) })
+    fetchMock.mockRejectedValueOnce(down).mockRejectedValueOnce(down).mockResolvedValueOnce(geminiReply([[1, 0]]))
+    expect(await createEmbedder(G)!.embed(['a'])).toEqual([[1, 0]])
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('gives up after the last network try', async () => {
+    const down = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('reset'), { code: 'ECONNRESET' }) })
+    fetchMock.mockRejectedValue(down)
+    await expect(createEmbedder(G)!.embed(['a'])).rejects.toThrow(/fetch failed/)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 })

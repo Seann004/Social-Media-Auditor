@@ -754,6 +754,17 @@ describe('generateMappingsForGuideline with an embedder', () => {
     expect(calls.flat().length).toBeGreaterThan(first)
   })
 
+  it('never pairs placeholder rows such as "N/A", whose vectors are identical', async () => {
+    tables.Checklist_Item.push(
+      { itemId: 'na1', checklistId: 'gc1', category: 'Age', itemDescription: 'N/A', itemName: null, itemCode: null, reference: null, verbatimClauseText: null },
+      { itemId: 'na2', checklistId: 'gc2', category: 'Age', itemDescription: 'N/A', itemName: null, itemCode: null, reference: null, verbatimClauseText: null },
+    )
+    const ask = askAll()
+    await mapping.generateMappingsForGuideline('G1', ask, embedderFor({ 'N/A': [1, 0, 0] }))
+    expect(offeredTexts(ask)).not.toContain('N/A')
+    expect(JSON.stringify(ask.mock.calls)).not.toContain('N/A')
+  })
+
   it('falls back to words when the embedder fails', async () => {
     const embedder = { model: 'test-model', embed: vi.fn(async () => { throw new Error('service down') }) }
     const result = await mapping.generateMappingsForGuideline('G1', askMatchingAge(), embedder)

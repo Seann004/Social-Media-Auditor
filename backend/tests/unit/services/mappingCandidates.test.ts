@@ -20,4 +20,15 @@ describe('pickCandidates', () => {
     expect(pickCandidates([s('a', 1), s('b', 1), s('c', 1)], [], 2)).toHaveLength(2)
     expect(pickCandidates([], [], 5)).toEqual([])
   })
+
+  it('gives the meaning list slots even when many words hits score higher', () => {
+    const lexical = Array.from({ length: 10 }, (_, i) => s(`l${i}`, 1 - i / 100))
+    const semantic = [s('m0', 0.95), s('m1', 0.9), s('m2', 0.85)]
+    const picked = pickCandidates(lexical, semantic, 5)
+    expect(picked).toEqual(['m0', 'l0', 'm1', 'l1', 'm2'])
+  })
+
+  it('does not repeat an item both lists found', () => {
+    expect(pickCandidates([s('a', 1), s('b', 0.9)], [s('a', 1), s('c', 0.9)], 4)).toEqual(['a', 'c', 'b'])
+  })
 })
