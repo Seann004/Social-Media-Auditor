@@ -13,6 +13,7 @@ const vectorOf = (text: string): number[] => (text.includes('Profiles of young m
 function fakeEmbedder(calls: string[][] = []) {
   return {
     model: 'test-model',
+    queryPrefix: 'Represent this sentence for searching relevant passages: ',
     embed: vi.fn(async (texts: readonly string[]) => {
       calls.push([...texts])
       return texts.map(vectorOf)
@@ -91,6 +92,6 @@ describe('searching passages by meaning as well as by words', () => {
   })
 
   it('has a similarity floor between related and unrelated vectors', () => {
-    expect(MIN_PASSAGE_SIMILARITY).toBeGreaterThan(0.5)
+    expect(MIN_PASSAGE_SIMILARITY).toBeGreaterThan(0.535)
   })
 })

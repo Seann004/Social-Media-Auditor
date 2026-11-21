@@ -1,21 +1,34 @@
 /**
  * Turns texts into vectors so that items worded differently can still be found as close in meaning.
- * The default provider is Hugging Face's free Inference API with a small open model. Without a token there is
- * no embedder (null) and every caller falls back to word matching, so the feature is optional.
+ * Providers: Google's Gemini embedding API (free key from Google AI Studio) and Hugging Face's Inference API.
+ * Without a key there is no embedder (null) and every caller falls back to word matching, so the feature is optional.
  */
 import { wait } from './groq.js'
+
+export type EmbedPurpose = 'document' | 'query'
 
 export interface Embedder {
   /** Identifies the vectors: vectors of different models are never compared or mixed. */
   readonly model: string
+  /** Text some models want in front of a search question (not in front of the passages). */
+  readonly queryPrefix?: string
   /** One unit-length vector per text, in order. Throws when the provider fails. */
-  embed(texts: readonly string[], signal?: AbortSignal): Promise<number[][]>
+  embed(texts: readonly string[], signal?: AbortSignal, purpose?: EmbedPurpose): Promise<number[][]>
 }
 
-const DEFAULT_MODEL = 'BAAI/bge-small-en-v1.5'
+type Env = Record<string, string | undefined>
+
+const HF_DEFAULT_MODEL = 'BAAI/bge-small-en-v1.5'
+const HF_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: '
+const GEMINI_DEFAULT_MODEL = 'gemini-embedding-001'
+/** The model gives 3072 numbers by default; a shorter vector is far cheaper to store and compare and loses little. */
+const GEMINI_DEFAULT_DIMENSIONS = 768
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
+/** The most texts Gemini takes in one batch request. */
+const GEMINI_MAX_BATCH = 100
 const DEFAULT_BATCH_SIZE = 32
 const DEFAULT_RETRY_WAIT_MS = 5_000
-const MODEL_LOADING_RETRIES = 3
+const RETRIES = 3
 /** Texts are cut here before sending: a requirement or a passage never needs more for its meaning. */
 const MAX_TEXT_CHARS = 2_000
 
@@ -38,9 +51,9 @@ export function cosine(a: readonly number[], b: readonly number[]): number {
   return la === 0 || lb === 0 ? 0 : dot / Math.sqrt(la * lb)
 }
 
-function positiveInt(raw: string | undefined, fallback: number): number {
+function wholeNumber(raw: string | undefined, fallback: number): number {
   const n = Number(raw)
-  return Number.isInteger(n) && n >= 0 && raw !== undefined && raw.trim() !== '' ? n : fallback
+  return raw !== undefined && raw.trim() !== '' && Number.isInteger(n) && n >= 0 ? n : fallback
 }
 
 function isVectorList(value: unknown, count: number): value is number[][] {
@@ -51,44 +64,105 @@ function isVectorList(value: unknown, count: number): value is number[][] {
   )
 }
 
-/** The embedder the environment asks for, or null when there is none (no token, or EMBEDDINGS=off). */
-export function createEmbedder(env: Record<string, string | undefined> = process.env): Embedder | null {
-  const token = env.HF_API_TOKEN?.trim()
-  if (!token || env.EMBEDDINGS === 'off') return null
-  const model = env.EMBEDDING_MODEL?.trim() || DEFAULT_MODEL
-  const url = env.HF_EMBEDDING_URL?.trim() || `https://router.huggingface.co/hf-inference/models/${model}/pipeline/feature-extraction`
-  const batchSize = Math.max(1, positiveInt(env.EMBEDDING_BATCH_SIZE, DEFAULT_BATCH_SIZE))
-  const retryWaitMs = positiveInt(env.EMBEDDING_RETRY_WAIT_MS, DEFAULT_RETRY_WAIT_MS)
+interface Call {
+  url: string
+  headers: Record<string, string>
+  body: unknown
+  signal: AbortSignal | undefined
+  /** Statuses that mean "try again in a moment". */
+  retryOn: readonly number[]
+  retryWaitMs: number
+}
 
-  async function embedBatch(texts: string[], signal: AbortSignal | undefined): Promise<number[][]> {
-    for (let attempt = 0; ; attempt++) {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ inputs: texts.map((t) => t.slice(0, MAX_TEXT_CHARS)), options: { wait_for_model: true } }),
-        ...(signal === undefined ? {} : { signal }),
-      })
-      // 503 means the model is still loading on the free tier: wait, then ask again.
-      if (res.status === 503 && attempt < MODEL_LOADING_RETRIES) {
-        await wait(retryWaitMs, signal)
-        continue
-      }
-      // Status only: the body of an error can echo the request, and the request holds the token.
-      if (!res.ok) throw new Error(`Embedding request failed with status ${res.status}`)
-      const body: unknown = await res.json()
-      if (!isVectorList(body, texts.length)) throw new Error('The embedding service returned an unexpected reply')
-      return body.map(normalise)
+/** One request, tried again a few times on a busy or loading answer. Only the status is ever in an error: a body can echo the key. */
+async function post(call: Call): Promise<unknown> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(call.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...call.headers },
+      body: JSON.stringify(call.body),
+      ...(call.signal === undefined ? {} : { signal: call.signal }),
+    })
+    if (call.retryOn.includes(res.status) && attempt < RETRIES) {
+      await wait(call.retryWaitMs * (attempt + 1), call.signal)
+      continue
     }
+    if (!res.ok) throw new Error(`Embedding request failed with status ${res.status}`)
+    return res.json()
   }
+}
+
+function chunks<T>(list: readonly T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size))
+  return out
+}
+
+function createGeminiEmbedder(env: Env, key: string): Embedder {
+  const name = env.EMBEDDING_MODEL?.trim() || GEMINI_DEFAULT_MODEL
+  const dimensions = Math.max(1, wholeNumber(env.EMBEDDING_DIMENSIONS, GEMINI_DEFAULT_DIMENSIONS))
+  const batchSize = Math.min(GEMINI_MAX_BATCH, Math.max(1, wholeNumber(env.EMBEDDING_BATCH_SIZE, GEMINI_MAX_BATCH)))
+  const retryWaitMs = wholeNumber(env.EMBEDDING_RETRY_WAIT_MS, DEFAULT_RETRY_WAIT_MS)
+  const base = env.GEMINI_EMBEDDING_URL?.trim() || `${GEMINI_BASE_URL}/models/${name}:batchEmbedContents`
 
   return {
-    model,
-    async embed(texts, signal) {
+    model: `${name}@${dimensions}`,
+    async embed(texts, signal, purpose = 'document') {
       const out: number[][] = []
-      for (let i = 0; i < texts.length; i += batchSize) {
-        out.push(...(await embedBatch(texts.slice(i, i + batchSize) as string[], signal)))
+      for (const part of chunks(texts, batchSize)) {
+        const body = {
+          requests: part.map((text) => ({
+            model: `models/${name}`,
+            content: { parts: [{ text: text.slice(0, MAX_TEXT_CHARS) }] },
+            taskType: purpose === 'query' ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT',
+            outputDimensionality: dimensions,
+          })),
+        }
+        // The key goes in a header, never in the address, so it is not in any log line that prints the address.
+        const reply = (await post({ url: base, headers: { 'x-goog-api-key': key }, body, signal, retryOn: [429, 500, 503], retryWaitMs })) as {
+          embeddings?: { values?: unknown }[]
+        }
+        const vectors = (reply.embeddings ?? []).map((e) => e.values)
+        if (!isVectorList(vectors, part.length)) throw new Error('The embedding service returned an unexpected reply')
+        // A shortened vector is no longer unit length.
+        out.push(...vectors.map(normalise))
       }
       return out
     },
   }
+}
+
+function createHuggingFaceEmbedder(env: Env, token: string): Embedder {
+  const model = env.EMBEDDING_MODEL?.trim() || HF_DEFAULT_MODEL
+  const url = env.HF_EMBEDDING_URL?.trim() || `https://router.huggingface.co/hf-inference/models/${model}/pipeline/feature-extraction`
+  const batchSize = Math.max(1, wholeNumber(env.EMBEDDING_BATCH_SIZE, DEFAULT_BATCH_SIZE))
+  const retryWaitMs = wholeNumber(env.EMBEDDING_RETRY_WAIT_MS, DEFAULT_RETRY_WAIT_MS)
+
+  return {
+    model,
+    queryPrefix: HF_QUERY_PREFIX,
+    async embed(texts, signal) {
+      const out: number[][] = []
+      for (const part of chunks(texts, batchSize)) {
+        const body = { inputs: part.map((t) => t.slice(0, MAX_TEXT_CHARS)), options: { wait_for_model: true } }
+        const reply = await post({ url, headers: { Authorization: `Bearer ${token}` }, body, signal, retryOn: [503], retryWaitMs })
+        if (!isVectorList(reply, part.length)) throw new Error('The embedding service returned an unexpected reply')
+        out.push(...reply.map(normalise))
+      }
+      return out
+    },
+  }
+}
+
+/**
+ * The embedder the environment asks for, or null when there is none (no key, or EMBEDDINGS=off).
+ * GEMINI_API_KEY wins over HF_API_TOKEN when both are set.
+ */
+export function createEmbedder(env: Env = process.env): Embedder | null {
+  if (env.EMBEDDINGS === 'off') return null
+  const gemini = env.GEMINI_API_KEY?.trim()
+  if (gemini) return createGeminiEmbedder(env, gemini)
+  const hf = env.HF_API_TOKEN?.trim()
+  if (hf) return createHuggingFaceEmbedder(env, hf)
+  return null
 }

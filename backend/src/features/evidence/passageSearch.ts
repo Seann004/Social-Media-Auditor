@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { cosine, type Embedder } from '../../lib/embedder.js'
+import { cosine, type EmbedPurpose, type Embedder } from '../../lib/embedder.js'
 import { pickCandidates } from '../../services/mappingCandidates.js'
 import { logRunProblem, type RunCtx } from './runnerShared.js'
 import type { Passage } from './types.js'
@@ -7,12 +7,10 @@ import type { Passage } from './types.js'
 /** How many passages each of the two searches (words, meaning) hands to the merge. */
 export const HYBRID_POOL = 15
 /**
- * The lowest cosine of a passage and the question that counts as close in meaning. A starting value for a small
- * English model, where unrelated texts usually score 0.4 to 0.5; tune it against the page benchmark.
+ * The lowest cosine of a passage and the question that counts as close in meaning. Measured once with
+ * gemini-embedding-001: a passage with the same meaning scored 0.73 and an unrelated one 0.54. Tune it against the page benchmark.
  */
-export const MIN_PASSAGE_SIMILARITY = 0.55
-/** bge models search best when the question carries this prefix; the passages do not. */
-const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: '
+export const MIN_PASSAGE_SIMILARITY = 0.65
 const CACHE_LIMIT = 20_000
 
 /** Vectors by model and text, kept while the server runs, so a re-assess does not ask the service again for the same passage. */
@@ -34,20 +32,22 @@ async function passagesOfRun(ctx: RunCtx): Promise<Passage[]> {
   return loading
 }
 
-async function vectorsFor(embedder: Embedder, texts: readonly string[], signal: AbortSignal): Promise<number[][]> {
-  const missing = [...new Set(texts.filter((t) => !vectorCache.has(cacheKey(embedder.model, t))))]
+async function vectorsFor(embedder: Embedder, texts: readonly string[], signal: AbortSignal, purpose: EmbedPurpose = 'document'): Promise<number[][]> {
+  // A question and a passage with the same words are different vectors for some models, so the purpose is part of the key.
+  const keyOf = (t: string): string => cacheKey(`${embedder.model}|${purpose}`, t)
+  const missing = [...new Set(texts.filter((t) => !vectorCache.has(keyOf(t))))]
   if (missing.length > 0) {
-    const made = await embedder.embed(missing, signal)
+    const made = await embedder.embed(missing, signal, purpose)
     if (vectorCache.size + missing.length > CACHE_LIMIT) vectorCache.clear()
-    missing.forEach((t, i) => vectorCache.set(cacheKey(embedder.model, t), made[i]))
+    missing.forEach((t, i) => vectorCache.set(keyOf(t), made[i]))
   }
-  return texts.map((t) => vectorCache.get(cacheKey(embedder.model, t)) as number[])
+  return texts.map((t) => vectorCache.get(keyOf(t)) as number[])
 }
 
 async function closeInMeaning(ctx: RunCtx, embedder: Embedder, query: string): Promise<Passage[]> {
   const all = await passagesOfRun(ctx)
   if (all.length === 0) return []
-  const [question] = await vectorsFor(embedder, [`${QUERY_PREFIX}${query}`], ctx.signal)
+  const [question] = await vectorsFor(embedder, [`${embedder.queryPrefix ?? ''}${query}`], ctx.signal, 'query')
   const vectors = await vectorsFor(embedder, all.map((p) => p.text), ctx.signal)
   return all
     .map((p, i) => ({ p, score: cosine(question, vectors[i]) }))

@@ -93,3 +93,71 @@ describe('createEmbedder', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+describe('the Gemini embedder', () => {
+  const G = { GEMINI_API_KEY: 'AIza-test-key', EMBEDDING_RETRY_WAIT_MS: '0' }
+  const geminiReply = (vectors: number[][]) => new Response(JSON.stringify({ embeddings: vectors.map((values) => ({ values })) }), { status: 200 })
+
+  it('is chosen over Hugging Face when both keys are set, and off with EMBEDDINGS=off', () => {
+    expect(createEmbedder({ ...G, HF_API_TOKEN: 'hf_x' })!.model).toContain('gemini-embedding-001')
+    expect(createEmbedder({ ...G, EMBEDDINGS: 'off' })).toBeNull()
+  })
+
+  it('names the model with its size, so vectors of another size are never mixed', () => {
+    expect(createEmbedder(G)!.model).toBe('gemini-embedding-001@768')
+    expect(createEmbedder({ ...G, EMBEDDING_DIMENSIONS: '256' })!.model).toBe('gemini-embedding-001@256')
+  })
+
+  it('sends the key in a header, not in the address, with the task type and size', async () => {
+    fetchMock.mockResolvedValueOnce(geminiReply([[3, 4]]))
+    const out = await createEmbedder(G)!.embed(['hello'], undefined, 'query')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).not.toContain('AIza-test-key')
+    expect(init.headers['x-goog-api-key']).toBe('AIza-test-key')
+    const request = JSON.parse(init.body).requests[0]
+    expect(request).toMatchObject({ model: 'models/gemini-embedding-001', taskType: 'RETRIEVAL_QUERY', outputDimensionality: 768 })
+    expect(request.content.parts[0].text).toBe('hello')
+    expect(out[0][0]).toBeCloseTo(0.6)
+  })
+
+  it('uses the document task type by default', async () => {
+    fetchMock.mockResolvedValueOnce(geminiReply([[1, 0]]))
+    await createEmbedder(G)!.embed(['a'])
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).requests[0].taskType).toBe('RETRIEVAL_DOCUMENT')
+  })
+
+  it('sends no query prefix, which only the bge models want', () => {
+    expect(createEmbedder(G)!.queryPrefix).toBeUndefined()
+  })
+
+  it('splits long lists into batches of at most 100 and keeps the order', async () => {
+    fetchMock.mockImplementation(async (_url: string, init: { body: string }) => {
+      const requests = JSON.parse(init.body).requests as { content: { parts: { text: string }[] } }[]
+      return geminiReply(requests.map((r) => [Number(r.content.parts[0].text) + 1, 1]))
+    })
+    const texts = Array.from({ length: 230 }, (_, i) => String(i))
+    const out = await createEmbedder(G)!.embed(texts)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(out).toHaveLength(230)
+    expect(out[229][0]).toBeGreaterThan(out[0][0])
+  })
+
+  it('waits and tries again when the free tier says too many requests (429)', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('slow down', { status: 429 })).mockResolvedValueOnce(geminiReply([[1, 0]]))
+    expect(await createEmbedder(G)!.embed(['a'])).toEqual([[1, 0]])
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('gives up after the last try and reports the status without the key', async () => {
+    fetchMock.mockResolvedValue(new Response('quota AIza-test-key', { status: 429 }))
+    const err = await createEmbedder(G)!.embed(['a']).catch((e: Error) => e)
+    expect((err as Error).message).toContain('429')
+    expect((err as Error).message).not.toContain('AIza')
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('throws when the reply has the wrong number of vectors', async () => {
+    fetchMock.mockResolvedValueOnce(geminiReply([[1, 0]]))
+    await expect(createEmbedder(G)!.embed(['a', 'b'])).rejects.toThrow(/unexpected/i)
+  })
+})

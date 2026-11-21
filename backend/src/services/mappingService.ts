@@ -51,10 +51,10 @@ const MIN_SIMILARITY = 0.12
 const ITEMS_PER_PROMPT = 8
 const CLAUSE_CHARS = 150
 /**
- * The lowest cosine of two item vectors that counts as close in meaning. A starting value for a small English model,
- * where unrelated texts usually score 0.4 to 0.5; tune it against pairs the admin has decided.
+ * The lowest cosine of two item vectors that counts as close in meaning. Measured once with gemini-embedding-001: a
+ * paraphrase of the same requirement scored 0.85 and unrelated text 0.69. Tune it against pairs the admin has decided.
  */
-export const MIN_SEMANTIC_SIMILARITY = 0.6
+export const MIN_SEMANTIC_SIMILARITY = 0.75
 /** How many matching prompts may be in flight at once. */
 export const MAPPING_CONCURRENCY = 3
 
