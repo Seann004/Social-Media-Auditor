@@ -1,5 +1,5 @@
 {
-  "when": "2026-11-21T10:23:24.344Z",
+  "when": "2026-11-21T12:42:27.761Z",
   "results": [
     {
       "id": "FT-01a",
@@ -198,7 +198,7 @@
       "requirement": "Compliance score",
       "test": "Compliance score is computed from the answers",
       "expected": "200 with a score per guideline",
-      "actual": "200; [{\"scoreId\":\"8b4da71c-c748-46bf-9037-99a94882660a\",\"guidelineId\":\"8aa68c4d-12d0-449d-9c5a-a75b367b1d0d\",\"guidelineName\":\"Overlap Test A (Code)\",\"shortName\":\"TES",
+      "actual": "200; [{\"scoreId\":\"c35cf860-4f49-4205-b519-de3f4050b296\",\"guidelineId\":\"05e41b37-414d-4662-b541-36a5cab95235\",\"guidelineName\":\"Overlap Test A (Code)\",\"shortName\":\"TES",
       "pass": true
     },
     {
@@ -316,8 +316,8 @@
   ],
   "scoreSample": [
     {
-      "scoreId": "8b4da71c-c748-46bf-9037-99a94882660a",
-      "guidelineId": "8aa68c4d-12d0-449d-9c5a-a75b367b1d0d",
+      "scoreId": "c35cf860-4f49-4205-b519-de3f4050b296",
+      "guidelineId": "05e41b37-414d-4662-b541-36a5cab95235",
       "guidelineName": "Overlap Test A (Code)",
       "shortName": "TESTA",
       "totalItems": 5,
@@ -327,39 +327,39 @@
       "notApplicableItems": 1,
       "weightedCompliant": 2.5,
       "scorePercentage": 62.5,
-      "timeCalculated": "2026-11-21T10:23:00.910Z"
+      "timeCalculated": "2026-11-21T12:42:01.946Z"
     }
   ],
   "genSample": [
     {
       "id": "4.1-privacy-default",
       "category": "Privacy Settings",
-      "text": "Verify that the platform automatically applies the highest privacy settings for users identified as children under 18.",
+      "text": "Does the platform set the highest privacy settings by default for users identified as children under 18?",
       "severity": "critical",
       "reference": "Section 4.1",
-      "helpText": "Check the account creation flow and any age‑verification mechanism to see if the default privacy configuration (e.g., profile visibility, data sharing, personalized ads) is set to the most restrictive level for users under 18. Evidence can include screenshots of default settings, configuration files, or API responses showing privacy flags."
+      "helpText": "Check the account creation flow and any age‑verification logic. Verify that for accounts flagged as under‑18 the default privacy configuration (e.g., profile visibility, data sharing, personalized ads) is set to the most restrictive option without user action."
     },
     {
-      "id": "4.2-location-off",
-      "category": "Location Privacy",
-      "text": "Confirm that geolocation services are disabled by default for child users.",
+      "id": "4.2-geolocation-default",
+      "category": "Location",
+      "text": "Are geolocation features disabled by default for child users?",
       "severity": "critical",
       "reference": "Section 4.2",
-      "helpText": "Inspect the settings page or onboarding flow for child accounts to ensure the location toggle is set to 'off' before any user interaction. Review code or configuration that sets the default value for location permissions for users flagged as under‑age."
+      "helpText": "Inspect the app settings and API calls for location permissions when a child account is created. Confirm that the location permission is set to 'off' or not requested until the child explicitly enables it."
     },
     {
       "id": "4.2-location-indicator",
-      "category": "Location Privacy",
-      "text": "Check that an obvious visual indicator is displayed whenever location tracking is active for a child user.",
+      "category": "Transparency",
+      "text": "Is an obvious sign displayed to child users when location tracking is active?",
       "severity": "major",
       "reference": "Section 4.2",
-      "helpText": "Observe the UI while location services are enabled for a child account. Look for persistent icons, banners, or notifications that clearly inform the user that their location is being tracked. Capture screenshots or video as proof."
+      "helpText": "Review the UI during any active location session. Look for a persistent, clearly visible indicator (icon, banner, or notification) that informs the child that their location is being tracked."
     }
   ],
   "before": {
     "Audit_Project": 21,
     "Audit_Report": 13,
-    "Audit_Result": 297,
+    "Audit_Result": 299,
     "Checklist": 34,
     "Checklist_Item": 1491,
     "Checklist_Resolution": 1,
@@ -372,7 +372,7 @@
   "after": {
     "Audit_Project": 21,
     "Audit_Report": 13,
-    "Audit_Result": 297,
+    "Audit_Result": 299,
     "Checklist": 34,
     "Checklist_Item": 1491,
     "Checklist_Resolution": 1,

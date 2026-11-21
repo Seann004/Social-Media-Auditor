@@ -1,8 +1,10 @@
 // Run from backend/ with the server running on FT_API (default http://127.0.0.1:3917):
-//   PORT=3917 npx tsx src/server.ts   then   node scripts/functionalTest.cjs ../docs/testing/<date>-functional-results.json
+//   PORT=3917 npx tsx src/server.ts   then   npm run test:functional [-- <results.json>]
+// Results go to docs/testing/<today>-functional-results.json unless a path is given.
+// Not part of `npm test`: it writes to the real database, so it only runs when asked for.
 // Functional test pass over the core API, against a locally started backend and the real Supabase database.
 // Creates one scratch project, then deletes it and checks that every table is back to its earlier row count.
-const path = require('path').resolve(__dirname, '..') + '/'
+const path = require('path').resolve(__dirname, '..', '..') + '/'
 const req = require('module').createRequire(path + 'package.json')
 req('dotenv').config({ path: path + '.env' })
 const crypto = require('crypto')
@@ -10,7 +12,7 @@ const fs = require('fs')
 const { createClient } = req('@supabase/supabase-js')
 
 const API = process.env.FT_API || 'http://127.0.0.1:3917'
-const OUT = process.argv[2]
+const OUT = process.argv[2] || require('path').resolve(path, '..', 'docs', 'testing', `${new Date().toISOString().slice(0, 10)}-functional-results.json`)
 const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 const TABLES = ['Audit_Project', 'Audit_Report', 'Audit_Result', 'Checklist', 'Checklist_Item', 'Checklist_Resolution', 'Guideline', 'Project_Member', 'Project_Scope', 'User', 'Item_Mapping']
 const ACCOUNTS = {

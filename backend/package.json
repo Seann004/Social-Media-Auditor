@@ -11,6 +11,7 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:security": "vitest run tests/security",
+    "test:functional": "node tests/functional/functionalTest.cjs",
     "benchmark": "npx tsx benchmarks/run.ts",
     "benchmark:classify": "npx tsx benchmarks/classifyMain.ts"
   },
