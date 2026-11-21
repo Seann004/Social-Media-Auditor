@@ -1,18 +1,12 @@
 import { createClient } from '@supabase/supabase-js'
 import dotenv from 'dotenv'
+import { backendSupabaseKey } from './supabaseKey.js'
 
 dotenv.config()
 
 const supabaseUrl = process.env.SUPABASE_URL || ''
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || ''
+const { key, warning } = backendSupabaseKey(process.env)
+if (warning) console.error(`[supabase] ${warning}`)
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
-
-export function getSupabaseClient(authHeader?: string) {
-  if (authHeader) {
-    return createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } }
-    })
-  }
-  return supabase
-}
+/** The backend's database client. It never reaches the browser, which only holds the anon key. */
+export const supabase = createClient(supabaseUrl, key, { auth: { persistSession: false } })
