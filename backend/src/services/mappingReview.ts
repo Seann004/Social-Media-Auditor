@@ -11,6 +11,7 @@ import {
   type MappingRow,
   type MappingStatus,
 } from './mappingService.js'
+import { cachedRanking, invalidateMappingCache } from './mappingCache.js'
 import { buildCalibration, levelOf, MIN_DECISIONS_TO_SHOW, type Calibration, type ConfidenceLevel } from './calibration.js'
 
 /**
@@ -89,10 +90,23 @@ export async function fetchLibraryItemUsage(): Promise<Map<string, Set<string>>>
   return usage
 }
 
+/**
+ * A decision counts as an example of how right the AI was only when the admin made it on that pair alone. Bulk
+ * decisions are left out, because approving a whole list at once says little about each pair. The relation is the
+ * one the AI gave, not the one the admin may have changed it to.
+ */
+function isExample(row: MappingRow): boolean {
+  return (row.status === 'confirmed' || row.status === 'rejected') && row.reviewMethod !== 'bulk'
+}
+
+function aiRelationOf(row: MappingRow): MappingRelation {
+  return row.aiRelation ?? row.relation
+}
+
 function calibrationOf(rows: readonly MappingRow[]): Calibration {
   return buildCalibration(rows
-    .filter((r) => r.status === 'confirmed' || r.status === 'rejected')
-    .map((r) => ({ relation: r.relation, confidence: r.confidence, status: r.status as 'confirmed' | 'rejected' })))
+    .filter(isExample)
+    .map((r) => ({ relation: aiRelationOf(r), confidence: r.confidence, status: r.status as 'confirmed' | 'rejected' })))
 }
 
 function usageOf(row: MappingRow, usage: Map<string, Set<string>>): MappingUsage {
@@ -107,7 +121,11 @@ function isInUse(u: MappingUsage): boolean {
   return u.projectsA > 0 && u.projectsB > 0
 }
 
-async function rankAll(): Promise<{ ranked: RankedPair[]; calibration: Calibration }> {
+function rankAll(): Promise<{ ranked: RankedPair[]; calibration: Calibration }> {
+  return cachedRanking(rankFresh)
+}
+
+async function rankFresh(): Promise<{ ranked: RankedPair[]; calibration: Calibration }> {
   const [rows, items, usage] = await Promise.all([fetchMappingRows(), fetchGlobalItems(), fetchLibraryItemUsage()])
   const byId = new Map(items.map((i) => [i.itemId.toLowerCase(), i]))
   const calibration = calibrationOf(rows)
@@ -117,7 +135,7 @@ async function rankAll(): Promise<{ ranked: RankedPair[]; calibration: Calibrati
     const itemA = byId.get(row.itemIdA.toLowerCase())
     const itemB = byId.get(row.itemIdB.toLowerCase())
     if (!itemA || !itemB) continue
-    const learned = calibration.learn(row.relation, row.confidence)
+    const learned = calibration.learn(aiRelationOf(row), row.confidence, isExample(row) ? (row.status as 'confirmed' | 'rejected') : undefined)
     ranked.push({
       row,
       itemA,
@@ -223,18 +241,32 @@ export interface ReviewResult {
   updated: number
 }
 
+export class PartialDecisionError extends Error {
+  constructor(readonly updated: number, readonly requested: number) {
+    super(`Only ${updated} of ${requested} pairs were saved before an error. Reload the list to see which.`)
+  }
+}
+
 async function applyDecision(ids: string[], status: MappingStatus, relation: MappingRelation | undefined, userId: string): Promise<number> {
-  const values: Record<string, unknown> = { status, reviewedBy: userId, reviewedAt: new Date().toISOString() }
+  const values: Record<string, unknown> = { status, reviewedBy: userId, reviewedAt: new Date().toISOString(), reviewMethod: 'bulk' }
   if (relation) values.relation = relation
   let updated = 0
-  for (let i = 0; i < ids.length; i += IN_CHUNK) {
-    const { data, error } = await supabase
-      .from('Item_Mapping')
-      .update(values)
-      .in('mappingId', ids.slice(i, i + IN_CHUNK))
-      .select('mappingId')
-    if (error) throw error
-    updated += data?.length ?? 0
+  try {
+    for (let i = 0; i < ids.length; i += IN_CHUNK) {
+      const { data, error } = await supabase
+        .from('Item_Mapping')
+        .update(values)
+        .in('mappingId', ids.slice(i, i + IN_CHUNK))
+        .select('mappingId')
+      if (error) throw error
+      updated += data?.length ?? 0
+    }
+  } catch (error) {
+    console.error('Bulk decision stopped part-way:', error)
+    if (updated > 0) throw new PartialDecisionError(updated, ids.length)
+    throw error
+  } finally {
+    invalidateMappingCache()
   }
   return updated
 }

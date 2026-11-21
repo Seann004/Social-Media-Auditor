@@ -56,7 +56,8 @@ export interface Calibration {
   approved: number
   rejected: number
   bands: BandStat[]
-  learn(relation: MappingRelation, confidence: number | null): Learned
+  /** `own` is the pair's own decision, when the pair is one of the examples; it is left out of its own score. */
+  learn(relation: MappingRelation, confidence: number | null, own?: 'confirmed' | 'rejected'): Learned
 }
 
 const BANDS = 10
@@ -103,11 +104,15 @@ export function buildCalibration(decided: readonly DecidedPair[]): Calibration {
     approved,
     rejected: used - approved,
     bands,
-    learn(relation, confidence) {
+    learn(relation, confidence, own) {
       if (confidence === null || !Number.isFinite(confidence)) return { score: null, from: 0 }
       const raw = Math.min(1, Math.max(0, confidence))
-      const group = counts.get(keyOf(relation, bandIndex(raw)))
-      if (!group) return { score: round2(raw), from: 0 }
+      const found = counts.get(keyOf(relation, bandIndex(raw)))
+      // A pair that is itself one of the examples is judged without its own decision.
+      const group = found && own
+        ? { decided: found.decided - 1, approved: found.approved - (own === 'confirmed' ? 1 : 0) }
+        : found
+      if (!group || group.decided <= 0) return { score: round2(raw), from: 0 }
       const score = (group.approved + SMOOTHING_WEIGHT * raw) / (group.decided + SMOOTHING_WEIGHT)
       return { score: round2(score), from: group.decided }
     },

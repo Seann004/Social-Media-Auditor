@@ -62,6 +62,9 @@ function sendError(res: Response, error: unknown) {
   if (error instanceof review.BulkCountChangedError) {
     return res.status(409).json({ error: error.message, actual: error.actual })
   }
+  if (error instanceof review.PartialDecisionError) {
+    return res.status(500).json({ error: error.message, updated: error.updated })
+  }
   if (error instanceof RangeError) {
     return res.status(400).json({ error: error.message })
   }
@@ -137,7 +140,8 @@ export function createMappingRouter({ ask }: Deps): Router {
         return res.json(await review.reviewMappingsByIds(ids, status, relation, req.user!.userId))
       }
 
-      const parsed = parseFilter(typeof filter === 'object' && filter !== null ? filter : {})
+      // Like the list, a bulk filter covers only pairs waiting for review unless it names a status.
+      const parsed = parseFilter({ status: 'suggested', ...(typeof filter === 'object' && filter !== null ? filter : {}) })
       if (!parsed.ok) return res.status(400).json({ error: parsed.error })
       if (!Number.isInteger(expectedCount) || expectedCount < 0) {
         return res.status(400).json({ error: 'expectedCount (the number of pairs you saw) is required with a filter.' })

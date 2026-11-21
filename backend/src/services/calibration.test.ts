@@ -81,3 +81,19 @@ describe('buildCalibration', () => {
     expect(cal.learn('equivalent', -2).score).toBeGreaterThanOrEqual(0)
   })
 })
+
+describe('a pair that is one of the examples', () => {
+  it('is scored without its own decision', () => {
+    const cal = buildCalibration(many(5, 'equivalent', 0.9, 'confirmed'))
+    const withOwn = cal.learn('equivalent', 0.9)
+    const without = cal.learn('equivalent', 0.9, 'confirmed')
+    expect(withOwn.from).toBe(5)
+    expect(without.from).toBe(4)
+    expect(without.score!).toBeLessThan(withOwn.score!)
+  })
+
+  it('keeps the AI score when it is the only example', () => {
+    const cal = buildCalibration(many(1, 'equivalent', 0.9, 'rejected'))
+    expect(cal.learn('equivalent', 0.9, 'rejected')).toEqual({ score: 0.9, from: 0 })
+  })
+})

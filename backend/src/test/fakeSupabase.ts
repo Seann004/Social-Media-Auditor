@@ -1,3 +1,4 @@
+import { invalidateMappingCache } from '../services/mappingCache.js'
 // A small in-memory stand-in for the Supabase query builder: just the calls the mapping code makes.
 // Tests mock '../config/supabase.js' with `supabase` from here and read or seed `tables` directly.
 
@@ -13,6 +14,7 @@ const ID_COLUMN: Record<string, string> = {
 }
 
 export function resetTables(initial: Record<string, Row[]> = {}): void {
+  invalidateMappingCache()
   for (const k of Object.keys(tables)) delete tables[k]
   nextId = 0
   Object.assign(tables, initial)

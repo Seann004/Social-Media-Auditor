@@ -1,3 +1,4 @@
+import { invalidateMappingCache } from './mappingCache.js'
 import { supabase } from '../config/supabase.js'
 import { reconcileEffectiveStatus, assertProjectEditable } from './dbService.js'
 import type { ChecklistItemStatus } from '../types/index.js'
@@ -30,6 +31,10 @@ export interface MappingRow {
   createdAt: string
   reviewedBy: string | null
   reviewedAt: string | null
+  /** How the pair was decided. Missing on pairs decided before this was recorded. */
+  reviewMethod?: 'single' | 'bulk' | null
+  /** The relation the AI gave the pair, which the admin's edit does not change. */
+  aiRelation?: MappingRelation | null
 }
 
 type EvidenceImage = { url: string; name: string }
@@ -265,6 +270,7 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
           itemIdA,
           itemIdB,
           relation: m.relation === 'equivalent' ? 'equivalent' : 'partial',
+          aiRelation: m.relation === 'equivalent' ? 'equivalent' : 'partial',
           confidence: Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : null,
           rationale: typeof m.reason === 'string' ? plainReason(m.reason).slice(0, 500) : null,
           status: 'suggested',
@@ -276,6 +282,7 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
           .from('Item_Mapping')
           .upsert(rows, { onConflict: 'itemIdA,itemIdB', ignoreDuplicates: true })
           .select('mappingId')
+        invalidateMappingCache()
         if (error) throw error
         rows.forEach((r) => existing.add(`${r.itemIdA}|${r.itemIdB}`))
         suggested += data?.length ?? 0
@@ -317,13 +324,14 @@ async function fetchProjectLibraryItems(projectId: string): Promise<ProjectItem[
 
 /** The admin's decision on one pair. Only confirmed pairs are shown to auditors. */
 export async function reviewMapping(mappingId: string, status: MappingStatus, relation: MappingRelation | undefined, userId: string) {
-  const values: Record<string, unknown> = { status, reviewedBy: userId, reviewedAt: new Date().toISOString() }
+  const values: Record<string, unknown> = { status, reviewedBy: userId, reviewedAt: new Date().toISOString(), reviewMethod: 'single' }
   if (relation) values.relation = relation
   const { data, error } = await supabase
     .from('Item_Mapping')
     .update(values)
     .eq('mappingId', mappingId)
     .select('mappingId, status, relation')
+  invalidateMappingCache()
   if (error) throw error
   if (!data || data.length === 0) throw new MappingNotFoundError()
   return data[0]

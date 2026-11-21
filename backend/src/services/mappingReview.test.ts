@@ -7,6 +7,7 @@ vi.mock('../config/supabase.js', async () => {
 })
 
 const review = await import('./mappingReview.js')
+const { invalidateMappingCache } = await import('./mappingCache.js')
 
 const guideline = (name: string) => ({ guidelineName: name, shortName: name })
 
@@ -130,6 +131,7 @@ describe('listMappings ranking', () => {
     const page = await review.listMappings({ status: 'suggested' })
     expect(page.linkedGuidelineIds.sort()).toEqual(['G1', 'G2', 'G3'])
     tables.Item_Mapping = [pair('x', 'g1a', 'g2a', 'equivalent', 0.9)]
+    invalidateMappingCache()
     expect((await review.listMappings({ status: 'suggested' })).linkedGuidelineIds.sort()).toEqual(['G1', 'G2'])
   })
 
@@ -234,5 +236,42 @@ describe('reviewMappingsByFilter', () => {
     const result = await review.reviewMappingsByFilter({ status: 'suggested', relation: 'partial' }, 1, 'rejected', undefined, 'admin-1')
     expect(result).toEqual({ updated: 1 })
     expect(tables.Item_Mapping.find((m) => m.mappingId === 'm1')!.status).toBe('rejected')
+  })
+})
+
+describe('learning leaves bulk decisions out', () => {
+  it('does not count pairs decided in bulk, and uses the relation the AI gave', async () => {
+    resetTables({
+      Checklist: [], Checklist_Item: [],
+      Item_Mapping: [
+        { ...pair('s1', 'a1', 'b1', 'equivalent', 0.9, 'confirmed'), reviewMethod: 'single' },
+        { ...pair('s2', 'a2', 'b2', 'equivalent', 0.9, 'confirmed'), reviewMethod: 'bulk' },
+        { ...pair('s3', 'a3', 'b3', 'partial', 0.9, 'confirmed'), reviewMethod: 'single', aiRelation: 'equivalent' },
+      ],
+    })
+    const learning = await review.getLearning()
+    expect(learning.decided).toBe(2)
+    expect(learning.bands).toHaveLength(1)
+    expect(learning.bands[0]).toMatchObject({ relation: 'equivalent', decided: 2 })
+  })
+
+  it('marks bulk decisions as bulk', async () => {
+    seed()
+    tables.Item_Mapping.push(pair('m1', 'g1a', 'g2a', 'equivalent', 0.9))
+    await review.reviewMappingsByIds(['m1'], 'confirmed', undefined, 'admin')
+    expect(tables.Item_Mapping[0].reviewMethod).toBe('bulk')
+  })
+})
+
+describe('the ranked list is cached', () => {
+  it('serves the same ranking until a decision is saved', async () => {
+    seed()
+    tables.Item_Mapping.push(pair('m1', 'g1a', 'g2a', 'equivalent', 0.9))
+    expect((await review.listMappings({ status: 'suggested' })).total).toBe(1)
+    tables.Item_Mapping.push(pair('m2', 'g1b', 'g2b', 'equivalent', 0.9))
+    expect((await review.listMappings({ status: 'suggested' })).total).toBe(1)
+    await review.reviewMappingsByIds(['m1'], 'confirmed', undefined, 'admin')
+    expect((await review.listMappings({ status: 'suggested' })).total).toBe(1)
+    expect((await review.listMappings({ status: 'confirmed' })).total).toBe(1)
   })
 })
