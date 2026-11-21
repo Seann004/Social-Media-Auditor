@@ -18,6 +18,7 @@ type Json = Record<string, unknown>
 /** Every seeded account signs in with this password. */
 export const PASSWORD = 'Audit_2026!'
 export const SECOND_AUDITOR: TestUser = { userId: 'u-aud-2', userName: 'Ben Builder', userEmail: 'ben@example.test', role: 'auditor' }
+export const ADMIN: TestUser = { userId: 'u-admin', userName: 'Ari Admin', userEmail: 'ari@example.test', role: 'admin' }
 
 export const GUIDELINE = {
   guidelineId: 'g-osc',
@@ -65,6 +66,8 @@ interface ProjectState {
   memberIds: string[]
   /** Global guideline ids; the project works on its own copy of each, as the backend clones them. */
   guidelineIds: string[]
+  /** Saved scope features. Only the project details answer carries them, as in the backend. */
+  scope?: string[]
 }
 
 export interface StoredAnswer {
@@ -184,7 +187,7 @@ function tally(items: { itemId: string }[], answers: StoredAnswer[]) {
 /** Installs every stub for one page. */
 export async function installCoreStub(page: Page, seed: CoreSeed = { project: 'in_progress' }): Promise<CoreStub> {
   const passwordHash = await sha256Hex(PASSWORD)
-  let accounts: Account[] = [HEAD, AUDITOR, SECOND_AUDITOR].map((u) => ({ ...u, passwordHash }))
+  let accounts: Account[] = [HEAD, AUDITOR, SECOND_AUDITOR, ADMIN].map((u) => ({ ...u, passwordHash }))
   const projects = new Map<string, ProjectState>()
   const first = seededProject(seed.project)
   if (first) projects.set(first.projectId, first)
@@ -209,7 +212,8 @@ export async function installCoreStub(page: Page, seed: CoreSeed = { project: 'i
     if (current) projects.set(projectId, { ...current, ...changes, updatedAt: new Date().toISOString() })
   }
   const canSee = (p: ProjectState, user: Account) => p.headAuditorId === user.userId || p.memberIds.includes(user.userId)
-  const projectOut = (p: ProjectState) => ({ ...p, guidelineIds: p.guidelineIds.map((g) => cloneId(p.projectId, g)) })
+  // The project list carries no scope, as the backend list does not; only the details answer has it.
+  const projectOut = ({ scope: _scope, ...p }: ProjectState) => ({ ...p, guidelineIds: p.guidelineIds.map((g) => cloneId(p.projectId, g)) })
   const summaryOf = (projectId: string) => tally(projectItems(projectId), stub.answers(projectId))
 
   // Registered first, so it has the lowest priority: anything the stubs below do not claim lands here.
@@ -309,8 +313,15 @@ export async function installCoreStub(page: Page, seed: CoreSeed = { project: 'i
           members: p.memberIds.flatMap((uid) => accounts.filter((u) => u.userId === uid))
             .map(({ userId, userName, role }) => ({ userId, userName, role })),
           guidelines: p.guidelineIds.map((gid) => ({ ...GUIDELINE, guidelineId: cloneId(id, gid), originalGuidelineId: gid, itemCount: CORE_ITEMS.length })),
-          scope: [],
+          scope: p.scope ?? [],
         })
+      case 'POST /scope': {
+        if (!isOwner) return json(route, { error: 'Only the head auditor of this project can do this.' }, 403)
+        if (locked) return json(route, { error: 'This audit is locked while it is under review or approved.' }, 403)
+        const { features } = route.request().postDataJSON() as { features: string[] }
+        update(id, { scope: [...features] })
+        return json(route, { success: true })
+      }
       case 'POST /members': {
         if (!isOwner) return json(route, { error: 'Only the head auditor of this project can do this.' }, 403)
         const { userIds } = route.request().postDataJSON() as { userIds: string[] }

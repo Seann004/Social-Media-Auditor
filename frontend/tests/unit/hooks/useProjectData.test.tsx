@@ -105,6 +105,13 @@ describe('useProjectData', () => {
     expect(state.projects[1]).toMatchObject({ id: 'p2', guidelineIds: ['g1'] })
   })
 
+  it('returns the saved scope even when the project list has not loaded yet (page opened by its address)', async () => {
+    useStore.setState({ projects: [] } as never)
+    const { result: hook } = renderHook(() => useProjectData('p1'))
+    await waitFor(() => expect(hook.current.loading).toBe(false))
+    expect(hook.current.scope).toEqual(['Sign-up'])
+  })
+
   it('copes with a project that has no details', async () => {
     details.mockResolvedValue(null as never)
     const { result: hook } = renderHook(() => useProjectData('p1'))

@@ -343,6 +343,16 @@ describe('GeneratorPage Excel import (other layouts)', () => {
     expect(screen.queryByText('Parsing Compliance Spreadsheet')).toBeNull()
   })
 
+  it('refuses a file that is not .xlsx or .xls, even when the picker filter is set to All files (NFR-06)', async () => {
+    const { container } = mount()
+    // applyAccept: false acts like the user switching the file picker to "All files".
+    const user = userEvent.setup({ applyAccept: false })
+    await user.upload(container.querySelector('input[accept=".xlsx, .xls"]') as HTMLInputElement, new File(['plain text'], 'notes.txt', { type: 'text/plain' }))
+    expect(await screen.findByText('"notes.txt" is not an Excel file. Choose a .xlsx or .xls file.')).toBeInTheDocument()
+    expect(read).not.toHaveBeenCalled()
+    expect(screen.queryByText('Parsing Compliance Spreadsheet')).toBeNull()
+  })
+
   // BUG (GeneratorPage.tsx:752, 762, 844): switching tabs does not clear excelError, and the PDF tab shows the
   // same state, so an Excel parsing error appears under the PDF upload box. Remove `.fails` once it is per tab.
   it('does not show an Excel error on the PDF tab', async () => {
@@ -438,6 +448,15 @@ describe('GeneratorPage PDF import', () => {
     expect(screen.getByText(/a heuristic fallback was used/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByText('AI Engine: LLM Connection Failed')).toBeNull()
+  })
+
+  it('refuses a file that is not a PDF and says the file type is wrong (NFR-06)', async () => {
+    const { container } = mount()
+    await userEvent.click(screen.getByRole('button', { name: /PDF Guidelines/ }))
+    const user = userEvent.setup({ applyAccept: false })
+    await user.upload(container.querySelector('input[accept=".pdf"]') as HTMLInputElement, new File(['plain text'], 'notes.txt', { type: 'text/plain' }))
+    expect(await screen.findByText('"notes.txt" is not a PDF file. Choose a .pdf file.')).toBeInTheDocument()
+    expect(getDocument).not.toHaveBeenCalled()
   })
 
   it('says when a PDF has no readable text', async () => {

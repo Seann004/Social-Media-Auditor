@@ -8,6 +8,8 @@ interface ProjectData {
   responses: Record<string, AuditResponse>
   allResponses: Record<string, AuditResponse[]>
   resolutions: Record<string, ResolutionInfo>
+  /** Saved scope features from the project details; null until they have loaded. */
+  scope: string[] | null
   loading: boolean
   error: string | null
   reload: () => void
@@ -21,6 +23,7 @@ export function useProjectData(projectId: string | undefined): ProjectData {
   const [responses, setResponses] = useState<Record<string, AuditResponse>>({})
   const [allResponses, setAllResponses] = useState<Record<string, AuditResponse[]>>({})
   const [resolutions, setResolutions] = useState<Record<string, ResolutionInfo>>({})
+  const [scope, setScope] = useState<string[] | null>(null)
   const loadGen = useRef(0)
 
   const load = useCallback(async () => {
@@ -93,6 +96,7 @@ export function useProjectData(projectId: string | undefined): ProjectData {
       setResponses(respMap)
       setAllResponses(allRespMap)
       setResolutions(resolutionMap)
+      setScope(projectDetails?.scope ?? [])
 
       useStore.setState((state) => {
         const untouched = state.checklistItems.filter((ci) => !mapped.some((m) => m.id === ci.id))
@@ -145,5 +149,5 @@ export function useProjectData(projectId: string | undefined): ProjectData {
 
   useEffect(() => { load() }, [load])
 
-  return { checklistItems: items, responses, allResponses, resolutions, loading, error, reload: load }
+  return { checklistItems: items, responses, allResponses, resolutions, scope, loading, error, reload: load }
 }

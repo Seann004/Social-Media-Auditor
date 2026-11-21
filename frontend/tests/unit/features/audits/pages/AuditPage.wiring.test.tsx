@@ -4,12 +4,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 let evidenceMapValue: Record<string, { url: string; name: string }[]> = {}
+let loadedScopeValue: string[] | null = null
 const ITEMS = [
   { id: 'i1', guidelineId: 'g1', category: 'Cat', text: 'Item one', severity: 'major', itemCode: 'C1' },
   { id: 'i2', guidelineId: 'g1', category: 'Cat', text: 'Item two', severity: 'major', itemCode: 'C2' },
 ]
 vi.mock('../../../../../src/hooks/useProjectData', () => ({
-  useProjectData: () => ({ checklistItems: ITEMS, loading: false, error: null, reload: vi.fn(), evidenceMap: evidenceMapValue, responses: {} }),
+  useProjectData: () => ({ checklistItems: ITEMS, loading: false, error: null, reload: vi.fn(), evidenceMap: evidenceMapValue, responses: {}, scope: loadedScopeValue }),
 }))
 vi.mock('../../../../../src/lib/db', async (orig) => ({
   ...(await orig<typeof import('../../../../../src/lib/db')>()),
@@ -75,6 +76,7 @@ const tick = (ms = 20) => act(async () => { await new Promise((r) => setTimeout(
 
 beforeEach(() => {
   evidenceMapValue = {}
+  loadedScopeValue = null
   for (const m of [post, upsert, saveF, sugg, vi.mocked(api.getLatestRun), vi.mocked(api.getSources), vi.mocked(db.fetchProjectComplianceSummary), vi.mocked(db.saveEvidenceImages)]) m.mockReset()
   upsert.mockResolvedValue(undefined as never)
   saveF.mockResolvedValue(undefined as never)
@@ -194,6 +196,15 @@ describe('page wiring (should hold)', () => {
     await within(rowOf('Item one')).findByRole('region', { name: 'AI suggestion' })
     expect(within(rowOf('Item one')).queryByRole('button', { name: /Accept|Override|Keep/ })).toBeNull()
     expect(within(rowOf('Item one')).queryByRole('button', { name: /^Yes$/ })).toBeNull()
+  })
+  it('W9 the Scope tab shows the saved scope when the page is opened by its address (project list has no scope)', async () => {
+    // The project list in the store carries scope [] (as after a reload); the page's own details load has the real scope.
+    loadedScopeValue = ['Login', 'Privacy Settings']
+    setup({ role: 'head_auditor' }); mount()
+    await userEvent.click(screen.getByRole('button', { name: /Scope \/ Features/ }))
+    expect(screen.getByText('Login')).toBeInTheDocument()
+    expect(screen.getByText('Privacy Settings')).toBeInTheDocument()
+    expect(screen.queryByText(/No features defined yet/)).toBeNull()
   })
   it('W8 Flag saves through setResponse', async () => {
     setup({ responses: { p1__i1: resp('compliant') } })

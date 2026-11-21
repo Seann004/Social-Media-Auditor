@@ -139,7 +139,7 @@ function AuditPageContent() {
   } = useStore()
   const navigate = useNavigate()
 
-  const { checklistItems, loading, error: loadError, reload } = useProjectData(id)
+  const { checklistItems, scope: loadedScope, loading, error: loadError, reload } = useProjectData(id)
   const storeLoading = useStore((s) => s.loading)
   const responses = useStore((s) => s.responses)
   const allResponses = useStore((s) => s.allResponses)
@@ -387,13 +387,15 @@ function AuditPageContent() {
   const [showManageGuidelines, setShowManageGuidelines] = useState(false)
 
   const [scopeInput, setScopeInput] = useState('')
-  const [scopeFeatures, setScopeFeatures] = useState<string[]>(project?.scope ?? [])
+  const [scopeFeatures, setScopeFeatures] = useState<string[]>(loadedScope ?? [])
 
+  // Seed from the project details the page loaded itself, not from the project list:
+  // when the page is opened by its address the list arrives later and carries no scope.
   useEffect(() => {
-    if (project?.scope) {
-      setScopeFeatures(project.scope)
+    if (loadedScope) {
+      setScopeFeatures(loadedScope)
     }
-  }, [project?.scope])
+  }, [loadedScope])
   const [savingScope, setSavingScope] = useState(false)
 
 

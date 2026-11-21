@@ -21,6 +21,7 @@ import { useStore } from '../../../store/useStore'
 import SeverityBadge from '../../audits/components/SeverityBadge'
 import * as db from '../../../lib/db'
 import type { Guideline, ChecklistItem, Platform, Severity } from '../../../types'
+import { guidelineFileTypeError } from '../fileType'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker
 
@@ -162,6 +163,15 @@ export default function GeneratorPage() {
   const handleExcelParse = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+
+    const typeError = guidelineFileTypeError(file.name, 'excel')
+    if (typeError) {
+      setExcelError(typeError)
+      setGeneratedGuideline(null)
+      setGeneratedItems([])
+      e.target.value = ''
+      return
+    }
 
     setExcelFile(file)
     setExcelError('')
@@ -604,6 +614,15 @@ export default function GeneratorPage() {
   const handlePdfParse = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+
+    const typeError = guidelineFileTypeError(file.name, 'pdf')
+    if (typeError) {
+      setExcelError(typeError)
+      setGeneratedGuideline(null)
+      setGeneratedItems([])
+      e.target.value = ''
+      return
+    }
 
     setExcelFile(file)
     setExcelError('')
