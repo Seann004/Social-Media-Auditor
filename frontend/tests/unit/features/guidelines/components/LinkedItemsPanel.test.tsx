@@ -51,6 +51,7 @@ function pair(id: string, confidence: number | null, over: Partial<db.ItemMappin
     createdAt: '2026-01-01T00:00:00Z',
     reviewedAt: null,
     usage: { projectsA: 0, projectsB: 0, together: 0 },
+    groupImpact: null,
     itemA: item('ONSA', `A text ${id}`),
     itemB: item('UKCC', `B text ${id}`),
     ...over,
@@ -310,6 +311,72 @@ describe('LinkedItemsPanel decisions', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Same requirement' }))
     expect(m.review).toHaveBeenCalledWith('p1', 'confirmed', 'equivalent')
     expect(await screen.findByText('Nothing here yet.')).toBeInTheDocument()
+  })
+
+  describe('when approving would join an existing group', () => {
+    const joining = (over: Partial<db.GroupImpact> = {}): db.ItemMapping => pair('p1', 0.9, {
+      groupImpact: { joins: [item('TESTB', 'B text')], linkedToA: [item('TESTB', 'B text')], linkedToB: [], sameGuideline: false, alreadyTogether: false, ...over },
+    })
+
+    it('asks first, saying which items the pair is already linked to, and changes nothing yet', async () => {
+      serve([joining()])
+      render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+      await userEvent.click(await screen.findByRole('button', { name: 'Same requirement' }))
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog).toHaveTextContent('This joins a group that was already approved')
+      expect(dialog).toHaveTextContent('is already the same requirement as')
+      expect(dialog).toHaveTextContent('B text')
+      expect(dialog).toHaveTextContent('these 3 items become one group')
+      expect(m.review).not.toHaveBeenCalled()
+    })
+
+    it('approves once the admin goes on', async () => {
+      serve([joining()])
+      render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+      await userEvent.click(await screen.findByRole('button', { name: 'Same requirement' }))
+      await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Approve anyway' }))
+      await waitFor(() => expect(m.review).toHaveBeenCalledWith('p1', 'confirmed', 'equivalent'))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    })
+
+    it('leaves the pair as it was when the admin cancels', async () => {
+      serve([joining()])
+      render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+      await userEvent.click(await screen.findByRole('button', { name: 'Same requirement' }))
+      await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      expect(m.review).not.toHaveBeenCalled()
+      expect(screen.getByText('A text p1')).toBeInTheDocument()
+    })
+
+    it('warns when two items of one guideline would be in the group', async () => {
+      serve([joining({ sameGuideline: true })])
+      render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+      await userEvent.click(await screen.findByRole('button', { name: 'Same requirement' }))
+      expect(await screen.findByRole('note')).toHaveTextContent(/Two items of one guideline/)
+    })
+
+    it('does not ask for a partial link, a pair already in one group, or a pair that joins nothing', async () => {
+      serve([joining({ alreadyTogether: true })])
+      const { unmount } = render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+      await userEvent.click(await screen.findByRole('button', { name: 'Same requirement' }))
+      expect(m.review).toHaveBeenCalledWith('p1', 'confirmed', 'equivalent')
+      unmount()
+
+      m.review.mockClear()
+      serve([joining()])
+      const second = render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+      await userEvent.click(await screen.findByRole('button', { name: 'Partly overlaps' }))
+      expect(m.review).toHaveBeenCalledWith('p1', 'confirmed', 'partial')
+      second.unmount()
+
+      m.review.mockClear()
+      serve([pair('p1', 0.9)])
+      render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+      await userEvent.click(await screen.findByRole('button', { name: 'Same requirement' }))
+      expect(m.review).toHaveBeenCalledWith('p1', 'confirmed', 'equivalent')
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
   })
 
   it('rejects a pair with Not related', async () => {

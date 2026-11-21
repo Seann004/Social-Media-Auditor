@@ -11,7 +11,7 @@ import {
   type MappingStatus,
 } from '../../../lib/db'
 import Pager, { PAGE_SIZES } from './Pager'
-import { confidenceLabel, GroupImpactNote, usageLabel } from './pairParts'
+import { confidenceLabel, usageLabel } from './pairParts'
 
 interface SectionAction {
   status: MappingStatus
@@ -62,7 +62,6 @@ function PairRows({ pair: m, busy, selected, onSelect, onReview }: {
 }) {
   const [details, setDetails] = useState(false)
   const usage = usageLabel(m.usage)
-  const impact = m.groupImpact && m.status === 'suggested'
   const shade = selected ? 'bg-blue-50/60' : 'hover:bg-slate-50/60'
   const hasDetails = Boolean(m.rationale || m.itemA.clause || m.itemB.clause)
 
@@ -132,12 +131,6 @@ function PairRows({ pair: m, busy, selected, onSelect, onReview }: {
               {m.itemB.clause && <p className="whitespace-pre-line"><span className="font-semibold text-slate-700">{m.itemB.guidelineName} clause: </span>{m.itemB.clause}</p>}
             </div>
           </td>
-        </tr>
-      )}
-      {impact && (
-        <tr className={shade}>
-          <td />
-          <td colSpan={2} className="pb-3 pr-4"><GroupImpactNote pair={m} /></td>
         </tr>
       )}
     </>

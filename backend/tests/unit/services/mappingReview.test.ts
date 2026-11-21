@@ -299,6 +299,9 @@ describe('groups of same-requirement items', () => {
     const impact = await impactOf('s1')
     expect(impact!.joins.map((i) => i.itemId)).toEqual(['g2a'])
     expect(impact).toMatchObject({ sameGuideline: false, alreadyTogether: false })
+    // g1a already is the same requirement as g2a; g3a is in no group yet.
+    expect(impact!.linkedToA.map((i) => i.itemId)).toEqual(['g2a'])
+    expect(impact!.linkedToB).toEqual([])
   })
 
   it('warns when two items of one guideline would end up together', async () => {
@@ -333,46 +336,5 @@ describe('groups of same-requirement items', () => {
     // g1a-g2a and g2a-g3a were approved; g1a-g3a only follows from them.
     const links = groups[0].links.map((l) => `${[l.itemIdA, l.itemIdB].sort().join('+')}${l.implied ? ' implied' : ''}`).sort()
     expect(links).toEqual(['g1a+g2a', 'g1a+g3a implied', 'g2a+g3a'])
-  })
-})
-
-describe('groups waiting for review', () => {
-  it('lists a group that waiting pairs would form, with each link marked', async () => {
-    seed()
-    tables.Item_Mapping.push(
-      pair('c1', 'g1a', 'g2a', 'equivalent', 0.9, 'confirmed'),
-      pair('s1', 'g1a', 'g3a', 'equivalent', 0.85),
-    )
-    const groups = await review.listPendingGroups()
-    expect(groups).toHaveLength(1)
-    expect(groups[0].items.map((i) => i.itemId).sort()).toEqual(['g1a', 'g2a', 'g3a'])
-    expect(groups[0].waitingIds).toEqual(['s1'])
-    const states = groups[0].links.map((l) => `${[l.itemIdA, l.itemIdB].sort().join('+')} ${l.state}`).sort()
-    expect(states).toEqual(['g1a+g2a approved', 'g1a+g3a waiting', 'g2a+g3a implied'])
-  })
-
-  it('leaves out pairs of two, groups with nothing waiting, and partly-overlapping suggestions', async () => {
-    seed()
-    tables.Item_Mapping.push(
-      pair('s1', 'g1a', 'g2a', 'equivalent', 0.9), // only a pair
-      pair('c1', 'g1b', 'g2b', 'equivalent', 0.9, 'confirmed'),
-      pair('c2', 'g2b', 'g3a', 'equivalent', 0.9, 'confirmed'), // a group of three, all approved
-      pair('s2', 'g1a', 'g3a', 'partial', 0.9),
-    )
-    expect(await review.listPendingGroups()).toEqual([])
-  })
-
-  it('counts two waiting pairs that meet at one item as one group of three', async () => {
-    seed()
-    tables.Item_Mapping.push(pair('s1', 'g1a', 'g2a', 'equivalent', 0.9), pair('s2', 'g1a', 'g3a', 'equivalent', 0.8))
-    const groups = await review.listPendingGroups()
-    expect(groups).toHaveLength(1)
-    expect(groups[0].waitingIds.sort()).toEqual(['s1', 's2'])
-  })
-
-  it('ignores rejected pairs', async () => {
-    seed()
-    tables.Item_Mapping.push(pair('c1', 'g1a', 'g2a', 'equivalent', 0.9, 'confirmed'), pair('r1', 'g1a', 'g3a', 'equivalent', 0.9, 'rejected'))
-    expect(await review.listPendingGroups()).toEqual([])
   })
 })

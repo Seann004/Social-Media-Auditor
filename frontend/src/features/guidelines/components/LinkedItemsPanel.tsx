@@ -16,13 +16,12 @@ import {
 } from '../../../lib/db'
 import { CONFIDENCE_SECTIONS } from './confidenceGroups'
 import LearningPanel from './LearningPanel'
-import PendingGroupsPanel from './PendingGroupsPanel'
+import GroupConfirmModal from './GroupConfirmModal'
+import { needsGroupConfirm } from './pairParts'
 import ConfidenceSection from './ConfidenceSection'
 
 interface Props {
   guidelines: { id: string; name: string; shortName: string }[]
-  /** Opens an item in its framework, from a group. */
-  onOpenItem?: (item: MappedItem) => void
 }
 
 const STATUS_TABS: { key: MappingStatus; label: string }[] = [
@@ -34,7 +33,7 @@ const STATUS_TABS: { key: MappingStatus; label: string }[] = [
 const selectClass = 'text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-300'
 
 /** Admin screen: the pairs of similar items the AI found, ranked and filtered for a long queue, with bulk decisions. */
-export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
+export default function LinkedItemsPanel({ guidelines }: Props) {
   const [tab, setTab] = useState<MappingStatus>('suggested')
   const [guidelineFilter, setGuidelineFilter] = useState('')
   const [relationFilter, setRelationFilter] = useState<'' | MappingRelation>('')
@@ -49,6 +48,8 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
   const [target, setTarget] = useState('')
   const [running, setRunning] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  // A same-requirement approval that would join an existing group, waiting for the admin to confirm.
+  const [confirming, setConfirming] = useState<ItemMapping | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -104,7 +105,15 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
     }
   }
 
-  async function handleReview(m: ItemMapping, status: MappingStatus, relation?: MappingRelation) {
+  function handleReview(m: ItemMapping, status: MappingStatus, relation?: MappingRelation) {
+    if (status === 'confirmed' && relation === 'equivalent' && needsGroupConfirm(m)) {
+      setConfirming(m)
+      return Promise.resolve()
+    }
+    return applyReview(m, status, relation)
+  }
+
+  async function applyReview(m: ItemMapping, status: MappingStatus, relation?: MappingRelation) {
     setBusyId(m.mappingId)
     try {
       await reviewMapping(m.mappingId, status, relation)
@@ -269,18 +278,6 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
           </span>
         </div>
 
-        {tab === 'suggested' && (
-          <PendingGroupsPanel
-            onOpenItem={onOpenItem}
-            version={`${page.totals.suggested}-${page.totals.confirmed}`}
-            busy={bulkBusy}
-            onDecide={(ids, status) => runBulk(
-              { ids, status, ...(status === 'confirmed' ? { relation: 'equivalent' as const } : {}) },
-              (n) => `${status === 'confirmed' ? 'Approved' : 'Rejected'} ${n} link${n !== 1 ? 's' : ''} of the group.`,
-            )}
-          />
-        )}
-
         {selected.size > 0 && (
           <div role="toolbar" aria-label="Decide the selected pairs" className="sticky top-2 z-10 mb-4 flex items-center gap-2 flex-wrap bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
             <span className="text-xs font-semibold text-blue-800 mr-2">{selected.size} selected</span>
@@ -322,6 +319,15 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
           </div>
         )}
       </div>
+      <GroupConfirmModal
+        pair={confirming}
+        busy={busyId !== null}
+        onCancel={() => setConfirming(null)}
+        onConfirm={async (m) => {
+          setConfirming(null)
+          await applyReview(m, 'confirmed', 'equivalent')
+        }}
+      />
     </div>
   )
 }

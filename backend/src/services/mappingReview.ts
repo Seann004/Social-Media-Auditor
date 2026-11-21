@@ -66,6 +66,10 @@ interface RankedPair {
 export interface GroupImpact {
   /** Items that would become the same requirement as these two, through the group of either one. */
   joins: GlobalItem[]
+  /** Items the first item is already the same requirement as, through approved links. */
+  linkedToA: GlobalItem[]
+  /** Items the second item is already the same requirement as, through approved links. */
+  linkedToB: GlobalItem[]
   /** Two items of one guideline would end up in the group, which is often a sign the link is too wide. */
   sameGuideline: boolean
   /** Both items are already in one group, so the pair adds nothing new. */
@@ -178,7 +182,8 @@ function impactOf(row: MappingRow, groups: Map<string, string[]>, byId: Map<stri
     const guidelineId = byId.get(id)?.guidelineId
     if (guidelineId) perGuideline.set(guidelineId, (perGuideline.get(guidelineId) ?? 0) + 1)
   }
-  return { joins, sameGuideline: Array.from(perGuideline.values()).some((n) => n > 1), alreadyTogether }
+  const named = (ids: string[]) => ids.map((id) => byId.get(id)).filter((i): i is GlobalItem => !!i)
+  return { joins, linkedToA: named(groupA.filter((id) => id !== a)), linkedToB: named(groupB.filter((id) => id !== b)), sameGuideline: Array.from(perGuideline.values()).some((n) => n > 1), alreadyTogether }
 }
 
 const LEVEL_ORDER: Record<ConfidenceLevel, number> = { high: 0, medium: 1, low: 2 }
@@ -217,7 +222,7 @@ function describePair(pair: RankedPair) {
     reviewedAt: row.reviewedAt,
     usage: pair.usage,
     groupImpact: pair.groupImpact
-      ? { joins: pair.groupImpact.joins.map((i) => describeItem(i)!), sameGuideline: pair.groupImpact.sameGuideline, alreadyTogether: pair.groupImpact.alreadyTogether }
+      ? { joins: pair.groupImpact.joins.map((i) => describeItem(i)!), linkedToA: pair.groupImpact.linkedToA.map((i) => describeItem(i)!), linkedToB: pair.groupImpact.linkedToB.map((i) => describeItem(i)!), sameGuideline: pair.groupImpact.sameGuideline, alreadyTogether: pair.groupImpact.alreadyTogether }
       : null,
     itemA: describeItem(pair.itemA)!,
     itemB: describeItem(pair.itemB)!,
@@ -407,68 +412,4 @@ export async function listGroups(): Promise<MappingGroup[]> {
       sameGuideline: Array.from(perGuideline.values()).some((n) => n > 1),
     }
   })
-}
-
-export interface PendingGroupLink {
-  /** Lower-case item ids of the two items. */
-  itemIdA: string
-  itemIdB: string
-  /** Approved by an admin, still waiting for a decision, or only following from the other links. */
-  state: 'approved' | 'waiting' | 'implied'
-  /** The pair to decide, for a waiting link. */
-  mappingId?: string
-  confidence?: number | null
-}
-
-export interface PendingGroup {
-  groupId: string
-  items: NonNullable<ReturnType<typeof describeItem>>[]
-  links: PendingGroupLink[]
-  /** The waiting links, which approving or rejecting the whole group decides. */
-  waitingIds: string[]
-  /** Two items of one guideline are in the group, which is often a sign a link is too wide. */
-  sameGuideline: boolean
-}
-
-/**
- * Groups of three or more items that would form once the waiting same-requirement pairs are approved, together with
- * the pairs already approved. Only groups with at least one waiting link are listed, the ones with most links first.
- */
-export async function listPendingGroups(): Promise<PendingGroup[]> {
-  const [rows, items] = await Promise.all([fetchMappingRows(), fetchGlobalItems()])
-  const edges = rows.filter((r) => r.relation === 'equivalent' && (r.status === 'confirmed' || r.status === 'suggested'))
-  const byId = new Map(items.map((i) => [i.itemId.toLowerCase(), i]))
-
-  const memberOf = new Map<string, string>()
-  const groups = buildGroups(edges).filter((g) => g.length >= 3)
-  for (const g of groups) for (const id of g) memberOf.set(id, g[0])
-
-  const linksOf = new Map<string, PendingGroupLink[]>()
-  const add = (key: string | undefined, link: PendingGroupLink) => { if (key) linksOf.set(key, [...(linksOf.get(key) ?? []), link]) }
-  for (const r of edges) {
-    const a = r.itemIdA.toLowerCase()
-    const b = r.itemIdB.toLowerCase()
-    add(memberOf.get(a), r.status === 'confirmed'
-      ? { itemIdA: a, itemIdB: b, state: 'approved' }
-      : { itemIdA: a, itemIdB: b, state: 'waiting', mappingId: r.mappingId, confidence: r.confidence })
-  }
-  for (const d of derivedPairs(edges)) add(memberOf.get(d.itemIdA), { itemIdA: d.itemIdA, itemIdB: d.itemIdB, state: 'implied' })
-
-  return groups
-    .map((g) => {
-      const links = linksOf.get(g[0]) ?? []
-      const members = g.map((id) => byId.get(id)).filter((i): i is GlobalItem => !!i)
-      const perGuideline = new Map<string, number>()
-      for (const m of members) perGuideline.set(m.guidelineId, (perGuideline.get(m.guidelineId) ?? 0) + 1)
-      return {
-        groupId: g[0],
-        items: members
-          .sort((x, y) => x.guidelineName.localeCompare(y.guidelineName) || (x.itemCode ?? '').localeCompare(y.itemCode ?? ''))
-          .map((i) => describeItem(i)!),
-        links,
-        waitingIds: links.filter((l) => l.state === 'waiting').map((l) => l.mappingId!),
-        sameGuideline: Array.from(perGuideline.values()).some((n) => n > 1),
-      }
-    })
-    .filter((g) => g.waitingIds.length > 0)
 }

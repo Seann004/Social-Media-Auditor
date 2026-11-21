@@ -538,6 +538,10 @@ export interface ItemMapping {
 export interface GroupImpact {
   /** Items that become the same requirement as the two of this pair, through a group one of them is in. */
   joins: MappedItem[]
+  /** Items the first item is already the same requirement as, through approved links. */
+  linkedToA: MappedItem[]
+  /** Items the second item is already the same requirement as, through approved links. */
+  linkedToB: MappedItem[]
   /** Two items of one guideline would end up in the group. */
   sameGuideline: boolean
   /** Both items are already in one group. */
@@ -631,31 +635,6 @@ export async function fetchMappingsPage(filters: MappingFilters, offset: number,
   if (filters.inUse) query.set('inUse', 'true')
   if (filters.level) query.set('level', filters.level)
   return request<MappingPage>(`/mappings?${query.toString()}`)
-}
-
-export interface PendingGroupLink {
-  /** Lower-case item ids. */
-  itemIdA: string
-  itemIdB: string
-  /** Approved by an admin, still waiting for a decision, or only following from the other links. */
-  state: 'approved' | 'waiting' | 'implied'
-  /** The pair to decide, for a waiting link. */
-  mappingId?: string
-  confidence?: number | null
-}
-
-/** A group that waiting same-requirement pairs would form, together with the pairs already approved. */
-export interface PendingGroup {
-  groupId: string
-  items: MappedItem[]
-  links: PendingGroupLink[]
-  /** The waiting links, which approving or rejecting the group decides. */
-  waitingIds: string[]
-  sameGuideline: boolean
-}
-
-export async function fetchPendingGroups(): Promise<PendingGroup[]> {
-  return request<PendingGroup[]>('/mappings/pending-groups')
 }
 
 export async function fetchMappingLearning(): Promise<MappingLearning> {
