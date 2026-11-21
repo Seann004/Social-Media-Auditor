@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { failNext, onRpc, resetTables, tables } from '../../helpers/fakeSupabase.js'
 import { coreWorld, id, U } from '../../fixtures/coreWorld.js'
 import { loadCoreServer, quietConsole, TEST_SECRET } from '../../helpers/coreServer.js'
+import { hashPassword, isPasswordHash, verifyPassword } from '../../../src/services/passwords.js'
 
 vi.mock('dotenv/config', () => ({}))
 vi.mock('dotenv', () => ({ default: { config: () => ({}) }, config: () => ({}) }))
@@ -55,6 +56,45 @@ describe('POST /api/auth/login', () => {
     const claims = jwt.verify(res.body.token, TEST_SECRET) as any
     expect(claims).toMatchObject({ userId: U.aud, userName: 'Ali Auditor', role: 'auditor' })
     expect(claims.exp - claims.iat).toBe(12 * 3600)
+  })
+
+  it('checks a bcrypt-stored password on the server without the database function (NFR-05)', async () => {
+    const rpc: unknown[] = []
+    onRpc('verify_user_login', (args) => { rpc.push(args); return { data: [], error: null } })
+    tables.User.find((u) => u.userId === U.aud)!.userPassword = await hashPassword('sha-of-right')
+
+    const ok = await request(app).post('/api/auth/login').send({ email: 'Aud@example.test', password: 'sha-of-right' })
+    expect(ok.status).toBe(200)
+    expect(ok.body.user).toEqual({ userId: U.aud, userName: 'Ali Auditor', role: 'auditor' })
+
+    const wrong = await request(app).post('/api/auth/login').send({ email: 'aud@example.test', password: 'sha-of-wrong' })
+    expect(wrong.status).toBe(401)
+    expect(wrong.body.error).toBe('Incorrect email or password.')
+    expect(rpc).toEqual([])
+  })
+
+  it('upgrades a legacy unsalted password to bcrypt after one successful login', async () => {
+    tables.User.find((u) => u.userId === U.aud)!.userPassword = 'legacy-sha'
+    onRpc('verify_user_login', (args: any) => ({
+      data: args.p_password === 'legacy-sha' ? [{ userId: U.aud, userName: 'Ali Auditor', role: 'auditor' }] : [],
+      error: null,
+    }))
+
+    expect((await request(app).post('/api/auth/login').send({ email: 'aud@example.test', password: 'legacy-sha' })).status).toBe(200)
+    const stored = tables.User.find((u) => u.userId === U.aud)!.userPassword as string
+    expect(isPasswordHash(stored)).toBe(true)
+    expect(await verifyPassword('legacy-sha', stored)).toBe(true)
+
+    // The next login is checked against the bcrypt hash, so the old function is no longer needed.
+    onRpc('verify_user_login', () => ({ data: [], error: null }))
+    expect((await request(app).post('/api/auth/login').send({ email: 'aud@example.test', password: 'legacy-sha' })).status).toBe(200)
+  })
+
+  it('answers 401 for an email with no account', async () => {
+    onRpc('verify_user_login', () => ({ data: [], error: null }))
+    const res = await request(app).post('/api/auth/login').send({ email: 'nobody@example.test', password: 'x' })
+    expect(res.status).toBe(401)
+    expect(res.body.error).toBe('Incorrect email or password.')
   })
 
   it('answers 400 for a body that is not valid JSON', async () => {
@@ -150,6 +190,14 @@ describe('POST /api/users', () => {
     expect(res.body.success).toBe(true)
     expect(jwt.verify(res.body.token, TEST_SECRET)).toMatchObject({ userId: newId, role: 'auditor' })
     expect(tables.User.find((u) => u.userId === newId)?.userEmail).toBe('new@example.test')
+  })
+
+  it('stores a salted bcrypt hash of the password, not the value sent (NFR-05)', async () => {
+    expect((await request(app).post('/api/users').send(valid)).status).toBe(201)
+    const stored = tables.User.find((u) => u.userId === newId)?.userPassword as string
+    expect(stored).not.toBe(valid.userPassword)
+    expect(isPasswordHash(stored)).toBe(true)
+    expect(await verifyPassword(valid.userPassword, stored)).toBe(true)
   })
 
   it('refuses a self-registered admin with 403, and lets an admin create one', async () => {

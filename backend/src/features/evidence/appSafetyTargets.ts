@@ -17,6 +17,7 @@ import {
   RECIPIENT_FIELD,
   SAFE_NAVIGATION,
 } from './appSafetyWords.js'
+import { isSettingsLink } from './appSafetyNav.js'
 import { handleName, holdsBareName, mentionsOf, parseUrl, pathSegments, plain } from './appSafetyText.js'
 
 export interface TargetContext {
@@ -111,6 +112,7 @@ export function isComposerSubmit(element: AppElement, view: AppView): boolean {
 
 /** True when the action could reach a person, or when it cannot be told that it does not. */
 export function reachesPeople(action: AppAction, element: AppElement, view: AppView): boolean {
+  if (action.type !== 'type' && isSettingsLink(element, view)) return false
   if (PERSON_ACTION.test(element.name) || RECIPIENT_FIELD.test(element.name)) return true
   const safe = (SAFE_NAVIGATION.test(element.name) && !isComposerSubmit(element, view)) || (action.type !== 'type' && isAuthForm(view, element))
   if (safe) return false

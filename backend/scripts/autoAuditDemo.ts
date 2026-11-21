@@ -8,6 +8,7 @@
  *
  * Run from backend/:  npx tsx scripts/autoAuditDemo.ts --owner head@gmail.com [--keep]
  *   --keep    leave the practice app running afterwards (Ctrl+C to stop it)
+ *   --only T-3,T-5   run only these items (default: all six)
  *   --key-env NAME   the environment variable holding the Groq key (default GROQ_API_KEY2, then GROQ_API_KEY)
  *
  * Remove later: delete the project in the app, and the guideline "Auto-audit test (practice app)" in the Admin screen.
@@ -123,7 +124,9 @@ async function main(): Promise<void> {
   const projectId = await ensureProject(head.userId, guidelineId)
   const checklist = await db.fetchProjectChecklistItems(projectId)
   const wanted = new Map<string, string>(ITEMS.map((i) => [i.text, i.expected]))
-  const itemIds = checklist.filter((c) => wanted.has(c.itemDescription)).map((c) => c.itemId)
+  const only = flag('only')?.split(',').map((code) => code.trim().toUpperCase()) ?? null
+  const onlyTexts = new Set(ITEMS.filter((i) => only === null || only.includes(i.code)).map((i) => i.text))
+  const itemIds = checklist.filter((c) => wanted.has(c.itemDescription) && onlyTexts.has(c.itemDescription)).map((c) => c.itemId)
   if (itemIds.length === 0) throw new Error('The project has none of the six items on its checklist.')
 
   // The practice app, in a state where every item has a known answer.

@@ -11,6 +11,7 @@ function escapeHtml(value: string): string {
 }
 
 import { supabase } from '../config/supabase.js'
+import { hashPassword } from './passwords.js'
 
 import type { AuditStatus, ChecklistItemStatus, Platform, Severity, SubmissionStatus, UserRole } from '../types/index.js'
 
@@ -2226,12 +2227,40 @@ export async function createUser(input: {
 
     role: input.role,
 
-    userPassword: input.userPassword
+    // Never store the value the client sent: store a salted bcrypt hash of it (NFR-05).
+    userPassword: input.userPassword ? await hashPassword(input.userPassword) : undefined
 
   })
 
   if (error) throw error
 
+}
+
+export interface LoginRecord {
+  userId: string
+  userName: string
+  role: UserRole
+  userPassword: string | null
+}
+
+/** The account for a login attempt, including the stored password hash. Server-side use only. */
+export async function fetchLoginRecord(email: string): Promise<LoginRecord | null> {
+  const { data, error } = await supabase
+    .from('User')
+    .select('userId,userName,role,userPassword')
+    .eq('userEmail', email.trim().toLowerCase())
+    .limit(1)
+  if (error) throw error
+  return (data?.[0] as LoginRecord | undefined) ?? null
+}
+
+/** Replaces a user's stored password with a bcrypt hash of `password`. */
+export async function upgradeUserPassword(userId: string, password: string): Promise<void> {
+  const { error } = await supabase
+    .from('User')
+    .update({ userPassword: await hashPassword(password) })
+    .eq('userId', userId)
+  if (error) throw error
 }
 
 

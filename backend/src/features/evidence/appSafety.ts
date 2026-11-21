@@ -180,7 +180,10 @@ export function checkAction(action: AppAction, view: AppView | null, ctx: Safety
   ]
   for (const check of checks) {
     const verdict = check()
-    if (!verdict.allowed) return verdict
+    if (!verdict.allowed) {
+      // A refused link is not tried again: tell the AI to pick another one.
+      return element?.role === 'link' ? { ...verdict, reason: `${verdict.reason} Choose a different link.` } : verdict
+    }
   }
   return ALLOWED
 }

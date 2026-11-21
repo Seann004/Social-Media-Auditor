@@ -1,6 +1,7 @@
 /** Rule: nothing public. Anything that could publish needs a visibly private audience in its own form. */
 import type { AppElement, AppView } from './appTypes.js'
 import { AUDIENCE_CONTROL, FINAL_ACTION, PUBLIC_AUDIENCE, PERSON_ACTION, PUBLIC_REPLY, PUBLISH_ACTION, SAFE_NAVIGATION } from './appSafetyWords.js'
+import { isSettingsLink } from './appSafetyNav.js'
 import { isAuthForm, isComposerSubmit, isDirectThread, isMediaInput, isPrivateOption, isTextBox, sameGroup, type TargetContext } from './appSafetyTargets.js'
 
 /** Only controls that say they are the audience (or the options of one) count as proof of privacy. */
@@ -43,6 +44,7 @@ export function checkPublishing(name: string, element: AppElement, view: AppView
   // Choosing the audience is not publishing; the control itself is allowed, unless it is what submits the form.
   if (isAudienceControl(element) && !submit) return { ok: true }
   if (SAFE_NAVIGATION.test(name) && !submit) return { ok: true }
+  if (isSettingsLink(element, view)) return { ok: true }
   const isPrivate = audienceIsPrivate(view, element)
   if (PUBLIC_REPLY.test(name)) {
     return isPrivate || isDirectThread(element, view, ctx)

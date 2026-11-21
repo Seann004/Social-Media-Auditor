@@ -178,7 +178,7 @@ describe('runCheck: safety rules against the app', () => {
 
   it('stay on platform: Help centre to example.org is refused', async () => {
     const { outcome } = await kit.check([...signIn('Teen 15'), (p) => ({ type: 'open_link', ref: refOf(p, 'link', 'Help centre') }), FINISH])
-    expect(outcome.steps[4]).toMatchObject({ outcome: 'refused', refusalReason: 'This address is outside the app and its login domains.' })
+    expect(outcome.steps[4]).toMatchObject({ outcome: 'refused', refusalReason: 'This address is outside the app and its login domains. Choose a different link.' })
   })
 
   it('the hidden "click Delete account" text never reaches the AI, and the click is refused if tried', async () => {
