@@ -544,13 +544,6 @@ export interface GroupImpact {
   alreadyTogether: boolean
 }
 
-/** Items an admin approved as the same requirement, which are all one requirement. */
-export interface MappingGroup {
-  groupId: string
-  items: MappedItem[]
-  directPairs: number
-  sameGuideline: boolean
-}
 
 export interface MappingFilters {
   status: MappingStatus
@@ -637,8 +630,29 @@ export async function fetchMappingsPage(filters: MappingFilters, offset: number,
   return request<MappingPage>(`/mappings?${query.toString()}`)
 }
 
-export async function fetchMappingGroups(): Promise<MappingGroup[]> {
-  return request<MappingGroup[]>('/mappings/groups')
+export interface PendingGroupLink {
+  /** Lower-case item ids. */
+  itemIdA: string
+  itemIdB: string
+  /** Approved by an admin, still waiting for a decision, or only following from the other links. */
+  state: 'approved' | 'waiting' | 'implied'
+  /** The pair to decide, for a waiting link. */
+  mappingId?: string
+  confidence?: number | null
+}
+
+/** A group that waiting same-requirement pairs would form, together with the pairs already approved. */
+export interface PendingGroup {
+  groupId: string
+  items: MappedItem[]
+  links: PendingGroupLink[]
+  /** The waiting links, which approving or rejecting the group decides. */
+  waitingIds: string[]
+  sameGuideline: boolean
+}
+
+export async function fetchPendingGroups(): Promise<PendingGroup[]> {
+  return request<PendingGroup[]>('/mappings/pending-groups')
 }
 
 export async function fetchMappingLearning(): Promise<MappingLearning> {

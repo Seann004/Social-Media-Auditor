@@ -119,6 +119,14 @@ export function createMappingRouter({ ask }: Deps): Router {
     }
   })
 
+  router.get('/mappings/pending-groups', requireAuth, requireRole('admin'), async (_req, res) => {
+    try {
+      res.json(await review.listPendingGroups())
+    } catch (error) {
+      sendError(res, error)
+    }
+  })
+
   router.get('/mappings/learning', requireAuth, requireRole('admin'), async (_req, res) => {
     try {
       res.json(await review.getLearning())

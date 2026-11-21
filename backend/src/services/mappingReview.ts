@@ -12,7 +12,7 @@ import {
   type MappingStatus,
 } from './mappingService.js'
 import { cachedRanking, invalidateMappingCache } from './mappingCache.js'
-import { groupIndex, buildGroups } from './mappingGroups.js'
+import { groupIndex, buildGroups, derivedPairs } from './mappingGroups.js'
 import { buildCalibration, levelOf, MIN_DECISIONS_TO_SHOW, type Calibration, type ConfidenceLevel } from './calibration.js'
 
 /**
@@ -357,8 +357,18 @@ export interface MappingGroup {
   items: NonNullable<ReturnType<typeof describeItem>>[]
   /** How many pairs an admin approved directly inside the group. */
   directPairs: number
+  /** How every two items of the group are linked: approved by an admin, or implied through the other links. */
+  links: GroupLink[]
   /** Two items of one guideline are in the group, which is often a sign a link is too wide. */
   sameGuideline: boolean
+}
+
+export interface GroupLink {
+  /** Lower-case item ids of the two items. */
+  itemIdA: string
+  itemIdB: string
+  /** False when an admin approved this pair; true when it only follows from the other links. */
+  implied: boolean
 }
 
 /** Every group of items an admin approved as the same requirement, the largest first. */
@@ -370,10 +380,16 @@ export async function listGroups(): Promise<MappingGroup[]> {
   const memberOf = new Map<string, string>()
   const groups = buildGroups(confirmed)
   for (const g of groups) for (const id of g) memberOf.set(id, g[0])
+  const linksOf = new Map<string, GroupLink[]>()
+  const addLink = (key: string | undefined, link: GroupLink) => {
+    if (key) linksOf.set(key, [...(linksOf.get(key) ?? []), link])
+  }
   for (const r of confirmed) {
     const key = memberOf.get(r.itemIdA.toLowerCase())
     if (key) direct.set(key, (direct.get(key) ?? 0) + 1)
+    addLink(key, { itemIdA: r.itemIdA.toLowerCase(), itemIdB: r.itemIdB.toLowerCase(), implied: false })
   }
+  for (const d of derivedPairs(confirmed)) addLink(memberOf.get(d.itemIdA), { itemIdA: d.itemIdA, itemIdB: d.itemIdB, implied: true })
 
   return groups.map((g) => {
     const members = g.map((id) => byId.get(id)).filter((i): i is GlobalItem => !!i)
@@ -385,7 +401,72 @@ export async function listGroups(): Promise<MappingGroup[]> {
         .sort((x, y) => x.guidelineName.localeCompare(y.guidelineName) || (x.itemCode ?? '').localeCompare(y.itemCode ?? ''))
         .map((i) => describeItem(i)!),
       directPairs: direct.get(g[0]) ?? 0,
+      links: linksOf.get(g[0]) ?? [],
       sameGuideline: Array.from(perGuideline.values()).some((n) => n > 1),
     }
   })
+}
+
+export interface PendingGroupLink {
+  /** Lower-case item ids of the two items. */
+  itemIdA: string
+  itemIdB: string
+  /** Approved by an admin, still waiting for a decision, or only following from the other links. */
+  state: 'approved' | 'waiting' | 'implied'
+  /** The pair to decide, for a waiting link. */
+  mappingId?: string
+  confidence?: number | null
+}
+
+export interface PendingGroup {
+  groupId: string
+  items: NonNullable<ReturnType<typeof describeItem>>[]
+  links: PendingGroupLink[]
+  /** The waiting links, which approving or rejecting the whole group decides. */
+  waitingIds: string[]
+  /** Two items of one guideline are in the group, which is often a sign a link is too wide. */
+  sameGuideline: boolean
+}
+
+/**
+ * Groups of three or more items that would form once the waiting same-requirement pairs are approved, together with
+ * the pairs already approved. Only groups with at least one waiting link are listed, the ones with most links first.
+ */
+export async function listPendingGroups(): Promise<PendingGroup[]> {
+  const [rows, items] = await Promise.all([fetchMappingRows(), fetchGlobalItems()])
+  const edges = rows.filter((r) => r.relation === 'equivalent' && (r.status === 'confirmed' || r.status === 'suggested'))
+  const byId = new Map(items.map((i) => [i.itemId.toLowerCase(), i]))
+
+  const memberOf = new Map<string, string>()
+  const groups = buildGroups(edges).filter((g) => g.length >= 3)
+  for (const g of groups) for (const id of g) memberOf.set(id, g[0])
+
+  const linksOf = new Map<string, PendingGroupLink[]>()
+  const add = (key: string | undefined, link: PendingGroupLink) => { if (key) linksOf.set(key, [...(linksOf.get(key) ?? []), link]) }
+  for (const r of edges) {
+    const a = r.itemIdA.toLowerCase()
+    const b = r.itemIdB.toLowerCase()
+    add(memberOf.get(a), r.status === 'confirmed'
+      ? { itemIdA: a, itemIdB: b, state: 'approved' }
+      : { itemIdA: a, itemIdB: b, state: 'waiting', mappingId: r.mappingId, confidence: r.confidence })
+  }
+  for (const d of derivedPairs(edges)) add(memberOf.get(d.itemIdA), { itemIdA: d.itemIdA, itemIdB: d.itemIdB, state: 'implied' })
+
+  return groups
+    .map((g) => {
+      const links = linksOf.get(g[0]) ?? []
+      const members = g.map((id) => byId.get(id)).filter((i): i is GlobalItem => !!i)
+      const perGuideline = new Map<string, number>()
+      for (const m of members) perGuideline.set(m.guidelineId, (perGuideline.get(m.guidelineId) ?? 0) + 1)
+      return {
+        groupId: g[0],
+        items: members
+          .sort((x, y) => x.guidelineName.localeCompare(y.guidelineName) || (x.itemCode ?? '').localeCompare(y.itemCode ?? ''))
+          .map((i) => describeItem(i)!),
+        links,
+        waitingIds: links.filter((l) => l.state === 'waiting').map((l) => l.mappingId!),
+        sameGuideline: Array.from(perGuideline.values()).some((n) => n > 1),
+      }
+    })
+    .filter((g) => g.waitingIds.length > 0)
 }

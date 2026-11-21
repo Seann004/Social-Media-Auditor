@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Navigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -9,6 +9,7 @@ import {
   XIcon,
 } from '@phosphor-icons/react'
 import type { ChecklistItem } from '../../../types'
+import type { MappedItem } from '../../../lib/db'
 import { useStore } from '../../../store/useStore'
 import Button from '../../../components/ui/Button'
 import ChecklistItemDetailModal from '../../audits/components/ChecklistItemDetailModal'
@@ -59,6 +60,9 @@ export default function GuidelinesPage() {
   const [itemModalTab, setItemModalTab] = useState<'help' | 'traceability'>('help')
   const [search, setSearch] = useState('')
   const [view, setView] = useState<'frameworks' | 'links'>('frameworks')
+  // The item opened from a group in Linked items, which is scrolled to and highlighted once its framework is open.
+  const [focusItemId, setFocusItemId] = useState<string | null>(null)
+  const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null)
 
   const currentUser = users.find((u) => u.id === currentUserId)
   const isAdmin = currentUser?.role === 'admin'
@@ -118,6 +122,33 @@ export default function GuidelinesPage() {
     ? activeGuidelines.filter((g) => searchResults.guidelineIds.has(g.id))
     : activeGuidelines
   const matchCount = searchResults ? searchResults.itemIds.size : 0
+
+  /** Shows an item of a linked group in its framework: opens the framework and its category and scrolls to the item. */
+  function openItem(item: MappedItem) {
+    setSearch('')
+    setView('frameworks')
+    setExpanded((prev) => new Set(prev).add(item.guidelineId))
+    setExpandedCat((prev) => new Set(prev).add(`${item.guidelineId}_${item.category}`))
+    setFocusItemId(item.itemId)
+  }
+
+  useEffect(() => {
+    if (!focusItemId || view !== 'frameworks') return
+    // The framework and category open with a short animation, so the item is looked for once it has had time to appear.
+    let tries = 0
+    const timer = window.setInterval(() => {
+      const el = document.getElementById(`checklist-item-${focusItemId}`)
+      tries += 1
+      if (!el && tries < 15) return
+      window.clearInterval(timer)
+      setFocusItemId(null)
+      if (!el) return
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedItemId(focusItemId)
+      window.setTimeout(() => setHighlightedItemId(null), 2400)
+    }, 120)
+    return () => window.clearInterval(timer)
+  }, [focusItemId, view])
 
   function toggleGuideline(id: string) {
     setExpanded((prev) => {
@@ -212,7 +243,7 @@ export default function GuidelinesPage() {
       )}
 
       {isAdmin && view === 'links' ? (
-        <LinkedItemsPanel guidelines={activeGuidelines} />
+        <LinkedItemsPanel guidelines={activeGuidelines} onOpenItem={openItem} />
       ) : (
       <>
       <div className="mb-5 flex items-center gap-3 flex-wrap">
@@ -441,7 +472,11 @@ export default function GuidelinesPage() {
                                           >
                                             <div className="divide-y divide-slate-50 border-t border-slate-100">
                                               {catItems.map((ci, itemIdx) => (
-                                                <div key={ci.id} className="flex items-start gap-3 px-4 py-3 bg-slate-50/50">
+                                                <div
+                                                  key={ci.id}
+                                                  id={`checklist-item-${ci.id}`}
+                                                  className={`flex items-start gap-3 px-4 py-3 transition-colors duration-700 ${highlightedItemId === ci.id ? 'bg-amber-50 ring-1 ring-inset ring-amber-200' : 'bg-slate-50/50'}`}
+                                                >
                                                   <p className="flex-1 text-xs text-slate-700 leading-relaxed">
                                                     {ci.itemCode ? '' : `${itemIdx + 1}. `}{ci.text}
                                                   </p>

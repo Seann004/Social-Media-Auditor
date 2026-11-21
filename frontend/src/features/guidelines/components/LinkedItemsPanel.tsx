@@ -8,6 +8,7 @@ import {
   reviewMapping,
   type ConfidenceLevel,
   type ItemMapping,
+  type MappedItem,
   type MappingFilters,
   type MappingPage,
   type MappingRelation,
@@ -15,11 +16,13 @@ import {
 } from '../../../lib/db'
 import { CONFIDENCE_SECTIONS } from './confidenceGroups'
 import LearningPanel from './LearningPanel'
-import GroupsPanel from './GroupsPanel'
+import PendingGroupsPanel from './PendingGroupsPanel'
 import PairCard from './PairCard'
 
 interface Props {
   guidelines: { id: string; name: string; shortName: string }[]
+  /** Opens an item in its framework, from a group. */
+  onOpenItem?: (item: MappedItem) => void
 }
 
 const STATUS_TABS: { key: MappingStatus; label: string }[] = [
@@ -36,7 +39,7 @@ type SectionAction = { level: ConfidenceLevel; status: MappingStatus }
 const selectClass = 'text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-300'
 
 /** Admin screen: the pairs of similar items the AI found, ranked and filtered for a long queue, with bulk decisions. */
-export default function LinkedItemsPanel({ guidelines }: Props) {
+export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
   const [tab, setTab] = useState<MappingStatus>('suggested')
   const [guidelineFilter, setGuidelineFilter] = useState('')
   const [relationFilter, setRelationFilter] = useState<'' | MappingRelation>('')
@@ -252,8 +255,6 @@ export default function LinkedItemsPanel({ guidelines }: Props) {
         {message && <p className="text-xs text-slate-600 mt-3" role="status">{message}</p>}
       </div>
 
-      <GroupsPanel version={`${page.totals.confirmed}-${page.counts.confirmed}`} />
-
       <LearningPanel version={reviewed} />
 
       <div>
@@ -300,6 +301,18 @@ export default function LinkedItemsPanel({ guidelines }: Props) {
             Pairs used by more projects come first inside each section.
           </span>
         </div>
+
+        {tab === 'suggested' && (
+          <PendingGroupsPanel
+            onOpenItem={onOpenItem}
+            version={`${page.totals.suggested}-${page.totals.confirmed}`}
+            busy={bulkBusy}
+            onDecide={(ids, status) => runBulk(
+              { ids, status, ...(status === 'confirmed' ? { relation: 'equivalent' as const } : {}) },
+              (n) => `${status === 'confirmed' ? 'Approved' : 'Rejected'} ${n} link${n !== 1 ? 's' : ''} of the group.`,
+            )}
+          />
+        )}
 
         {selected.size > 0 && (
           <div role="toolbar" aria-label="Decide the selected pairs" className="sticky top-2 z-10 mb-4 flex items-center gap-2 flex-wrap bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
