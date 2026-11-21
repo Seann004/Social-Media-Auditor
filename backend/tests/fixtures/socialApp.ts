@@ -74,6 +74,8 @@ export interface SocialAppOptions {
   /** Changes to the starting state; see applyStatePatch. */
   state?: SocialStatePatch
   mode?: Partial<SocialMode>
+  /** A fixed port, so that a saved address keeps working between starts. Default: any free port. */
+  port?: number
 }
 
 export interface SocialApp {
@@ -596,7 +598,7 @@ export async function startSocialApp(opts: SocialAppOptions = {}): Promise<Socia
       if (!res.headersSent) send(res, page('Error', '<p>Error</p>'), 500)
     })
   })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+  await new Promise<void>((resolve) => server.listen(opts.port ?? 0, '127.0.0.1', () => resolve()))
   const { port } = server.address() as AddressInfo
 
   return {
