@@ -18,7 +18,7 @@ if (!process.env.JWT_SECRET) {
   process.exit(1)
 }
 
-const app = express()
+export const app = express()
 const port = process.env.PORT || 3000
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
@@ -304,6 +304,22 @@ app.post('/api/projects/:id/scope', requireAuth, requireRole('head_auditor'), re
   }
 })
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** The first thing wrong with a guideline's items, in words for the admin, or null. Checked before anything is saved. */
+function findGuidelineItemProblem(items: unknown[]): string | null {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i] as Record<string, unknown> | null
+    const where = `Item ${i + 1}`
+    if (!item || typeof item !== 'object') return `${where} must be an object.`
+    if (typeof item.id !== 'string' || !UUID_PATTERN.test(item.id)) return `${where} needs an id that is a UUID.`
+    if (typeof item.text !== 'string' || !item.text.trim()) return `${where} needs its requirement text.`
+    if (typeof item.category !== 'string' || !item.category.trim()) return `${where} needs a category.`
+    // Severity is not checked here: the generator passes on what the AI wrote, and refusing it would block uploads.
+  }
+  return null
+}
+
 app.post('/api/guidelines', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { guideline, items } = req.body
@@ -312,6 +328,10 @@ app.post('/api/guidelines', requireAuth, requireRole('admin'), async (req, res) 
     }
     if (!Array.isArray(items)) {
       return res.status(400).json({ error: 'items must be an array.' })
+    }
+    const itemProblem = findGuidelineItemProblem(items)
+    if (itemProblem) {
+      return res.status(400).json({ error: itemProblem })
     }
     await db.createGuideline({ guideline, items })
     res.status(201).json({ success: true })
@@ -703,7 +723,8 @@ You MUST return your output in JSON format matching this EXACT schema:
       fallback: 'heuristic_parser',
     })
 
-    const sentences = (req.body.textChunk || '').split(/[.!?\n]+/)
+    // A full stop ends a sentence unless a digit follows, so clause numbers such as "Section 4.2" stay whole.
+    const sentences = (req.body.textChunk || '').split(/[!?\n]+|\.(?!\d)/)
     const items: any[] = []
     let idx = 1
 
@@ -728,9 +749,10 @@ You MUST return your output in JSON format matching this EXACT schema:
       const matchedKeyword = keywords.find(k => new RegExp('\\b' + k.term + '\\b', 'i').test(s))
       if (matchedKeyword) {
         let category = 'General Safety'
-        if (/age/i.test(s)) category = 'Age Gate'
+        // Whole words only: "message", "page" and "usage" contain "age", and "admin" contains "dm".
+        if (/\bage(s|d)?\b/i.test(s)) category = 'Age Gate'
         else if (/consent/i.test(s)) category = 'Consent'
-        else if (/message|chat|dm/i.test(s)) category = 'Direct Messaging'
+        else if (/\b(messag\w*|chats?|dms?)\b/i.test(s)) category = 'Direct Messaging'
         else if (/data|privacy|collect/i.test(s)) category = 'Data Safety'
         else if (/filter|content|screen/i.test(s)) category = 'Content Filtering'
         else if (/nudge|dark|pattern/i.test(s)) category = 'Dark Patterns'
@@ -909,7 +931,10 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
   res.status(500).json({ error: 'Internal server error' })
 })
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`)
-  evidence.start().catch((error) => console.error('Evidence module start-up failed:', error))
-})
+// Tests import the app and drive it over HTTP; only a real run (npm run dev, npm start) opens the port.
+if (!process.env.VITEST) {
+  app.listen(port, () => {
+    console.log(`Server is running on port ${port}`)
+    evidence.start().catch((error) => console.error('Evidence module start-up failed:', error))
+  })
+}

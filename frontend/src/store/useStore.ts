@@ -445,7 +445,8 @@ export const useStore = create<StoreState>()(
     set((state) => ({
       projects: state.projects.map((p) =>
         p.id === projectId
-          ? { ...p, auditorIds: p.auditorIds.filter((id) => id !== userId && id !== p.headAuditorId) }
+          // Mirror the server, which removes only this member; the head auditor stays a member.
+          ? { ...p, auditorIds: p.auditorIds.filter((id) => id !== userId) }
           : p
       ),
     }))

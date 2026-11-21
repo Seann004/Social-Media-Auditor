@@ -1695,7 +1695,7 @@ export async function submitForReview(projectId: string): Promise<void> {
 
 
 export class IncompleteCoverageError extends Error {
-  constructor(message = 'This audit cannot be approved until every checklist item across all attached guidelines has been answered.') {
+  constructor(message = 'This audit cannot be submitted or approved until every checklist item across all attached guidelines has been answered.') {
     super(message)
     this.name = 'IncompleteCoverageError'
   }

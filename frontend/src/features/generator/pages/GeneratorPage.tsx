@@ -90,7 +90,7 @@ function removeTOC(text: string): string {
     /^.{1,80}\s{2,}\d{1,3}\s*$/.test(line.trim());
 
   let inTOC = false;
-  let tocEndBuffer = 0;
+  let heldBack: string[] = [];
   const filtered: string[] = [];
 
   for (const line of lines) {
@@ -103,20 +103,24 @@ function removeTOC(text: string): string {
 
     if (inTOC) {
       if (isTOCLine(trimmed) || trimmed === '') {
-        tocEndBuffer = 0;
+        // Still inside the contents: lines held back so far were headings within it.
+        heldBack = [];
         continue;
-      } else {
-        tocEndBuffer++;
-        if (tocEndBuffer >= 3) {
-          inTOC = false;
-          filtered.push(line);
-        }
+      }
+      // Hold body lines back until three in a row show the contents has ended, then keep all of them.
+      heldBack.push(line);
+      if (heldBack.length >= 3) {
+        inTOC = false;
+        filtered.push(...heldBack);
+        heldBack = [];
       }
     } else {
       filtered.push(line);
     }
   }
 
+  // A document that ends soon after its contents still keeps its last lines.
+  filtered.push(...heldBack);
   return filtered.join('\n');
 }
 
@@ -333,6 +337,8 @@ export default function GeneratorPage() {
         if (type === 'SECTION') {
           currentSection = cleanCategoryName(name)
           currentSectionId = id
+          // The full section name heads the traceability path of each item in it.
+          currentSectionRawName = name
           activeSubsections = []
           currentSubsection = ''
         } else if (type === 'SUBSECTION') {
@@ -524,6 +530,8 @@ export default function GeneratorPage() {
         if (type === 'SECTION') {
           currentSection = cleanCategoryName(name)
           currentSectionId = id
+          // The full section name heads the traceability path of each item in it.
+          currentSectionRawName = name
           activeSubsections = []
           currentSubsection = ''
         } else if (type === 'SUBSECTION') {
@@ -749,7 +757,7 @@ export default function GeneratorPage() {
             <div className="flex bg-slate-100 p-1 rounded-xl">
               <button
                 type="button"
-                onClick={() => { setActiveTab('excel'); setGeneratedGuideline(null); }}
+                onClick={() => { setActiveTab('excel'); setGeneratedGuideline(null); setExcelError(''); }}
                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-bold rounded-lg transition-all ${
                   activeTab === 'excel' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'
                 }`}
@@ -759,7 +767,7 @@ export default function GeneratorPage() {
               </button>
               <button
                 type="button"
-                onClick={() => { setActiveTab('pdf'); setGeneratedGuideline(null); }}
+                onClick={() => { setActiveTab('pdf'); setGeneratedGuideline(null); setExcelError(''); }}
                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-bold rounded-lg transition-all ${
                   activeTab === 'pdf' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'
                 }`}
