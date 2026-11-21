@@ -30,3 +30,43 @@ describe('linkedItemsByItem', () => {
     expect(linkedItemsByItem([])).toEqual({})
   })
 })
+
+import { disagreeingLinks, visibleLinks, type LinkedItem } from './linkedItems'
+
+const link = (itemId: string, relation: 'equivalent' | 'partial' = 'equivalent'): LinkedItem => ({ itemId, relation, guidelineName: 'G', label: itemId })
+
+describe('visibleLinks', () => {
+  it('shows every link when there are two or fewer', () => {
+    expect(visibleLinks([1, 2], false)).toEqual({ shown: [1, 2], hidden: 0 })
+  })
+
+  it('shows the first two and counts the rest when there are more', () => {
+    expect(visibleLinks([1, 2, 3, 4], false)).toEqual({ shown: [1, 2], hidden: 2 })
+  })
+
+  it('shows all of them once expanded', () => {
+    expect(visibleLinks([1, 2, 3, 4], true)).toEqual({ shown: [1, 2, 3, 4], hidden: 0 })
+  })
+})
+
+describe('disagreeingLinks', () => {
+  const answers: Record<string, string> = { b: 'compliant', c: 'non_compliant' }
+  const of = (id: string) => answers[id]
+
+  it('returns the linked items that answered differently from this one', () => {
+    expect(disagreeingLinks([link('b'), link('c')], 'compliant', of).map((l) => l.itemId)).toEqual(['c'])
+  })
+
+  it('returns nothing when everyone agrees', () => {
+    expect(disagreeingLinks([link('b')], 'compliant', of)).toEqual([])
+  })
+
+  it('compares among the linked items when this one is not answered', () => {
+    expect(disagreeingLinks([link('b'), link('c')], undefined, of).map((l) => l.itemId)).toEqual(['b', 'c'])
+  })
+
+  it('ignores unanswered and flagged items and partly-overlapping links', () => {
+    const mixed: Record<string, string> = { b: 'not_started', c: 'needs_review', d: 'non_compliant' }
+    expect(disagreeingLinks([link('b'), link('c'), link('d', 'partial')], 'compliant', (id) => mixed[id])).toEqual([])
+  })
+})

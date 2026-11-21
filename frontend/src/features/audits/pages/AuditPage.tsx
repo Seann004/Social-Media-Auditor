@@ -51,7 +51,7 @@ import { pageUpdateAfterDecision } from '../../evidence/decidedAnswer'
 import type { AppliedAnswer } from '../../evidence/types'
 import { useResponseFlow } from '../../evidence/useResponseFlow'
 import { textOnBlur } from '../textOnBlur'
-import { linkedItemsByItem } from '../linkedItems'
+import { linkedItemsByItem, visibleLinks, disagreeingLinks } from '../linkedItems'
 import ChecklistItemDetailModal from '../../audits/components/ChecklistItemDetailModal'
 import Button from '../../../components/ui/Button'
 import Modal from '../../../components/ui/Modal'
@@ -521,6 +521,8 @@ function AuditPageContent() {
 
   // Items an admin linked to each other, so each card can point at the item it is linked to.
   const [linkedItems, setLinkedItems] = useState<ReturnType<typeof linkedItemsByItem>>({})
+  // Items whose "+N more" link tags are opened.
+  const [openLinkTags, setOpenLinkTags] = useState<ReadonlySet<string>>(new Set())
   useEffect(() => {
     if (!id || !project || !(isAuditor || isHeadAuditor)) { setLinkedItems({}); return }
     let cancelled = false
@@ -834,15 +836,65 @@ function AuditPageContent() {
     loadSuggestions()
   }
 
+  /**
+   * Shows the answer on the linked same-requirement items at once, before the server confirms it. It follows the
+   * server's rule: an unanswered item takes it, and an answered one takes it when it still matched the earlier
+   * answer or was filled in from the item. The server's reply then settles it, and `undo` puts back anything the
+   * server did not change.
+   */
+  function showLinkedAnswersAtOnce(itemId: string, status: ChecklistItemStatus, previous: ChecklistItemStatus | undefined) {
+    const links = (linkedItems[itemId] ?? []).filter((l) => l.relation === 'equivalent')
+    const before = useStore.getState()
+    const changed: { itemId: string; rows: AuditResponse[] | undefined; reconciled: AuditResponse | undefined }[] = []
+    const nextAll = { ...before.allResponses }
+    const nextResponses = { ...before.responses }
+    for (const link of links) {
+      const key = `${id}__${link.itemId}`
+      const mine = (before.allResponses[key] ?? []).find((r) => r.auditorId === currentUserId)
+      const answered = !!mine && mine.status !== 'not_started'
+      const follows = !answered || mine!.status === previous || (mine!.notes ?? '').startsWith('Filled in from')
+      if (!follows || mine?.status === status) continue
+      changed.push({ itemId: link.itemId, rows: before.allResponses[key], reconciled: before.responses[key] })
+      const row: AuditResponse = {
+        id: mine?.id ?? `r_${link.itemId}`, projectId: id!, checklistItemId: link.itemId, status,
+        notes: mine?.notes ?? '', findings: mine?.findings, auditorId: currentUserId, updatedAt: new Date().toISOString().split('T')[0],
+      }
+      const rows = [...(before.allResponses[key] ?? []).filter((r) => r.auditorId !== currentUserId), row]
+      nextAll[key] = rows
+      const reconciled = reconcileResponse(rows, before.resolutions[key]?.status)
+      if (reconciled) nextResponses[key] = reconciled
+    }
+    if (changed.length > 0) useStore.setState({ allResponses: nextAll, responses: nextResponses })
+    return (confirmed: AcceptedAnswer[] | undefined) => {
+      const kept = new Set((confirmed ?? []).map((a) => a.itemId))
+      const undo = changed.filter((c) => !kept.has(c.itemId))
+      if (undo.length === 0) return
+      useStore.setState((state) => {
+        const all = { ...state.allResponses }
+        const resp = { ...state.responses }
+        for (const c of undo) {
+          const key = `${id}__${c.itemId}`
+          if (c.rows) all[key] = c.rows; else delete all[key]
+          if (c.reconciled) resp[key] = c.reconciled; else delete resp[key]
+        }
+        return { allResponses: all, responses: resp }
+      })
+    }
+  }
+
   async function handleResponseClick(itemId: string, guidelineId: string, status: ChecklistItemStatus) {
     if (answersLocked) return
     if (await responseFlow.handleClick(itemId, status)) return
     const current = getMyResponse(itemId)
     const notes = noteValues[itemId] ?? current?.notes ?? ''
     setResponseError(null)
+    const settle = showLinkedAnswersAtOnce(itemId, status, current?.status)
     try {
-      showFilledIn(await setResponse(id!, itemId, guidelineId, status, notes))
+      const filledIn = await setResponse(id!, itemId, guidelineId, status, notes)
+      settle(filledIn)
+      showFilledIn(filledIn)
     } catch {
+      settle([])
       setResponseError('Failed to save your response. Check your connection and try again.')
     }
   }
@@ -2026,6 +2078,18 @@ helpText: newItemHelp.trim() || undefined,
                                       <Flag size={9} weight="fill" /> {raters.length > 1 ? 'Auditors disagree' : 'Flagged'}
                                     </span>
                                   )}
+                                  {(() => {
+                                    const clash = disagreeingLinks(linkedItems[ci.id] ?? [], myResp?.status, (otherId) => getMyResponse(otherId)?.status)
+                                    if (clash.length === 0) return null
+                                    return (
+                                      <span
+                                        title={clash.map((l) => `${l.guidelineName} ${l.label}: ${STATUS_LABELS[getMyResponse(l.itemId)!.status]}`).join('\n')}
+                                        className="flex items-center gap-1 text-2xs text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-md font-medium"
+                                      >
+                                        <WarningCircle size={9} weight="fill" /> Linked items disagree
+                                      </span>
+                                    )
+                                  })()}
                                 </div>
                                 {ci.itemName && (
                                   <p className="text-sm font-semibold text-slate-800 mb-1">{ci.itemName}</p>
@@ -2065,29 +2129,54 @@ helpText: newItemHelp.trim() || undefined,
                                 )}
                               </div>
                               <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0 max-w-[55%]">
-                                {(linkedItems[ci.id] ?? []).map((link) => {
-                                  const target = checklistItems.find((x) => x.id === link.itemId)
-                                  if (!target) return null
-                                  const same = link.relation === 'equivalent'
+                                {(() => {
+                                  const all = (linkedItems[ci.id] ?? []).filter((l) => checklistItems.some((x) => x.id === l.itemId))
+                                  const { shown, hidden } = visibleLinks(all, openLinkTags.has(ci.id))
                                   return (
-                                    <button
-                                      key={link.itemId}
-                                      type="button"
-                                      onClick={() => goToItem(target)}
-                                      title={`Go to ${link.guidelineName} ${link.label}`}
-                                      className={[
-                                        'inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-2xs font-medium transition-colors',
-                                        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600',
-                                        same
-                                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                                          : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100',
-                                      ].join(' ')}
-                                    >
-                                      <LinkSimple size={10} weight="bold" />
-                                      {same ? 'Same requirement' : 'Partly overlaps'} · {link.guidelineName} {link.label}
-                                    </button>
+                                    <>
+                                      {shown.map((link) => {
+                                        const target = checklistItems.find((x) => x.id === link.itemId)!
+                                        const same = link.relation === 'equivalent'
+                                        return (
+                                          <button
+                                            key={link.itemId}
+                                            type="button"
+                                            onClick={() => goToItem(target)}
+                                            title={`Go to ${link.guidelineName} ${link.label}`}
+                                            className={[
+                                              'inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-2xs font-medium transition-colors',
+                                              'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600',
+                                              same
+                                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                                : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100',
+                                            ].join(' ')}
+                                          >
+                                            <LinkSimple size={10} weight="bold" />
+                                            {same ? 'Same requirement' : 'Partly overlaps'} · {link.guidelineName} {link.label}
+                                          </button>
+                                        )
+                                      })}
+                                      {hidden > 0 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setOpenLinkTags((prev) => new Set(prev).add(ci.id))}
+                                          className="inline-flex items-center rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-2xs font-medium text-slate-500 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                                        >
+                                          +{hidden} more
+                                        </button>
+                                      )}
+                                      {openLinkTags.has(ci.id) && all.length > 2 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setOpenLinkTags((prev) => { const next = new Set(prev); next.delete(ci.id); return next })}
+                                          className="inline-flex items-center rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-2xs font-medium text-slate-500 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                                        >
+                                          Show fewer
+                                        </button>
+                                      )}
+                                    </>
                                   )
-                                })}
+                                })()}
                                 <button
                                   type="button"
                                   onClick={() => { setSelectedItemForModal(ci); setItemModalTab('help'); }}

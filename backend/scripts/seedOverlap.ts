@@ -12,6 +12,7 @@ import * as db from '../src/services/dbService.js'
 
 const NAME_A = 'Overlap Test A (Code)'
 const NAME_B = 'Overlap Test B (Rules)'
+const NAME_C = 'Overlap Test C (Practice)'
 
 interface SeedItem { code: string; category: string; severity: 'critical' | 'major' | 'minor'; text: string }
 
@@ -31,12 +32,22 @@ const ITEMS_B: readonly SeedItem[] = [
   { code: 'B-5', category: 'Data', severity: 'minor', text: 'Data collected from children is deleted when the account is closed.' },
 ]
 
+const ITEMS_C: readonly SeedItem[] = [
+  { code: 'C-1', category: 'Privacy', severity: 'critical', text: 'New accounts held by children start with the strictest privacy settings.' },
+  { code: 'C-2', category: 'Privacy', severity: 'major', text: 'Location data is not shared with other users unless the child opts in.' },
+]
+
 /** Which pairs to link: [item in A, item in B, relation, confidence, reason]. A-5 and B-5 are left unlinked on purpose. */
 const LINKS = [
   ['A-1', 'B-1', 'equivalent', 0.93, 'Both require child accounts to be private by default.'],
   ['A-2', 'B-2', 'partial', 0.72, 'Both turn location off by default, but the other item also requires a warning before it is turned on.'],
   ['A-3', 'B-3', 'equivalent', 0.88, 'Both require a way to report content and accounts.'],
   ['A-4', 'B-4', 'partial', 0.66, 'Both check age at sign-up, but the other item adds a second check before sensitive features.'],
+  // C-1 is linked to A-1 only, so A-1, B-1 and C-1 are one group and B-1 and C-1 are the same through A-1.
+  ['A-1', 'C-1', 'equivalent', 0.9, 'Both require children\'s accounts to be private from the start.'],
+  // C-2 overlaps two items, to see several partial links on one item.
+  ['A-2', 'C-2', 'partial', 0.7, 'Both limit location sharing, but this item lets the child opt in.'],
+  ['B-2', 'C-2', 'partial', 0.68, 'Both limit location sharing, but this item lets the child opt in.'],
 ] as const
 
 async function adminUserId(): Promise<string> {
@@ -84,10 +95,12 @@ async function main() {
   const userId = await adminUserId()
   const a = await ensureGuideline(NAME_A, 'TESTA', ITEMS_A, userId)
   const b = await ensureGuideline(NAME_B, 'TESTB', ITEMS_B, userId)
+  const c = await ensureGuideline(NAME_C, 'TESTC', ITEMS_C, userId)
+  const byCode = new Map([...a, ...b, ...c])
 
   for (const [codeA, codeB, relation, confidence, rationale] of LINKS) {
-    const idA = a.get(codeA)
-    const idB = b.get(codeB)
+    const idA = byCode.get(codeA)
+    const idB = byCode.get(codeB)
     if (!idA || !idB) throw new Error(`Item ${codeA} or ${codeB} was not found.`)
     // The table stores each pair once, with the smaller id first.
     const [itemIdA, itemIdB] = idA.toLowerCase() < idB.toLowerCase() ? [idA, idB] : [idB, idA]
@@ -98,7 +111,7 @@ async function main() {
     if (error) throw error
     console.log(`Link ${codeA} <-> ${codeB}: ${relation} (confirmed)`)
   }
-  console.log('\nDone. Next: as head auditor, create a project on any platform with BOTH test guidelines, assign the auditor.')
+  console.log('\nDone. Next: as head auditor, create a project on any platform with all three test guidelines, assign the auditor.')
 }
 
 main().catch((err) => { console.error(err); process.exit(1) })

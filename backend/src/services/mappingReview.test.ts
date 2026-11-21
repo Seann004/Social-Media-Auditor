@@ -275,3 +275,52 @@ describe('the ranked list is cached', () => {
     expect((await review.listMappings({ status: 'confirmed' })).total).toBe(1)
   })
 })
+
+describe('groups of same-requirement items', () => {
+  const impactOf = async (id: string) => (await review.listMappings({ status: 'suggested' })).items.find((i) => i.mappingId === id)!.groupImpact
+
+  it('says nothing for a pair that touches no group', async () => {
+    seed()
+    tables.Item_Mapping.push(pair('s1', 'g1a', 'g2a', 'equivalent', 0.9))
+    expect(await impactOf('s1')).toBeNull()
+  })
+
+  it('tells which items approving a pair would join into one group', async () => {
+    seed()
+    tables.Item_Mapping.push(pair('c1', 'g1a', 'g2a', 'equivalent', 0.9, 'confirmed'), pair('s1', 'g1a', 'g3a', 'equivalent', 0.9))
+    const impact = await impactOf('s1')
+    expect(impact!.joins.map((i) => i.itemId)).toEqual(['g2a'])
+    expect(impact).toMatchObject({ sameGuideline: false, alreadyTogether: false })
+  })
+
+  it('warns when two items of one guideline would end up together', async () => {
+    seed()
+    tables.Item_Mapping.push(pair('c1', 'g1a', 'g2a', 'equivalent', 0.9, 'confirmed'), pair('s1', 'g1b', 'g2a', 'equivalent', 0.9))
+    expect((await impactOf('s1'))!.sameGuideline).toBe(true)
+  })
+
+  it('notes a pair whose items are already one group', async () => {
+    seed()
+    tables.Item_Mapping.push(pair('c1', 'g1a', 'g2a', 'equivalent', 0.9, 'confirmed'), pair('c2', 'g2a', 'g3a', 'equivalent', 0.9, 'confirmed'), pair('s1', 'g1a', 'g3a', 'equivalent', 0.9))
+    expect(await impactOf('s1')).toMatchObject({ alreadyTogether: true })
+  })
+
+  it('says nothing for a partly-overlapping suggestion', async () => {
+    seed()
+    tables.Item_Mapping.push(pair('c1', 'g1a', 'g2a', 'equivalent', 0.9, 'confirmed'), pair('s1', 'g1a', 'g3a', 'partial', 0.9))
+    expect(await impactOf('s1')).toBeNull()
+  })
+
+  it('lists each group with its items, largest first', async () => {
+    seed()
+    tables.Item_Mapping.push(
+      pair('c1', 'g1a', 'g2a', 'equivalent', 0.9, 'confirmed'),
+      pair('c2', 'g2a', 'g3a', 'equivalent', 0.9, 'confirmed'),
+      pair('c3', 'g1b', 'g2b', 'equivalent', 0.9, 'confirmed'),
+      pair('p1', 'g1a', 'g2b', 'partial', 0.9, 'confirmed'),
+    )
+    const groups = await review.listGroups()
+    expect(groups.map((g) => g.items.map((i) => i.itemId).sort())).toEqual([['g1a', 'g2a', 'g3a'], ['g1b', 'g2b']])
+    expect(groups[0]).toMatchObject({ directPairs: 2, sameGuideline: false })
+  })
+})

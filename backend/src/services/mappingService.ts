@@ -1,4 +1,5 @@
 import { invalidateMappingCache } from './mappingCache.js'
+import { derivedPairs, groupIndex } from './mappingGroups.js'
 import { supabase } from '../config/supabase.js'
 import { reconcileEffectiveStatus, assertProjectEditable, upsertAuditResult } from './dbService.js'
 import type { ChecklistItemStatus } from '../types/index.js'
@@ -360,8 +361,21 @@ export async function fetchProjectSimilarItems(projectId: string) {
   const [rows, items] = await Promise.all([fetchMappingRows(), fetchGlobalItems()])
   const byId = new Map(items.map((i) => [i.itemId.toLowerCase(), i]))
 
-  return rows
-    .filter((m) => m.status === 'confirmed')
+  const confirmed = rows.filter((m) => m.status === 'confirmed')
+  // Items of one group are the same as each other, also when no admin linked a particular two directly.
+  const derived = derivedPairs(confirmed, new Set(projectItemByLibraryItem.keys())).map((d) => ({
+    mappingId: d.mappingId,
+    itemIdA: d.itemIdA,
+    itemIdB: d.itemIdB,
+    relation: d.relation,
+    confidence: null as number | null,
+    rationale: 'Linked through the other items in the same group.',
+    status: 'confirmed' as const,
+    createdAt: '',
+    derived: true,
+  }))
+
+  return [...confirmed.map((m) => ({ ...m, derived: false })), ...derived]
     .filter((m) => projectItemByLibraryItem.has(m.itemIdA.toLowerCase()) && projectItemByLibraryItem.has(m.itemIdB.toLowerCase()))
     .map((m) => ({
       mappingId: m.mappingId,
@@ -370,13 +384,14 @@ export async function fetchProjectSimilarItems(projectId: string) {
       rationale: m.rationale,
       status: m.status,
       createdAt: m.createdAt,
+      derived: m.derived,
       projectItemIdA: projectItemByLibraryItem.get(m.itemIdA.toLowerCase())!,
       projectItemIdB: projectItemByLibraryItem.get(m.itemIdB.toLowerCase())!,
       itemA: describeItem(byId.get(m.itemIdA.toLowerCase())),
       itemB: describeItem(byId.get(m.itemIdB.toLowerCase())),
     }))
     .filter((m) => m.itemA && m.itemB)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .sort((a, b) => Number(a.derived) - Number(b.derived) || b.createdAt.localeCompare(a.createdAt))
 }
 
 export interface AnswerSuggestion {
@@ -466,7 +481,9 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
   const dismissed = new Set(dismissedRows.map((r) => `${r.itemId}|${r.sourceItemId}`))
 
   const links = new Map<string, { otherId: string; relation: MappingRelation }[]>()
-  for (const m of mappings) {
+  const confirmedMappings = mappings.filter((m) => m.status === 'confirmed')
+  const linkRows = [...confirmedMappings, ...derivedPairs(confirmedMappings).map((d) => ({ ...d, status: 'confirmed' as const }))]
+  for (const m of linkRows) {
     if (m.status !== 'confirmed') continue
     const relation = m.relation
     const a = m.itemIdA.toLowerCase()
@@ -684,6 +701,42 @@ export async function dismissSuggestion(projectId: string, userId: string, itemI
   if (error) throw error
 }
 
+/**
+ * The items of this project that an admin approved as the same requirement as `answeredItemId`. It reads only what
+ * this one item needs, because it runs every time an answer is saved.
+ */
+async function sameRequirementTargets(projectId: string, answeredItemId: string): Promise<string[]> {
+  const { data: own, error } = await supabase.from('Checklist_Item').select('originalItemId').eq('itemId', answeredItemId).maybeSingle()
+  if (error) throw error
+  const original = (own as { originalItemId: string | null } | null)?.originalItemId?.toLowerCase()
+  if (!original) return []
+
+  // The whole group counts, not only the items linked to this one directly.
+  const edges = await fetchAllRows<MappingRow>((from, to) => supabase
+    .from('Item_Mapping')
+    .select('itemIdA, itemIdB, relation')
+    .eq('status', 'confirmed')
+    .eq('relation', 'equivalent')
+    .order('mappingId')
+    .range(from, to))
+  const others = (groupIndex(edges).get(original) ?? []).filter((id) => id !== original)
+  if (others.length === 0) return []
+
+  const { data: checklists, error: clError } = await supabase.from('Checklist').select('checklistId').eq('projectId', projectId)
+  if (clError) throw clError
+  const checklistIds = ((checklists ?? []) as { checklistId: string }[]).map((c) => c.checklistId)
+  if (checklistIds.length === 0) return []
+  const items = await fetchAllIn<{ itemId: string }>(others, (ids, from, to) => supabase
+    .from('Checklist_Item')
+    .select('itemId')
+    .in('checklistId', checklistIds)
+    .in('originalItemId', ids)
+    .not('category', 'like', '__deactivated__%')
+    .order('itemId')
+    .range(from, to))
+  return items.map((i) => i.itemId)
+}
+
 /** A filled-in answer counts as untouched while it was saved no later than this long after it was filled in. */
 const UNTOUCHED_WINDOW_MS = 5000
 
@@ -698,11 +751,8 @@ async function followLinkedAnswers(
   answeredItemId: string,
   newResult: ChecklistItemStatus,
   previousResult: ChecklistItemStatus | null,
+  targets: string[],
 ): Promise<AcceptedAnswer[]> {
-  const pairs = (await fetchProjectSimilarItems(projectId)).filter((p) => p.relation === 'equivalent')
-  const targets = pairs
-    .filter((p) => p.projectItemIdA === answeredItemId || p.projectItemIdB === answeredItemId)
-    .map((p) => (p.projectItemIdA === answeredItemId ? p.projectItemIdB : p.projectItemIdA))
   if (targets.length === 0) return []
 
   const [{ data: rows, error }, { data: decisions, error: decisionError }] = await Promise.all([
@@ -748,17 +798,34 @@ export async function fillInSameRequirement(
   previousResult: ChecklistItemStatus | null = null,
 ): Promise<AcceptedAnswer[]> {
   const out: AcceptedAnswer[] = []
+  let linked: string[]
   try {
-    const targets = (await fetchProjectSuggestions(projectId, userId))
-      .filter((s) => s.relation === 'equivalent' && s.sourceProjectId === projectId && s.sourceItemId === answeredItemId)
-      .map((s) => s.itemId)
-    if (targets.length > 0) out.push(...await acceptSuggestions(projectId, userId, targets, { sourceItemId: answeredItemId }))
+    linked = await sameRequirementTargets(projectId, answeredItemId)
+  } catch (error) {
+    console.error(`Could not find the same-requirement items for ${answeredItemId}:`, error)
+    return out
+  }
+  if (linked.length === 0) return out
+
+  let unanswered: string[] = []
+  try {
+    const { data: answered, error } = await supabase.from('Audit_Result').select('itemId, result').eq('projectId', projectId).eq('userId', userId).in('itemId', linked)
+    if (error) throw error
+    const rows = (answered ?? []) as { itemId: string; result: ChecklistItemStatus }[]
+    const has = new Set(rows.map((r) => r.itemId))
+    unanswered = linked.filter((id) => !has.has(id))
+    // When the other linked items already disagree with this answer, an empty item is left for the auditor to decide.
+    const disagrees = !!newResult && rows.some((r) => r.result !== 'not_started' && r.result !== 'needs_review' && r.result !== newResult)
+    // Copying an answer with its findings and photos is the slower path, so it only runs for items without an answer.
+    if (unanswered.length > 0 && !disagrees) {
+      out.push(...await acceptSuggestions(projectId, userId, unanswered, { sourceItemId: answeredItemId }))
+    }
   } catch (error) {
     console.error(`Could not fill in the same-requirement items for ${answeredItemId}:`, error)
   }
   if (newResult) {
     try {
-      out.push(...await followLinkedAnswers(projectId, userId, answeredItemId, newResult, previousResult))
+      out.push(...await followLinkedAnswers(projectId, userId, answeredItemId, newResult, previousResult, linked.filter((id) => !unanswered.includes(id))))
     } catch (error) {
       console.error(`Could not update the same-requirement items for ${answeredItemId}:`, error)
     }

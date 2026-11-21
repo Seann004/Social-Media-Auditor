@@ -15,6 +15,7 @@ import {
 } from '../../../lib/db'
 import { CONFIDENCE_SECTIONS } from './confidenceGroups'
 import LearningPanel from './LearningPanel'
+import GroupsPanel from './GroupsPanel'
 import PairCard from './PairCard'
 
 interface Props {
@@ -250,6 +251,8 @@ export default function LinkedItemsPanel({ guidelines }: Props) {
         </div>
         {message && <p className="text-xs text-slate-600 mt-3" role="status">{message}</p>}
       </div>
+
+      <GroupsPanel version={`${page.totals.confirmed}-${page.counts.confirmed}`} />
 
       <LearningPanel version={reviewed} />
 

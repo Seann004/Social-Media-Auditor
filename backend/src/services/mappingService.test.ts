@@ -565,3 +565,53 @@ describe('same-requirement items follow a changed answer', () => {
     expect(await mapping.fillInSameRequirement('P2', USER, 'p2c', 'compliant', 'compliant')).toEqual([])
   })
 })
+
+describe('items that are the same requirement as several others (a group)', () => {
+  const USER_ID = USER
+  beforeEach(() => {
+    tables.Audit_Project.find((p) => p.projectId === 'P2')!.submissionStatus = 'draft'
+    giveProjectBothGuidelines()
+    // A third guideline whose item is linked to g2a only; g1a, g2a and g3a are one group through g2a.
+    tables.Checklist.push({ checklistId: 'gc3', guidelineId: 'G3', projectId: null, Guideline: { guidelineName: 'EDPB', shortName: 'EDPB' } })
+    tables.Checklist.push({ checklistId: 'pc2c', guidelineId: 'G3', projectId: 'P2', Guideline: { guidelineName: 'EDPB', shortName: 'EDPB' } })
+    tables.Checklist_Item.push({ itemId: 'g3a', checklistId: 'gc3', category: 'Age', itemDescription: 'Age checks', itemName: null, itemCode: 'E-1', reference: null, verbatimClauseText: null })
+    tables.Checklist_Item.push({ itemId: 'p2d', checklistId: 'pc2c', category: 'Age', itemCode: 'E-1', reference: null, originalItemId: 'g3a', itemDescription: 'Age checks' })
+    tables.Item_Mapping.push({ mappingId: 'm2', itemIdA: 'g2a', itemIdB: 'g3a', relation: 'equivalent', confidence: 0.9, rationale: 'same', status: 'confirmed', createdAt: '2026-01-02T00:00:00Z' })
+    tables.Audit_Result.push({ resultId: 'r9', projectId: 'P2', itemId: 'p2c', userId: USER_ID, result: 'compliant', findings: 'ok', evidenceCount: 0, timeSubmitted: '2026-05-02T00:00:00Z' })
+  })
+
+  const answerOf = (itemId: string) => tables.Audit_Result.find((r) => r.projectId === 'P2' && r.itemId === itemId)
+
+  it('lists every pair of the group, also the one no admin linked directly, marked as derived', async () => {
+    const pairs = await mapping.fetchProjectSimilarItems('P2')
+    const ends = pairs.map((p) => [p.projectItemIdA, p.projectItemIdB].sort().join('+') + (p.derived ? ' derived' : ''))
+    expect(ends.sort()).toEqual(['p2a+p2c', 'p2a+p2d', 'p2c+p2d derived'])
+  })
+
+  it('fills in every item of the group from one answer', async () => {
+    const filled = await mapping.fillInSameRequirement('P2', USER_ID, 'p2c', 'compliant', null)
+    expect(filled.map((a) => a.itemId).sort()).toEqual(['p2a', 'p2d'])
+    expect(answerOf('p2d')).toMatchObject({ result: 'compliant' })
+  })
+
+  it('follows through the group when the answer changes', async () => {
+    await mapping.fillInSameRequirement('P2', USER_ID, 'p2c', 'compliant', null)
+    answerOf('p2c')!.result = 'non_compliant'
+    await mapping.fillInSameRequirement('P2', USER_ID, 'p2c', 'non_compliant', 'compliant')
+    expect(answerOf('p2a')!.result).toBe('non_compliant')
+    expect(answerOf('p2d')!.result).toBe('non_compliant')
+  })
+
+  it('leaves an empty item for the auditor when the group already disagrees', async () => {
+    tables.Audit_Result.push({ resultId: 'r10', projectId: 'P2', itemId: 'p2d', userId: USER_ID, result: 'non_compliant', findings: null, evidenceCount: 0, timeSubmitted: '2026-05-01T00:00:00Z' })
+    const filled = await mapping.fillInSameRequirement('P2', USER_ID, 'p2c', 'compliant', null)
+    expect(filled).toEqual([])
+    expect(answerOf('p2a')).toBeUndefined()
+  })
+
+  it('does not group items through a partly-overlapping link', async () => {
+    tables.Item_Mapping.find((m) => m.mappingId === 'm2')!.relation = 'partial'
+    const filled = await mapping.fillInSameRequirement('P2', USER_ID, 'p2c', 'compliant', null)
+    expect(filled.map((a) => a.itemId)).toEqual(['p2a'])
+  })
+})

@@ -51,6 +51,29 @@ export function confidenceLabel(pair: ItemMapping): string {
   return `${percent(pair.confidence)} sure`
 }
 
+function itemName(item: MappedItem): string {
+  return `${item.guidelineName} ${item.itemCode || item.reference || item.text.slice(0, 30)}`
+}
+
+/** Says what approving a same-requirement pair does to the groups, so a wide link is not approved by accident. */
+export function GroupImpactNote({ pair }: { pair: ItemMapping }) {
+  const impact = pair.groupImpact
+  if (!impact || pair.status !== 'suggested') return null
+  if (impact.alreadyTogether && impact.joins.length === 0) return null
+  const shown = impact.joins.slice(0, 4).map(itemName).join(', ')
+  const more = impact.joins.length > 4 ? ` and ${impact.joins.length - 4} more` : ''
+  return (
+    <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${impact.sameGuideline ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-blue-100 bg-blue-50/60 text-slate-600'}`}>
+      {impact.alreadyTogether
+        ? 'These two items are already in one group, so approving adds nothing new.'
+        : <>Approving this as <span className="font-semibold">Same requirement</span> puts both items in one group with {shown}{more}. All of them become the same requirement.</>}
+      {impact.sameGuideline && (
+        <span className="block mt-1 font-semibold">Two items of one guideline would be in the group. Check that the link is not too wide.</span>
+      )}
+    </div>
+  )
+}
+
 interface Props {
   pair: ItemMapping
   busy: boolean
@@ -87,6 +110,8 @@ export default function PairCard({ pair: m, busy, selected, onSelect, onReview }
         </div>
         <ItemSide item={m.itemB} />
       </div>
+
+      <GroupImpactNote pair={m} />
 
       <div className="flex items-center gap-3 mt-3 flex-wrap">
         <p className="flex-1 min-w-0 basis-60 text-xs text-slate-500">

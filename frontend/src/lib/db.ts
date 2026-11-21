@@ -529,8 +529,27 @@ export interface ItemMapping {
   createdAt: string
   reviewedAt: string | null
   usage: MappingUsage
+  /** What approving the pair as the same requirement does to groups. Null when it touches no group. */
+  groupImpact: GroupImpact | null
   itemA: MappedItem
   itemB: MappedItem
+}
+
+export interface GroupImpact {
+  /** Items that become the same requirement as the two of this pair, through a group one of them is in. */
+  joins: MappedItem[]
+  /** Two items of one guideline would end up in the group. */
+  sameGuideline: boolean
+  /** Both items are already in one group. */
+  alreadyTogether: boolean
+}
+
+/** Items an admin approved as the same requirement, which are all one requirement. */
+export interface MappingGroup {
+  groupId: string
+  items: MappedItem[]
+  directPairs: number
+  sameGuideline: boolean
 }
 
 export interface MappingFilters {
@@ -616,6 +635,10 @@ export async function fetchMappingsPage(filters: MappingFilters, offset: number,
   if (filters.relation) query.set('relation', filters.relation)
   if (filters.inUse) query.set('inUse', 'true')
   return request<MappingPage>(`/mappings?${query.toString()}`)
+}
+
+export async function fetchMappingGroups(): Promise<MappingGroup[]> {
+  return request<MappingGroup[]>('/mappings/groups')
 }
 
 export async function fetchMappingLearning(): Promise<MappingLearning> {

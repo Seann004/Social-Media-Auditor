@@ -12,6 +12,7 @@ import {
   type MappingStatus,
 } from './mappingService.js'
 import { cachedRanking, invalidateMappingCache } from './mappingCache.js'
+import { groupIndex, buildGroups } from './mappingGroups.js'
 import { buildCalibration, levelOf, MIN_DECISIONS_TO_SHOW, type Calibration, type ConfidenceLevel } from './calibration.js'
 
 /**
@@ -58,6 +59,17 @@ interface RankedPair {
   learnedConfidence: number | null
   learnedFrom: number
   level: ConfidenceLevel
+  /** What approving this pair as the same requirement does to groups; null for pairs that are not same-requirement suggestions. */
+  groupImpact: GroupImpact | null
+}
+
+export interface GroupImpact {
+  /** Items that would become the same requirement as these two, through the group of either one. */
+  joins: GlobalItem[]
+  /** Two items of one guideline would end up in the group, which is often a sign the link is too wide. */
+  sameGuideline: boolean
+  /** Both items are already in one group, so the pair adds nothing new. */
+  alreadyTogether: boolean
 }
 
 /** For each library item, the projects that use a copy of it. Items a project switched off do not count. */
@@ -129,6 +141,7 @@ async function rankFresh(): Promise<{ ranked: RankedPair[]; calibration: Calibra
   const [rows, items, usage] = await Promise.all([fetchMappingRows(), fetchGlobalItems(), fetchLibraryItemUsage()])
   const byId = new Map(items.map((i) => [i.itemId.toLowerCase(), i]))
   const calibration = calibrationOf(rows)
+  const groups = groupIndex(rows.filter((r) => r.status === 'confirmed'))
 
   const ranked: RankedPair[] = []
   for (const row of rows) {
@@ -145,9 +158,27 @@ async function rankFresh(): Promise<{ ranked: RankedPair[]; calibration: Calibra
       learnedConfidence: learned.score,
       learnedFrom: learned.from,
       level: levelOf(learned.score),
+      groupImpact: row.status === 'suggested' && row.relation === 'equivalent' ? impactOf(row, groups, byId) : null,
     })
   }
   return { ranked, calibration }
+}
+
+function impactOf(row: MappingRow, groups: Map<string, string[]>, byId: Map<string, GlobalItem>): GroupImpact | null {
+  const a = row.itemIdA.toLowerCase()
+  const b = row.itemIdB.toLowerCase()
+  const groupA = groups.get(a) ?? []
+  const groupB = groups.get(b) ?? []
+  const members = new Set([a, b, ...groupA, ...groupB])
+  const joins = Array.from(members).filter((id) => id !== a && id !== b).map((id) => byId.get(id)).filter((i): i is GlobalItem => !!i)
+  const alreadyTogether = groupA.includes(b)
+  if (joins.length === 0 && !alreadyTogether) return null
+  const perGuideline = new Map<string, number>()
+  for (const id of members) {
+    const guidelineId = byId.get(id)?.guidelineId
+    if (guidelineId) perGuideline.set(guidelineId, (perGuideline.get(guidelineId) ?? 0) + 1)
+  }
+  return { joins, sameGuideline: Array.from(perGuideline.values()).some((n) => n > 1), alreadyTogether }
 }
 
 const LEVEL_ORDER: Record<ConfidenceLevel, number> = { high: 0, medium: 1, low: 2 }
@@ -185,6 +216,9 @@ function describePair(pair: RankedPair) {
     createdAt: row.createdAt,
     reviewedAt: row.reviewedAt,
     usage: pair.usage,
+    groupImpact: pair.groupImpact
+      ? { joins: pair.groupImpact.joins.map((i) => describeItem(i)!), sameGuideline: pair.groupImpact.sameGuideline, alreadyTogether: pair.groupImpact.alreadyTogether }
+      : null,
     itemA: describeItem(pair.itemA)!,
     itemB: describeItem(pair.itemB)!,
   }
@@ -316,3 +350,42 @@ export async function getLearning(): Promise<LearningSummary> {
 }
 
 export { MappingNotFoundError }
+
+export interface MappingGroup {
+  /** The first item id of the group, which names it. */
+  groupId: string
+  items: NonNullable<ReturnType<typeof describeItem>>[]
+  /** How many pairs an admin approved directly inside the group. */
+  directPairs: number
+  /** Two items of one guideline are in the group, which is often a sign a link is too wide. */
+  sameGuideline: boolean
+}
+
+/** Every group of items an admin approved as the same requirement, the largest first. */
+export async function listGroups(): Promise<MappingGroup[]> {
+  const [rows, items] = await Promise.all([fetchMappingRows(), fetchGlobalItems()])
+  const confirmed = rows.filter((r) => r.status === 'confirmed' && r.relation === 'equivalent')
+  const byId = new Map(items.map((i) => [i.itemId.toLowerCase(), i]))
+  const direct = new Map<string, number>()
+  const memberOf = new Map<string, string>()
+  const groups = buildGroups(confirmed)
+  for (const g of groups) for (const id of g) memberOf.set(id, g[0])
+  for (const r of confirmed) {
+    const key = memberOf.get(r.itemIdA.toLowerCase())
+    if (key) direct.set(key, (direct.get(key) ?? 0) + 1)
+  }
+
+  return groups.map((g) => {
+    const members = g.map((id) => byId.get(id)).filter((i): i is GlobalItem => !!i)
+    const perGuideline = new Map<string, number>()
+    for (const m of members) perGuideline.set(m.guidelineId, (perGuideline.get(m.guidelineId) ?? 0) + 1)
+    return {
+      groupId: g[0],
+      items: members
+        .sort((x, y) => x.guidelineName.localeCompare(y.guidelineName) || (x.itemCode ?? '').localeCompare(y.itemCode ?? ''))
+        .map((i) => describeItem(i)!),
+      directPairs: direct.get(g[0]) ?? 0,
+      sameGuideline: Array.from(perGuideline.values()).some((n) => n > 1),
+    }
+  })
+}
