@@ -551,6 +551,8 @@ export interface MappingFilters {
   relation?: MappingRelation
   /** Only pairs whose two items are both used by a project. */
   inUse?: boolean
+  /** Only one confidence section: the page and the total are then that section's. */
+  level?: ConfidenceLevel
 }
 
 export interface MappingPage {
@@ -627,6 +629,7 @@ export async function fetchMappingsPage(filters: MappingFilters, offset: number,
   if (filters.guidelineId) query.set('guidelineId', filters.guidelineId)
   if (filters.relation) query.set('relation', filters.relation)
   if (filters.inUse) query.set('inUse', 'true')
+  if (filters.level) query.set('level', filters.level)
   return request<MappingPage>(`/mappings?${query.toString()}`)
 }
 

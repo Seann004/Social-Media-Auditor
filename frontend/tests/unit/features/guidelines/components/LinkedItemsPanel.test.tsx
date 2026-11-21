@@ -64,7 +64,21 @@ function pageOf(items: db.ItemMapping[], over: Partial<db.MappingPage> = {}): db
   return { items, total: items.length, counts, totals: counts, levels, linkedGuidelineIds: ['ONSA', 'UKCC'], ...over }
 }
 
-const lastFilters = () => m.page.mock.calls[m.page.mock.calls.length - 1][0]
+/** Answers like the server: a level gives that section's pairs and total, and the counts per level stay those of the whole list. */
+function serve(items: db.ItemMapping[], over: Partial<db.MappingPage> = {}) {
+  m.page.mockImplementation(async (filters, offset, limit) => {
+    const matching = filters.level ? items.filter((i) => i.level === filters.level) : items
+    return {
+      ...pageOf(items),
+      ...over,
+      items: matching.slice(offset, offset + limit),
+      total: filters.level || over.total === undefined ? matching.length : over.total,
+    }
+  })
+}
+
+/** The filters of the latest request for the counts (one pair), not for a section's table. */
+const lastFilters = () => m.page.mock.calls.filter((c) => c[2] === 1).at(-1)![0]
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -88,27 +102,27 @@ describe('LinkedItemsPanel loading', () => {
   })
 
   it('asks for the pairs awaiting review first', async () => {
-    m.page.mockResolvedValue(pageOf([]))
+    serve([])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await screen.findByText('Nothing here yet.')
-    expect(m.page).toHaveBeenCalledWith({ status: 'suggested' }, 0, 50)
+    expect(m.page).toHaveBeenCalledWith({ status: 'suggested' }, 0, 1)
   })
 })
 
 describe('LinkedItemsPanel sections', () => {
   it('shows the High, Medium and Low sections with the counts for the whole list', async () => {
     const items = [pair('h', 0.92), pair('m', 0.6), pair('l', 0.3)]
-    m.page.mockResolvedValue(pageOf(items, { levels: { high: 120, medium: 40, low: 7 }, total: 167 }))
+    serve(items, { levels: { high: 120, medium: 40, low: 7 }, total: 167 })
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     const high = await screen.findByRole('button', { name: /high confidence/i })
     expect(within(high).getByText('120')).toBeInTheDocument()
     expect(within(screen.getByRole('button', { name: /medium confidence/i })).getByText('40')).toBeInTheDocument()
     expect(within(screen.getByRole('button', { name: /low confidence/i })).getByText('7')).toBeInTheDocument()
-    expect(screen.getByText('A text h')).toBeInTheDocument()
+    expect(await screen.findByText('A text h')).toBeInTheDocument()
   })
 
   it('leaves out a section that has no pairs', async () => {
-    m.page.mockResolvedValue(pageOf([pair('h', 0.9)]))
+    serve([pair('h', 0.9)])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await screen.findByRole('button', { name: /high confidence/i })
     expect(screen.queryByRole('button', { name: /medium confidence/i })).not.toBeInTheDocument()
@@ -116,7 +130,7 @@ describe('LinkedItemsPanel sections', () => {
   })
 
   it('collapses one section without touching the others, and opens it again', async () => {
-    m.page.mockResolvedValue(pageOf([pair('h', 0.9), pair('m1', 0.6), pair('l', 0.2)]))
+    serve([pair('h', 0.9), pair('m1', 0.6), pair('l', 0.2)])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     const medium = await screen.findByRole('button', { name: /medium confidence/i })
     expect(medium).toHaveAttribute('aria-expanded', 'true')
@@ -132,12 +146,12 @@ describe('LinkedItemsPanel sections', () => {
   })
 
   it('says how much each pair matters', async () => {
-    m.page.mockResolvedValue(pageOf([
+    serve([
       pair('a', 0.9, { usage: { projectsA: 3, projectsB: 2, together: 2 } }),
       pair('b', 0.9, { usage: { projectsA: 1, projectsB: 1, together: 0 } }),
       pair('c', 0.9, { usage: { projectsA: 1, projectsB: 0, together: 0 } }),
       pair('d', 0.9),
-    ]))
+    ])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     expect(await screen.findByText('Used together in 2 projects')).toBeInTheDocument()
     expect(screen.getByText('Both items are in use, in different projects')).toBeInTheDocument()
@@ -146,11 +160,11 @@ describe('LinkedItemsPanel sections', () => {
   })
 
   it('shows the learned score next to the AI score once enough decisions back it', async () => {
-    m.page.mockResolvedValue(pageOf([
+    serve([
       pair('learned', 0.92, { learnedConfidence: 0.24, learnedFrom: 20 }),
       pair('few', 0.88, { learnedConfidence: 0.7, learnedFrom: 2 }),
       pair('same', 0.85, { learnedConfidence: 0.85, learnedFrom: 30 }),
-    ]))
+    ])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     expect(await screen.findByText(/AI 92% · learned 24% \(from 20 past decisions\)/)).toBeInTheDocument()
     expect(screen.getByText('88% sure')).toBeInTheDocument()
@@ -160,7 +174,7 @@ describe('LinkedItemsPanel sections', () => {
 
 describe('LinkedItemsPanel tabs and filters', () => {
   it('shows the counts of every status and asks again when a tab is chosen', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p', 0.9)], { counts: { suggested: 1, confirmed: 4, rejected: 2 } }))
+    serve([pair('p', 0.9)], { counts: { suggested: 1, confirmed: 4, rejected: 2 } })
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     const approved = await screen.findByRole('button', { name: /approved/i })
     expect(within(approved).getByText('4')).toBeInTheDocument()
@@ -169,7 +183,7 @@ describe('LinkedItemsPanel tabs and filters', () => {
   })
 
   it('filters by framework, by AI label and by pairs in use, and clears the filters', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p', 0.9)]))
+    serve([pair('p', 0.9)])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await screen.findByText('A text p')
 
@@ -185,35 +199,113 @@ describe('LinkedItemsPanel tabs and filters', () => {
   })
 
   it('says when no pair matches the filters', async () => {
-    m.page.mockResolvedValueOnce(pageOf([pair('p', 0.9)])).mockResolvedValue(pageOf([]))
+    m.page.mockImplementation(async (filters) => (filters.inUse ? pageOf([]) : pageOf([pair('p', 0.9)])))
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await screen.findByText('A text p')
     await userEvent.click(screen.getByLabelText('Only pairs that are in use'))
     expect(await screen.findByText('No pairs match these filters.')).toBeInTheDocument()
   })
 
-  it('loads the next pages without repeating pairs', async () => {
-    const first = Array.from({ length: 3 }, (_, i) => pair(`a${i}`, 0.9))
-    const second = [pair('a2', 0.9), pair('b0', 0.9)]
-    m.page.mockResolvedValueOnce(pageOf(first, { total: 5 })).mockResolvedValueOnce(pageOf(second, { total: 5 }))
+  it('shows each section as a table with a page of pairs and paging under it', async () => {
+    serve(Array.from({ length: 25 }, (_, i) => pair(`h${String(i).padStart(2, '0')}`, 0.9)))
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
-    await userEvent.click(await screen.findByRole('button', { name: /show 2 more \(3 of 5 shown\)/i }))
-    expect(m.page).toHaveBeenLastCalledWith({ status: 'suggested' }, 3, 50)
-    expect(await screen.findByText('A text b0')).toBeInTheDocument()
-    expect(screen.getAllByText('A text a2')).toHaveLength(1)
+    expect(await screen.findByText('A text h00')).toBeInTheDocument()
+    expect(screen.getByRole('table', { name: /high confidence pairs/i })).toBeInTheDocument()
+    // The header, and for each of the ten pairs a row for the items and one for the decision.
+    expect(screen.getAllByRole('row')).toHaveLength(21)
+    expect(screen.getAllByRole('group', { name: 'Your decision' })).toHaveLength(10)
+    expect(screen.getByText('Showing 1–10 of 25')).toBeInTheDocument()
+    expect(screen.queryByText('A text h10')).not.toBeInTheDocument()
+    expect(m.page).toHaveBeenCalledWith({ status: 'suggested', level: 'high' }, 0, 10)
   })
 
-  it('has no Show more button when everything is loaded', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p', 0.9)]))
+  it('keeps the reason and the clause texts behind a Details button on each pair', async () => {
+    serve([pair('p', 0.9, { rationale: 'Both require privacy by default.', itemA: { ...item('ONSA', 'A text p'), clause: 'Clause one text.' } })])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await screen.findByText('A text p')
-    expect(screen.queryByRole('button', { name: /show .* more/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Both require privacy by default/)).not.toBeInTheDocument()
+
+    const details = screen.getByRole('button', { name: 'Details' })
+    expect(details).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(details)
+    expect(screen.getByText(/Both require privacy by default/)).toBeInTheDocument()
+    expect(screen.getByText(/Clause one text/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Hide details' }))
+    expect(screen.queryByText(/Clause one text/)).not.toBeInTheDocument()
+  })
+
+  it('moves between pages of a section, asking the server for just that page', async () => {
+    serve(Array.from({ length: 25 }, (_, i) => pair(`h${String(i).padStart(2, '0')}`, 0.9)))
+    render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+    await screen.findByText('A text h00')
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(await screen.findByText('A text h10')).toBeInTheDocument()
+    expect(screen.queryByText('A text h00')).not.toBeInTheDocument()
+    expect(m.page).toHaveBeenLastCalledWith({ status: 'suggested', level: 'high' }, 10, 10)
+    expect(screen.getByText('Showing 11–20 of 25')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Page 3' }))
+    expect(await screen.findByText('A text h24')).toBeInTheDocument()
+    expect(screen.getByText('Showing 21–25 of 25')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
+  })
+
+  it('pages each section on its own', async () => {
+    serve([
+      ...Array.from({ length: 12 }, (_, i) => pair(`h${String(i).padStart(2, '0')}`, 0.9)),
+      ...Array.from({ length: 12 }, (_, i) => pair(`m${String(i).padStart(2, '0')}`, 0.6)),
+    ])
+    render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+    await screen.findByText('A text h00')
+    const high = within(screen.getByRole('region', { name: 'High confidence' }))
+    await userEvent.click(high.getByRole('button', { name: 'Next page' }))
+    expect(await screen.findByText('A text h11')).toBeInTheDocument()
+    // The medium section is still on its first page.
+    expect(screen.getByText('A text m00')).toBeInTheDocument()
+    expect(within(screen.getByRole('region', { name: 'Medium confidence' })).getByText('Showing 1–10 of 12')).toBeInTheDocument()
+  })
+
+  it('changes how many pairs a page holds and goes back to the first page', async () => {
+    serve(Array.from({ length: 30 }, (_, i) => pair(`h${String(i).padStart(2, '0')}`, 0.9)))
+    render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+    await screen.findByText('A text h00')
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    await screen.findByText('A text h10')
+
+    await userEvent.selectOptions(screen.getByLabelText('Rows per page in High confidence'), '25')
+    expect(await screen.findByText('A text h00')).toBeInTheDocument()
+    expect(screen.getByText('Showing 1–25 of 30')).toBeInTheDocument()
+    expect(m.page).toHaveBeenLastCalledWith({ status: 'suggested', level: 'high' }, 0, 25)
+  })
+
+  it('starts again at the first page when a filter changes', async () => {
+    serve(Array.from({ length: 30 }, (_, i) => pair(`h${String(i).padStart(2, '0')}`, 0.9)))
+    render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+    await screen.findByText('A text h00')
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    await screen.findByText('A text h10')
+
+    await userEvent.click(screen.getByLabelText('Only pairs that are in use'))
+    await waitFor(() => expect(m.page).toHaveBeenLastCalledWith({ status: 'suggested', inUse: true, level: 'high' }, 0, 10))
+  })
+
+  it('has no page numbers to speak of when everything fits on one page', async () => {
+    serve([pair('p', 0.9)])
+    render(<LinkedItemsPanel guidelines={GUIDELINES} />)
+    await screen.findByText('A text p')
+    expect(screen.getByText('Showing 1–1 of 1')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
   })
 })
 
 describe('LinkedItemsPanel decisions', () => {
   it('approves one pair as the same requirement, and reloads the list', async () => {
-    m.page.mockResolvedValueOnce(pageOf([pair('p1', 0.9)])).mockResolvedValueOnce(pageOf([]))
+    const waiting = [pair('p1', 0.9)]
+    serve(waiting)
+    m.review.mockImplementation(async () => { waiting.length = 0 })
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.click(await screen.findByRole('button', { name: 'Same requirement' }))
     expect(m.review).toHaveBeenCalledWith('p1', 'confirmed', 'equivalent')
@@ -221,14 +313,14 @@ describe('LinkedItemsPanel decisions', () => {
   })
 
   it('rejects a pair with Not related', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p1', 0.4)]))
+    serve([pair('p1', 0.4)])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.click(await screen.findByRole('button', { name: 'Not related' }))
     expect(m.review).toHaveBeenCalledWith('p1', 'rejected', undefined)
   })
 
   it('shows an error when a decision cannot be saved', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p1', 0.4)]))
+    serve([pair('p1', 0.4)])
     m.review.mockRejectedValue(new Error('could not save'))
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.click(await screen.findByRole('button', { name: 'Not related' }))
@@ -236,7 +328,7 @@ describe('LinkedItemsPanel decisions', () => {
   })
 
   it('decides the selected pairs together', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p1', 0.9), pair('p2', 0.85), pair('p3', 0.6)]))
+    serve([pair('p1', 0.9), pair('p2', 0.85), pair('p3', 0.6)])
     m.bulk.mockResolvedValue({ updated: 2 })
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await screen.findByText('A text p1')
@@ -254,7 +346,7 @@ describe('LinkedItemsPanel decisions', () => {
   })
 
   it('selects every pair shown in a section', async () => {
-    m.page.mockResolvedValue(pageOf([pair('h1', 0.9), pair('h2', 0.85), pair('m1', 0.6)]))
+    serve([pair('h1', 0.9), pair('h2', 0.85), pair('m1', 0.6)])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.click(await screen.findByLabelText('Select the 2 shown in this section'))
     expect(screen.getByRole('toolbar')).toHaveTextContent('2 selected')
@@ -263,7 +355,7 @@ describe('LinkedItemsPanel decisions', () => {
   })
 
   it('asks to confirm before approving a whole section, and then covers every page', async () => {
-    m.page.mockResolvedValue(pageOf([pair('h1', 0.9)], { levels: { high: 120, medium: 0, low: 0 }, total: 120 }))
+    serve([pair('h1', 0.9)], { levels: { high: 120, medium: 0, low: 0 }, total: 120 })
     m.bulk.mockResolvedValue({ updated: 120 })
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.click(await screen.findByRole('button', { name: 'Approve all (120)' }))
@@ -276,7 +368,7 @@ describe('LinkedItemsPanel decisions', () => {
   })
 
   it('sends the active filters along with a section decision', async () => {
-    m.page.mockResolvedValue(pageOf([pair('h1', 0.9)]))
+    serve([pair('h1', 0.9)])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await screen.findByText('A text h1')
     await userEvent.selectOptions(screen.getByLabelText('Filter by framework'), 'UKCC')
@@ -286,7 +378,7 @@ describe('LinkedItemsPanel decisions', () => {
   })
 
   it('does nothing when the confirmation is cancelled', async () => {
-    m.page.mockResolvedValue(pageOf([pair('h1', 0.9)]))
+    serve([pair('h1', 0.9)])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.click(await screen.findByRole('button', { name: 'Reject all (1)' }))
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -295,7 +387,7 @@ describe('LinkedItemsPanel decisions', () => {
   })
 
   it('shows the message when the list changed since the admin looked', async () => {
-    m.page.mockResolvedValue(pageOf([pair('h1', 0.9)]))
+    serve([pair('h1', 0.9)])
     m.bulk.mockRejectedValue(new Error('The list changed: 2 pairs match now. Reload the list and try again.'))
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.click(await screen.findByRole('button', { name: 'Approve all (1)' }))
@@ -304,7 +396,7 @@ describe('LinkedItemsPanel decisions', () => {
   })
 
   it('offers only the other decision on the tabs of decided pairs', async () => {
-    m.page.mockResolvedValue(pageOf([pair('c1', 0.9, { status: 'confirmed' })], { counts: { suggested: 0, confirmed: 1, rejected: 0 } }))
+    serve([pair('c1', 0.9, { status: 'confirmed' })], { counts: { suggested: 0, confirmed: 1, rejected: 0 } })
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.click(await screen.findByRole('button', { name: /approved/i }))
     expect(await screen.findByRole('button', { name: 'Reject all (1)' })).toBeInTheDocument()
@@ -314,7 +406,7 @@ describe('LinkedItemsPanel decisions', () => {
 
 describe('LinkedItemsPanel summary and notes', () => {
   it('shows the totals of every status whatever the filters', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p', 0.9)], { totals: { suggested: 40, confirmed: 30, rejected: 10 } }))
+    serve([pair('p', 0.9)], { totals: { suggested: 40, confirmed: 30, rejected: 10 } })
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await screen.findByText('A text p')
     expect(screen.getByText('40')).toBeInTheDocument()
@@ -323,7 +415,7 @@ describe('LinkedItemsPanel summary and notes', () => {
   })
 
   it('lists the frameworks that have no saved pairs, so a failed automatic check is noticed', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p1', 0.9)], { linkedGuidelineIds: ['ONSA'] }))
+    serve([pair('p1', 0.9)], { linkedGuidelineIds: ['ONSA'] })
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     const note = await screen.findByRole('note')
     expect(note).toHaveTextContent('UKCC')
@@ -331,14 +423,14 @@ describe('LinkedItemsPanel summary and notes', () => {
   })
 
   it('shows no such note when every framework has pairs', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p1', 0.9)]))
+    serve([pair('p1', 0.9)])
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await screen.findByText('A text p1')
     expect(screen.queryByRole('note')).not.toBeInTheDocument()
   })
 
   it('runs Find links for the chosen framework and reloads', async () => {
-    m.page.mockResolvedValue(pageOf([]))
+    serve([])
     m.generate.mockResolvedValue({ checked: 12, suggested: 3, failedBatches: 0 })
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.selectOptions(await screen.findByLabelText('Framework'), 'ONSA')
@@ -350,7 +442,7 @@ describe('LinkedItemsPanel summary and notes', () => {
 
 describe('LearningPanel', () => {
   it('stays closed until opened, then shows how the AI has done per confidence band', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p', 0.9)]))
+    serve([pair('p', 0.9)])
     m.learning.mockResolvedValue({
       decided: 24, approved: 18, rejected: 6, minDecisionsToShow: 5,
       bands: [{ relation: 'equivalent', fromPercent: 90, toPercent: 100, decided: 20, approved: 18, approvalRate: 0.9 }],
@@ -366,7 +458,7 @@ describe('LearningPanel', () => {
   })
 
   it('loads the new numbers again when it is reopened', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p', 0.9)]))
+    serve([pair('p', 0.9)])
     m.learning
       .mockResolvedValueOnce({ decided: 0, approved: 0, rejected: 0, minDecisionsToShow: 5, bands: [] })
       .mockResolvedValueOnce({ decided: 7, approved: 4, rejected: 3, minDecisionsToShow: 5, bands: [] })
@@ -381,9 +473,13 @@ describe('LearningPanel', () => {
   })
 
   it('loads the numbers again when a decision is made while it is open', async () => {
-    m.page
-      .mockResolvedValueOnce(pageOf([pair('p', 0.9)]))
-      .mockResolvedValue(pageOf([], { totals: { suggested: 0, confirmed: 1, rejected: 0 } }))
+    const waiting = [pair('p', 0.9)]
+    serve(waiting)
+    // After the decision the server counts one approved pair.
+    m.review.mockImplementation(async () => {
+      waiting.length = 0
+      serve(waiting, { totals: { suggested: 0, confirmed: 1, rejected: 0 } })
+    })
     m.learning
       .mockResolvedValueOnce({ decided: 0, approved: 0, rejected: 0, minDecisionsToShow: 5, bands: [] })
       .mockResolvedValue({ decided: 1, approved: 1, rejected: 0, minDecisionsToShow: 5, bands: [{ relation: 'equivalent', fromPercent: 90, toPercent: 100, decided: 1, approved: 1, approvalRate: 1 }] })
@@ -391,13 +487,13 @@ describe('LearningPanel', () => {
     await userEvent.click(await screen.findByRole('button', { name: /how the ai is learning/i }))
     await screen.findByText(/nothing to learn from yet/i)
 
-    await userEvent.click(screen.getByRole('button', { name: 'Same requirement' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Same requirement' }))
     expect(await screen.findByText('90–100%')).toBeInTheDocument()
     expect(m.learning).toHaveBeenCalledTimes(2)
   })
 
   it('says there is nothing to learn from yet', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p', 0.9)]))
+    serve([pair('p', 0.9)])
     m.learning.mockResolvedValue({ decided: 0, approved: 0, rejected: 0, minDecisionsToShow: 5, bands: [] })
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.click(await screen.findByRole('button', { name: /how the ai is learning/i }))
@@ -405,7 +501,7 @@ describe('LearningPanel', () => {
   })
 
   it('shows the error when it cannot load', async () => {
-    m.page.mockResolvedValue(pageOf([pair('p', 0.9)]))
+    serve([pair('p', 0.9)])
     m.learning.mockRejectedValue(new Error('no learning'))
     render(<LinkedItemsPanel guidelines={GUIDELINES} />)
     await userEvent.click(await screen.findByRole('button', { name: /how the ai is learning/i }))

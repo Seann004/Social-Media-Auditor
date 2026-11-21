@@ -17,7 +17,7 @@ import {
 import { CONFIDENCE_SECTIONS } from './confidenceGroups'
 import LearningPanel from './LearningPanel'
 import PendingGroupsPanel from './PendingGroupsPanel'
-import PairCard from './PairCard'
+import ConfidenceSection from './ConfidenceSection'
 
 interface Props {
   guidelines: { id: string; name: string; shortName: string }[]
@@ -31,11 +31,6 @@ const STATUS_TABS: { key: MappingStatus; label: string }[] = [
   { key: 'rejected', label: 'Rejected' },
 ]
 
-const PAGE_SIZE = 50
-const MAX_REFRESH = 200
-
-type SectionAction = { level: ConfidenceLevel; status: MappingStatus }
-
 const selectClass = 'text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-300'
 
 /** Admin screen: the pairs of similar items the AI found, ranked and filtered for a long queue, with bulk decisions. */
@@ -46,16 +41,15 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
   const [inUseOnly, setInUseOnly] = useState(false)
 
   const [page, setPage] = useState<MappingPage | null>(null)
-  const [items, setItems] = useState<ItemMapping[]>([])
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [collapsed, setCollapsed] = useState<Record<ConfidenceLevel, boolean>>({ high: false, medium: false, low: false })
-  const [pendingSection, setPendingSection] = useState<SectionAction | null>(null)
+  // Counts up with every change, so each section loads the page it shows again.
+  const [version, setVersion] = useState(0)
 
   const [target, setTarget] = useState('')
   const [running, setRunning] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -68,15 +62,15 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
 
   const latest = useRef(0)
 
-  const load = useCallback(async (limit = PAGE_SIZE) => {
+  const load = useCallback(async () => {
     const request = ++latest.current
     try {
-      const next = await fetchMappingsPage(filters, 0, limit)
+      // The totals and counts only; each section loads the pages it shows itself.
+      const next = await fetchMappingsPage(filters, 0, 1)
       if (request !== latest.current) return
       setPage(next)
-      setItems(next.items)
       setSelected(new Set())
-      setPendingSection(null)
+      setVersion((v) => v + 1)
       setError(null)
     } catch (err) {
       if (request !== latest.current) return
@@ -86,23 +80,7 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
 
   useEffect(() => { load() }, [load])
 
-  async function loadMore() {
-    setLoadingMore(true)
-    try {
-      const next = await fetchMappingsPage(filters, items.length, PAGE_SIZE)
-      setPage(next)
-      setItems((prev) => {
-        const known = new Set(prev.map((i) => i.mappingId))
-        return [...prev, ...next.items.filter((i) => !known.has(i.mappingId))]
-      })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load more pairs.')
-    } finally {
-      setLoadingMore(false)
-    }
-  }
-
-  const refresh = () => load(Math.min(MAX_REFRESH, Math.max(PAGE_SIZE, items.length)))
+  const refresh = () => load()
 
   async function handleGenerate() {
     if (!target) return
@@ -138,22 +116,12 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
     }
   }
 
-  function handleSelect(id: string, on: boolean) {
+  function handleSelect(ids: string[], on: boolean) {
     setSelected((prev) => {
       const next = new Set(prev)
-      if (on) next.add(id)
-      else next.delete(id)
-      return next
-    })
-  }
-
-  function selectLoaded(level: ConfidenceLevel, on: boolean) {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      for (const item of items) {
-        if (item.level !== level) continue
-        if (on) next.add(item.mappingId)
-        else next.delete(item.mappingId)
+      for (const id of ids) {
+        if (on) next.add(id)
+        else next.delete(id)
       }
       return next
     })
@@ -169,7 +137,6 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not update those pairs.')
-      setPendingSection(null)
     } finally {
       setBulkBusy(false)
     }
@@ -178,7 +145,7 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
   const decideSelected = (status: MappingStatus, relation?: MappingRelation) =>
     runBulk({ ids: Array.from(selected), status, ...(relation ? { relation } : {}) }, (n) => `Updated ${n} pair${n !== 1 ? 's' : ''}.`)
 
-  function decideSection({ level, status }: SectionAction) {
+  function decideSection(level: ConfidenceLevel, status: MappingStatus) {
     const count = page?.levels[level] ?? 0
     return runBulk(
       { filter: { ...filters, level }, expectedCount: count, status },
@@ -331,69 +298,27 @@ export default function LinkedItemsPanel({ guidelines, onOpenItem }: Props) {
             {CONFIDENCE_SECTIONS.map(({ level, title, range }) => {
               const total = page.levels[level]
               if (total === 0) return null
-              const loaded = items.filter((i) => i.level === level)
-              const isOpen = !collapsed[level]
-              const bodyId = `confidence-${level}`
-              const allLoadedSelected = loaded.length > 0 && loaded.every((i) => selected.has(i.mappingId))
               return (
-                <section key={level} aria-label={title}>
-                  <div className="flex items-center gap-3 flex-wrap mb-2">
-                    <button
-                      type="button"
-                      aria-expanded={isOpen}
-                      aria-controls={bodyId}
-                      onClick={() => setCollapsed((prev) => ({ ...prev, [level]: !prev[level] }))}
-                      className="flex-1 min-w-[260px] flex items-center gap-2 text-left bg-white border border-slate-200 rounded-lg px-4 py-2.5 hover:bg-slate-50 transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
-                    >
-                      <CaretRight size={12} weight="bold" className={`text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-90' : ''}`} />
-                      <span className="text-xs font-semibold text-slate-700">{title}</span>
-                      <span className="text-xs text-slate-400">({range})</span>
-                      <span className="ml-auto text-xs font-mono text-slate-500 bg-slate-100 rounded-md px-1.5 py-0.5">{total}</span>
-                    </button>
-
-                    {pendingSection?.level === level ? (
-                      <div role="alert" className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
-                        <span className="text-xs text-amber-800">
-                          {pendingSection.status === 'confirmed' ? 'Approve' : 'Reject'} all {total} pair{total !== 1 ? 's' : ''} in this section (every page, not only the ones loaded)?
-                        </span>
-                        <Button variant={pendingSection.status === 'confirmed' ? 'success' : 'danger-outline'} size="xs" disabled={bulkBusy} onClick={() => decideSection(pendingSection)}>
-                          Yes, {pendingSection.status === 'confirmed' ? 'approve' : 'reject'} {total}
-                        </Button>
-                        <button type="button" onClick={() => setPendingSection(null)} className="text-xs text-slate-500 hover:text-slate-700 cursor-pointer">Cancel</button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        {sectionStatuses.map((a) => (
-                          <Button key={a.status} variant={a.status === 'confirmed' ? 'secondary' : 'danger-outline'} size="xs" disabled={bulkBusy} onClick={() => setPendingSection({ level, status: a.status })}>
-                            {a.label} ({total})
-                          </Button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {isOpen && (
-                    <div id={bodyId} className="space-y-3">
-                      <label className="flex items-center gap-2 text-xs text-slate-500 cursor-pointer px-1">
-                        <input type="checkbox" checked={allLoadedSelected} onChange={(e) => selectLoaded(level, e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300" />
-                        Select the {loaded.length} shown in this section
-                      </label>
-                      {loaded.map((m) => (
-                        <PairCard key={m.mappingId} pair={m} busy={busyId === m.mappingId} selected={selected.has(m.mappingId)} onSelect={handleSelect} onReview={handleReview} />
-                      ))}
-                    </div>
-                  )}
-                </section>
+                <ConfidenceSection
+                  key={level}
+                  level={level}
+                  title={title}
+                  range={range}
+                  total={total}
+                  filters={filters}
+                  version={version}
+                  open={!collapsed[level]}
+                  onToggle={() => setCollapsed((prev) => ({ ...prev, [level]: !prev[level] }))}
+                  actions={sectionStatuses}
+                  selected={selected}
+                  onSelect={handleSelect}
+                  busyId={busyId}
+                  bulkBusy={bulkBusy}
+                  onReview={handleReview}
+                  onDecideAll={(status) => decideSection(level, status)}
+                />
               )
             })}
-
-            {items.length < page.total && (
-              <div className="text-center">
-                <Button variant="secondary" size="sm" disabled={loadingMore} onClick={loadMore}>
-                  {loadingMore ? 'Loading…' : `Show ${Math.min(PAGE_SIZE, page.total - items.length)} more (${items.length} of ${page.total} shown)`}
-                </Button>
-              </div>
-            )}
           </div>
         )}
       </div>

@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type * as db from '../../../../../src/lib/db'
-import { GroupImpactNote } from '../../../../../src/features/guidelines/components/PairCard'
+import { GroupImpactNote } from '../../../../../src/features/guidelines/components/pairParts'
 
 function item(id: string, guidelineName: string, itemCode: string, text: string): db.MappedItem {
   return { itemId: id, guidelineId: guidelineName, guidelineName, category: 'Age', itemCode, text, reference: null, clause: null }

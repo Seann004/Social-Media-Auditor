@@ -253,14 +253,16 @@ export async function listMappings(filter: MappingFilter, offset = 0, limit = DE
   const start = Math.max(0, Math.floor(offset))
 
   const underOtherFilters = ranked.filter((p) => matchesFilter(p, filter, { status: true, level: true }))
-  const matching = ranked.filter((p) => matchesFilter(p, { ...filter, level: undefined })).sort(compareRanked)
+  const acrossLevels = ranked.filter((p) => matchesFilter(p, { ...filter, level: undefined })).sort(compareRanked)
+  // With a level, the page and the total are that one section's; the counts per level stay those of the whole list.
+  const matching = filter.level ? acrossLevels.filter((p) => p.level === filter.level) : acrossLevels
 
   return {
     items: matching.slice(start, start + pageSize).map(describePair),
     total: matching.length,
     counts: countBy(underOtherFilters, STATUSES, (p) => p.row.status) as Record<MappingStatus, number>,
     totals: countBy(ranked, STATUSES, (p) => p.row.status) as Record<MappingStatus, number>,
-    levels: countBy(matching, LEVELS, (p) => p.level) as Record<ConfidenceLevel, number>,
+    levels: countBy(acrossLevels, LEVELS, (p) => p.level) as Record<ConfidenceLevel, number>,
     linkedGuidelineIds: Array.from(new Set(ranked.flatMap((p) => [p.itemA.guidelineId, p.itemB.guidelineId]))),
   }
 }

@@ -98,7 +98,7 @@ export function createMappingRouter({ ask }: Deps): Router {
 
   router.get('/mappings', requireAuth, requireRole('admin'), async (req, res) => {
     try {
-      const filter = parseFilter({ status: 'suggested', ...req.query, level: undefined })
+      const filter = parseFilter({ status: 'suggested', ...req.query })
       if (!filter.ok) return res.status(400).json({ error: filter.error })
       const limit = wholeNumber(req.query.limit, review.DEFAULT_PAGE_SIZE, 1, review.MAX_PAGE_SIZE)
       const offset = wholeNumber(req.query.offset, 0, 0, 1_000_000)

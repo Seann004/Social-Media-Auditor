@@ -164,6 +164,18 @@ describe('GET /mappings (admin only)', () => {
     expect(res.body).toMatchObject({ total: 1, counts: { suggested: 1, confirmed: 1, rejected: 0 }, levels: { high: 0, medium: 1, low: 0 } })
   })
 
+  it('lists one confidence level when asked, and still counts every level', async () => {
+    const app = makeApp()
+    const medium = await request(app).get('/api/mappings?level=medium').set('Authorization', as.admin)
+    expect(medium.body.items).toHaveLength(1)
+    expect(medium.body.total).toBe(1)
+    const high = await request(app).get('/api/mappings?level=high').set('Authorization', as.admin)
+    expect(high.body.items).toEqual([])
+    expect(high.body.total).toBe(0)
+    expect(high.body.levels).toEqual({ high: 0, medium: 1, low: 0 })
+    expect((await request(app).get('/api/mappings?level=extreme').set('Authorization', as.admin)).status).toBe(400)
+  })
+
   it('shows the pairs of another status when asked', async () => {
     const res = await request(makeApp()).get('/api/mappings?status=confirmed').set('Authorization', as.admin)
     expect(res.body.items.map((m: { mappingId: string }) => m.mappingId)).toEqual([M1])

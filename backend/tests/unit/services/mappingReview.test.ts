@@ -91,6 +91,14 @@ describe('listMappings ranking', () => {
     expect(page.total).toBe(5)
   })
 
+  it('pages one section at a time when a level is given, and still counts every level', async () => {
+    const page = await review.listMappings({ status: 'suggested', level: 'high' }, 1, 1)
+    expect(ids(page)).toEqual(['unused-high'])
+    expect(page.total).toBe(2)
+    expect(page.levels).toEqual({ high: 2, medium: 1, low: 2 })
+    expect(ids(await review.listMappings({ status: 'suggested', level: 'low' }))).toEqual(['low', 'none'])
+  })
+
   it('keeps only pairs whose two items are both used, when asked', async () => {
     const page = await review.listMappings({ status: 'suggested', inUse: true })
     expect(ids(page).sort()).toEqual(['low', 'mid', 'together-high'])
