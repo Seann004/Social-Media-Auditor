@@ -94,3 +94,38 @@ describe('askMappingModel', () => {
     expect(getAiUsage()).toEqual([])
   })
 })
+
+describe('askMappingModel cost controls', () => {
+  it('asks gpt-oss models for low reasoning and caps the reply length', async () => {
+    fetchMock.mockResolvedValueOnce(groqReply({ matches: [] }))
+    await askMappingModel('s', 'u', ENV, NO_WAIT)
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.reasoning_effort).toBe('low')
+    expect(body.max_tokens).toBeGreaterThan(0)
+  })
+
+  it('sends no reasoning_effort to a model that does not take it', async () => {
+    fetchMock.mockResolvedValueOnce(groqReply({ matches: [] }))
+    await askMappingModel('s', 'u', { ...ENV, MAPPING_GROQ_MODEL: 'llama-3.3-70b-versatile' }, NO_WAIT)
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty('reasoning_effort')
+  })
+
+  it('asks once more when the reply is not valid JSON', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ choices: [{ message: { content: '{"matches": [' } }], usage: {} }), { status: 200 }))
+    fetchMock.mockResolvedValueOnce(groqReply({ matches: [1] }))
+    expect(await askMappingModel('s', 'u', ENV, NO_WAIT)).toEqual({ matches: [1] })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('throws when the reply is not valid JSON twice', async () => {
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ choices: [{ message: { content: 'nope' } }], usage: {} }), { status: 200 }))
+    await expect(askMappingModel('s', 'u', ENV, NO_WAIT)).rejects.toThrow(/invalid JSON/i)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('treats a Groq json_validate_failed 400 as an unreadable reply and tries once more', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'json_validate_failed' } }), { status: 400 }))
+    fetchMock.mockResolvedValueOnce(groqReply({ matches: [] }))
+    expect(await askMappingModel('s', 'u', ENV, NO_WAIT)).toEqual({ matches: [] })
+  })
+})

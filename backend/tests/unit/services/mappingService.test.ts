@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-import { tables, resetTables, supabase as fakeSupabase } from '../../helpers/fakeSupabase.js'
+import { tables, resetTables, failNext, supabase as fakeSupabase } from '../../helpers/fakeSupabase.js'
 
 vi.mock('../../../src/config/supabase.js', async () => {
   const fake = await import('../../helpers/fakeSupabase.js')
@@ -12,6 +12,7 @@ void fakeSupabase
 
 const mapping = await import('../../../src/services/mappingService.js')
 const { EditLockedError } = await import('../../../src/services/dbService.js')
+const { MATCH_PROMPT_VERSION } = await import('../../../src/services/mappingLedger.js')
 
 const USER = 'user-1'
 
@@ -613,5 +614,149 @@ describe('items that are the same requirement as several others (a group)', () =
     tables.Item_Mapping.find((m) => m.mappingId === 'm2')!.relation = 'partial'
     const filled = await mapping.fillInSameRequirement('P2', USER_ID, 'p2c', 'compliant', null)
     expect(filled.map((a) => a.itemId)).toEqual(['p2a'])
+  })
+})
+
+describe('generateMappingsForGuideline cost controls', () => {
+  beforeEach(() => { tables.Item_Mapping = []; tables.Mapping_Checked = [] })
+
+  it('sends compact JSON, not an indented one', async () => {
+    const ask = askMatchingAge()
+    await mapping.generateMappingsForGuideline('G1', ask)
+    expect(ask.mock.calls[0][1]).not.toContain('\n')
+  })
+
+  it('records every offered pair as checked, matched or not', async () => {
+    tables.Checklist_Item.push({ itemId: 'g2c', checklistId: 'gc2', category: 'Age', itemDescription: 'Age limits for adult content are described', itemName: null, itemCode: 'U-3', reference: null, verbatimClauseText: null })
+    await mapping.generateMappingsForGuideline('G1', askMatchingAge())
+    const keys = tables.Mapping_Checked.map((r) => `${r.itemIdA}|${r.itemIdB}`).sort()
+    expect(keys).toEqual(['g1a|g2a', 'g1a|g2c'])
+    expect(tables.Mapping_Checked[0].promptVersion).toBe(MATCH_PROMPT_VERSION)
+  })
+
+  it('does not offer a pair again once it was checked, even with no link saved', async () => {
+    tables.Mapping_Checked = [{ itemIdA: 'g1a', itemIdB: 'g2a', promptVersion: MATCH_PROMPT_VERSION }]
+    const ask = askMatchingAge()
+    const result = await mapping.generateMappingsForGuideline('G1', ask)
+    expect(ask).not.toHaveBeenCalled()
+    expect(result.suggested).toBe(0)
+  })
+
+  it('compares a pair again when it was checked under an older prompt', async () => {
+    tables.Mapping_Checked = [{ itemIdA: 'g1a', itemIdB: 'g2a', promptVersion: 'match-v0' }]
+    const ask = askMatchingAge()
+    await mapping.generateMappingsForGuideline('G1', ask)
+    expect(ask).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not record the pairs of a batch that failed', async () => {
+    await expect(mapping.generateMappingsForGuideline('G1', vi.fn().mockRejectedValue(new Error('boom')))).rejects.toThrow()
+    expect(tables.Mapping_Checked).toEqual([])
+  })
+
+  it('still matches when the ledger cannot be read or written', async () => {
+    failNext('Mapping_Checked', 'select')
+    failNext('Mapping_Checked', 'upsert')
+    const result = await mapping.generateMappingsForGuideline('G1', askMatchingAge())
+    expect(result.suggested).toBe(1)
+  })
+
+  it('runs several batches at the same time, but never more than the limit', async () => {
+    const extra = Array.from({ length: 30 }, (_, i) => ({
+      itemId: `own${i}`, checklistId: 'gc1', category: 'Age', itemDescription: `Age assurance restricts children from adult content variant${i}`, itemName: null, itemCode: `O-${i + 10}`, reference: null, verbatimClauseText: null,
+    }))
+    tables.Checklist_Item.push(...extra)
+    let inFlight = 0
+    let peak = 0
+    const ask = vi.fn(async () => {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 5))
+      inFlight--
+      return { matches: [] }
+    })
+    await mapping.generateMappingsForGuideline('G1', ask)
+    expect(ask.mock.calls.length).toBeGreaterThan(3)
+    expect(peak).toBeGreaterThan(1)
+    expect(peak).toBeLessThanOrEqual(mapping.MAPPING_CONCURRENCY)
+  })
+})
+
+describe('generateMappingsForGuideline with an embedder', () => {
+  // Two items that share no words but mean the same: word matching alone cannot offer the pair.
+  const PARAPHRASE = 'Confirm the date of birth of each new member before the account opens'
+  const SOURCE = 'Age verification restricts minors from accessing adult content'
+
+  beforeEach(() => {
+    tables.Item_Mapping = []
+    tables.Mapping_Checked = []
+    tables.Item_Embedding = []
+    tables.Checklist_Item.push({ itemId: 'g2p', checklistId: 'gc2', category: 'Age', itemDescription: PARAPHRASE, itemName: null, itemCode: 'U-9', reference: null, verbatimClauseText: null })
+  })
+
+  const embedderFor = (close: Record<string, number[]>, calls: string[][] = []) => ({
+    model: 'test-model',
+    embed: vi.fn(async (texts: readonly string[]) => {
+      calls.push([...texts])
+      return texts.map((t) => close[t] ?? [0, 0, 1])
+    }),
+  })
+
+  const askAll = () => vi.fn(async (_s: string, user: string) => {
+    const payload = JSON.parse(user) as { source: string; candidates: { candidate: string; text: string }[] }[]
+    return { matches: payload.flatMap((p) => p.candidates.filter((c) => c.text === PARAPHRASE).map((c) => ({ source: p.source, candidate: c.candidate, relation: 'equivalent', confidence: 0.9, reason: 'same' }))) }
+  })
+
+  const offeredTexts = (ask: ReturnType<typeof askAll>) =>
+    ask.mock.calls.flatMap((c) => (JSON.parse(c[1] as string) as { candidates: { text: string }[] }[]).flatMap((p) => p.candidates.map((x) => x.text)))
+
+  it('offers a pair with no shared words when their vectors are close', async () => {
+    const embedder = embedderFor({ [SOURCE]: [1, 0, 0], [PARAPHRASE]: [0.95, 0.1, 0] })
+    const result = await mapping.generateMappingsForGuideline('G1', askAll(), embedder)
+    expect(result.suggested).toBe(1)
+    expect(tables.Item_Mapping[0]).toMatchObject({ itemIdA: 'g1a', itemIdB: 'g2p' })
+  })
+
+  it('does not offer that pair without an embedder, which is the gap this closes', async () => {
+    const ask = askAll()
+    await mapping.generateMappingsForGuideline('G1', ask, null)
+    expect(offeredTexts(ask)).not.toContain(PARAPHRASE)
+  })
+
+  it('does not offer items whose vectors are far apart', async () => {
+    const embedder = embedderFor({ [SOURCE]: [1, 0, 0], [PARAPHRASE]: [0, 1, 0] })
+    const ask = askAll()
+    await mapping.generateMappingsForGuideline('G1', ask, embedder)
+    expect(offeredTexts(ask)).not.toContain(PARAPHRASE)
+  })
+
+  it('stores the vectors and does not make them again while the text is unchanged', async () => {
+    const calls: string[][] = []
+    const embedder = embedderFor({ [SOURCE]: [1, 0, 0], [PARAPHRASE]: [0.95, 0.1, 0] }, calls)
+    await mapping.generateMappingsForGuideline('G1', askAll(), embedder)
+    expect(tables.Item_Embedding.length).toBeGreaterThan(0)
+    const before = calls.flat().length
+    tables.Mapping_Checked = []
+    tables.Item_Mapping = []
+    await mapping.generateMappingsForGuideline('G1', askAll(), embedder)
+    expect(calls.flat().length).toBe(before)
+  })
+
+  it('makes a vector again when the text of the item changed', async () => {
+    const calls: string[][] = []
+    const embedder = embedderFor({}, calls)
+    await mapping.generateMappingsForGuideline('G1', askAll(), embedder)
+    const first = calls.flat().length
+    const row = tables.Checklist_Item.find((r) => r.itemId === 'g2p')!
+    row.itemDescription = `${PARAPHRASE}, changed`
+    tables.Mapping_Checked = []
+    await mapping.generateMappingsForGuideline('G1', askAll(), embedder)
+    expect(calls.flat().length).toBeGreaterThan(first)
+  })
+
+  it('falls back to words when the embedder fails', async () => {
+    const embedder = { model: 'test-model', embed: vi.fn(async () => { throw new Error('service down') }) }
+    const result = await mapping.generateMappingsForGuideline('G1', askMatchingAge(), embedder)
+    expect(result.suggested).toBe(1)
   })
 })

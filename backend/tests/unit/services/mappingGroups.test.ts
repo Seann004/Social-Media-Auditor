@@ -57,3 +57,21 @@ describe('derivedPairs', () => {
     expect(derivedPairs([eq('a', 'b'), eq('a', 'c')], new Set(['b']))).toEqual([])
   })
 })
+
+describe('buildGroups with rejected pairs', () => {
+  it('does not merge two groups when that would put a rejected pair together', () => {
+    const groups = buildGroups([eq('a', 'b'), eq('c', 'd'), eq('b', 'c')], [{ itemIdA: 'a', itemIdB: 'd' }])
+    expect(groups).toEqual([['a', 'b'], ['c', 'd']])
+  })
+
+  it('still merges when the rejected pair is not across the join', () => {
+    expect(buildGroups([eq('a', 'b'), eq('b', 'c')], [{ itemIdA: 'x', itemIdB: 'y' }])).toEqual([['a', 'b', 'c']])
+  })
+
+  it('applies to derived pairs and the group index too', () => {
+    const edges = [eq('a', 'b'), eq('b', 'c')]
+    const rejected = [{ itemIdA: 'a', itemIdB: 'c' }]
+    expect(derivedPairs(edges, undefined, rejected)).toEqual([])
+    expect(groupIndex(edges, rejected).get('c')).toBeUndefined()
+  })
+})

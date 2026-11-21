@@ -1,5 +1,9 @@
 import { invalidateMappingCache } from './mappingCache.js'
 import { derivedPairs, groupIndex } from './mappingGroups.js'
+import { loadCheckedPairs, recordCheckedPairs } from './mappingLedger.js'
+import { pickCandidates } from './mappingCandidates.js'
+import { loadItemVectors } from './mappingEmbeddings.js'
+import { cosine, createEmbedder, type Embedder } from '../lib/embedder.js'
 import { supabase } from '../config/supabase.js'
 import { reconcileEffectiveStatus, assertProjectEditable, upsertAuditResult } from './dbService.js'
 import type { ChecklistItemStatus } from '../types/index.js'
@@ -45,6 +49,14 @@ const IN_CHUNK = 100
 const CANDIDATES_PER_ITEM = 5
 const MIN_SIMILARITY = 0.12
 const ITEMS_PER_PROMPT = 8
+const CLAUSE_CHARS = 150
+/**
+ * The lowest cosine of two item vectors that counts as close in meaning. A starting value for a small English model,
+ * where unrelated texts usually score 0.4 to 0.5; tune it against pairs the admin has decided.
+ */
+export const MIN_SEMANTIC_SIMILARITY = 0.6
+/** How many matching prompts may be in flight at once. */
+export const MAPPING_CONCURRENCY = 3
 
 const DEFAULT_MAPPING_MODEL = 'openai/gpt-oss-120b'
 
@@ -202,7 +214,7 @@ Return JSON only:
 {"matches":[{"source":"S1","candidate":"C2","relation":"equivalent","confidence":0.85,"reason":"one short sentence"}]}`
 
 /** Compares every item of one guideline with the items of all the other guidelines. New pairs are saved as "suggested" for an admin to review. */
-export async function generateMappingsForGuideline(guidelineId: string, ask: AskModel) {
+export async function generateMappingsForGuideline(guidelineId: string, ask: AskModel, embedder: Embedder | null = createEmbedder()) {
   const all = await fetchGlobalItems()
   const own = all.filter((i) => i.guidelineId === guidelineId)
   const others = all.filter((i) => i.guidelineId !== guidelineId)
@@ -210,28 +222,45 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
   if (others.length === 0) return { checked: own.length, suggested: 0, failedBatches: 0 }
 
   const existing = new Set((await fetchMappingRows()).map((m) => `${m.itemIdA}|${m.itemIdB}`))
+  const checked = await loadCheckedPairs()
   const otherTokens = others.map((o) => tokenize(itemText(o)))
+  // Without vectors (no embedder, or it failed) this is empty and candidates come from shared words only.
+  const vectors = embedder === null ? new Map<string, number[]>() : await loadItemVectors(all.map((i) => ({ itemId: i.itemId, text: itemText(i) })), embedder)
+  const isNew = (a: string, b: string): boolean => {
+    const key = orderPair(a, b).join('|')
+    return !existing.has(key) && !checked.has(key)
+  }
 
   const work = own
     .map((item) => {
       const t = tokenize(itemText(item))
-      const candidates = others
-        .map((o, idx) => ({ o, score: similarity(t, otherTokens[idx]) }))
-        .filter(({ o, score }) => score >= MIN_SIMILARITY && !existing.has(orderPair(item.itemId, o.itemId).join('|')))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, CANDIDATES_PER_ITEM)
-        .map(({ o }) => o)
+      const lexical = others
+        .map((o, idx) => ({ id: o.itemId, score: similarity(t, otherTokens[idx]) }))
+        .filter(({ id, score }) => score >= MIN_SIMILARITY && isNew(item.itemId, id))
+      const mine = vectors.get(item.itemId.toLowerCase())
+      const semantic = mine === undefined
+        ? null
+        : others
+          .flatMap((o) => {
+            const theirs = vectors.get(o.itemId.toLowerCase())
+            return theirs === undefined ? [] : [{ id: o.itemId, score: cosine(mine, theirs) }]
+          })
+          .filter(({ id, score }) => score >= MIN_SEMANTIC_SIMILARITY && isNew(item.itemId, id))
+      const byId = new Map(others.map((o) => [o.itemId, o]))
+      const candidates = pickCandidates(lexical, semantic, CANDIDATES_PER_ITEM).map((id) => byId.get(id) as GlobalItem)
       return { item, candidates }
     })
     .filter((w) => w.candidates.length > 0)
 
+  const batches: typeof work[] = []
+  for (let i = 0; i < work.length; i += ITEMS_PER_PROMPT) batches.push(work.slice(i, i + ITEMS_PER_PROMPT))
+
   let suggested = 0
   let failedBatches = 0
   let lastError: unknown = null
-  const totalBatches = Math.ceil(work.length / ITEMS_PER_PROMPT)
+  const totalBatches = batches.length
 
-  for (let i = 0; i < work.length; i += ITEMS_PER_PROMPT) {
-    const batch = work.slice(i, i + ITEMS_PER_PROMPT)
+  const runBatch = async (batch: typeof work, batchNo: number): Promise<void> => {
     const refs = new Map<string, string>()
     let candidateNo = 0
 
@@ -241,7 +270,7 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
       return {
         source: sourceRef,
         text: w.item.itemDescription,
-        clause: (w.item.verbatimClauseText ?? '').slice(0, 300),
+        clause: (w.item.verbatimClauseText ?? '').slice(0, CLAUSE_CHARS),
         candidates: w.candidates.map((c) => {
           const ref = `C${++candidateNo}`
           refs.set(ref, c.itemId)
@@ -251,7 +280,7 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
     })
 
     try {
-      const parsed = await ask(MATCH_PROMPT, JSON.stringify(payload, null, 2))
+      const parsed = await ask(MATCH_PROMPT, JSON.stringify(payload))
       const rows = []
       const seen = new Set<string>()
       for (const m of Array.isArray(parsed?.matches) ? parsed.matches : []) {
@@ -288,12 +317,24 @@ export async function generateMappingsForGuideline(guidelineId: string, ask: Ask
         rows.forEach((r) => existing.add(`${r.itemIdA}|${r.itemIdB}`))
         suggested += data?.length ?? 0
       }
+      // Every pair this batch offered has now been compared, matched or not.
+      await recordCheckedPairs(batch.flatMap((w) => w.candidates.map((c) => orderPair(w.item.itemId, c.itemId).join('|'))))
     } catch (error) {
       failedBatches++
       lastError = error
-      console.error(`Mapping batch ${i / ITEMS_PER_PROMPT + 1} failed for guideline ${guidelineId}:`, error)
+      console.error(`Mapping batch ${batchNo} failed for guideline ${guidelineId}:`, error)
     }
   }
+
+  // A few batches at a time: faster, and the 429 handling in the Groq call still paces them.
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < batches.length) {
+      const at = next++
+      await runBatch(batches[at], at + 1)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(MAPPING_CONCURRENCY, batches.length) }, worker))
 
   if (totalBatches > 0 && failedBatches === totalBatches) {
     const reason = lastError instanceof Error ? lastError.message : String(lastError)
@@ -363,7 +404,7 @@ export async function fetchProjectSimilarItems(projectId: string) {
 
   const confirmed = rows.filter((m) => m.status === 'confirmed')
   // Items of one group are the same as each other, also when no admin linked a particular two directly.
-  const derived = derivedPairs(confirmed, new Set(projectItemByLibraryItem.keys())).map((d) => ({
+  const derived = derivedPairs(confirmed, new Set(projectItemByLibraryItem.keys()), rows.filter((m) => m.status === 'rejected')).map((d) => ({
     mappingId: d.mappingId,
     itemIdA: d.itemIdA,
     itemIdB: d.itemIdB,
@@ -482,7 +523,7 @@ export async function fetchProjectSuggestions(projectId: string, userId: string)
 
   const links = new Map<string, { otherId: string; relation: MappingRelation }[]>()
   const confirmedMappings = mappings.filter((m) => m.status === 'confirmed')
-  const linkRows = [...confirmedMappings, ...derivedPairs(confirmedMappings).map((d) => ({ ...d, status: 'confirmed' as const }))]
+  const linkRows = [...confirmedMappings, ...derivedPairs(confirmedMappings, undefined, mappings.filter((m) => m.status === 'rejected')).map((d) => ({ ...d, status: 'confirmed' as const }))]
   for (const m of linkRows) {
     if (m.status !== 'confirmed') continue
     const relation = m.relation

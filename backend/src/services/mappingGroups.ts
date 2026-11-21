@@ -22,7 +22,16 @@ export interface DerivedPair {
 const lower = (id: string) => id.toLowerCase()
 
 /** Every group of two or more items, as sorted lists of lower-case item ids, largest group first. */
-export function buildGroups(edges: readonly GroupEdge[]): string[][] {
+export function buildGroups(edges: readonly GroupEdge[], rejected: readonly Pick<GroupEdge, 'itemIdA' | 'itemIdB'>[] = []): string[][] {
+  // A link is not followed when it would put two items into one group that an admin said are not the same.
+  const refused = new Map<string, Set<string>>()
+  for (const r of rejected) {
+    const a = lower(r.itemIdA)
+    const b = lower(r.itemIdB)
+    refused.set(a, (refused.get(a) ?? new Set()).add(b))
+    refused.set(b, (refused.get(b) ?? new Set()).add(a))
+  }
+  const members = new Map<string, Set<string>>()
   const parent = new Map<string, string>()
   const find = (x: string): string => {
     let root = x
@@ -35,9 +44,17 @@ export function buildGroups(edges: readonly GroupEdge[]): string[][] {
     if (e.relation !== 'equivalent') continue
     const a = lower(e.itemIdA)
     const b = lower(e.itemIdB)
-    if (!parent.has(a)) parent.set(a, a)
-    if (!parent.has(b)) parent.set(b, b)
-    parent.set(find(a), find(b))
+    if (!parent.has(a)) { parent.set(a, a); members.set(a, new Set([a])) }
+    if (!parent.has(b)) { parent.set(b, b); members.set(b, new Set([b])) }
+    const rootA = find(a)
+    const rootB = find(b)
+    if (rootA === rootB) continue
+    const left = members.get(rootA) as Set<string>
+    const right = members.get(rootB) as Set<string>
+    const blocked = [...left].some((x) => [...(refused.get(x) ?? [])].some((y) => right.has(y)))
+    if (blocked) continue
+    parent.set(rootA, rootB)
+    members.set(rootB, new Set([...left, ...right]))
   }
   const byRoot = new Map<string, string[]>()
   for (const id of parent.keys()) {
@@ -51,9 +68,9 @@ export function buildGroups(edges: readonly GroupEdge[]): string[][] {
 }
 
 /** The group each item belongs to, by lower-case item id. Items in no group are absent. */
-export function groupIndex(edges: readonly GroupEdge[]): Map<string, string[]> {
+export function groupIndex(edges: readonly GroupEdge[], rejected: readonly Pick<GroupEdge, 'itemIdA' | 'itemIdB'>[] = []): Map<string, string[]> {
   const index = new Map<string, string[]>()
-  for (const group of buildGroups(edges)) for (const id of group) index.set(id, group)
+  for (const group of buildGroups(edges, rejected)) for (const id of group) index.set(id, group)
   return index
 }
 
@@ -63,10 +80,10 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`)
  * The pairs inside groups that no admin linked directly, so that every two items of a group are linked.
  * `only` limits it to items that matter (for example the items of one project).
  */
-export function derivedPairs(edges: readonly GroupEdge[], only?: ReadonlySet<string>): DerivedPair[] {
+export function derivedPairs(edges: readonly GroupEdge[], only?: ReadonlySet<string>, rejected: readonly Pick<GroupEdge, 'itemIdA' | 'itemIdB'>[] = []): DerivedPair[] {
   const direct = new Set(edges.filter((e) => e.relation === 'equivalent').map((e) => pairKey(lower(e.itemIdA), lower(e.itemIdB))))
   const out: DerivedPair[] = []
-  for (const group of buildGroups(edges)) {
+  for (const group of buildGroups(edges, rejected)) {
     const members = only ? group.filter((id) => only.has(id)) : group
     for (let i = 0; i < members.length; i++) {
       for (let j = i + 1; j < members.length; j++) {
