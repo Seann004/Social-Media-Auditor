@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AppSession, AppSessionPool } from './appSession.js'
 import type { AppStep, StoppedBy } from './appTypes.js'
+import { rankPages } from './appRelevance.js'
 import { estimateTokens, type AssessedItem, type AssessItem, type PassageSource } from './assess.js'
 import { MAX_INPUT_TOKENS_PER_CALL } from './config.js'
 import { isAboutDefault } from './flags.js'
@@ -135,11 +136,9 @@ function unprovenRule(steps: AppStep[]): (quote: string, passage: Passage) => bo
 }
 
 /** Page ids: the pages of the evidence steps, in the order named, then the other step pages, newest first. */
-function pagePriority(stepPages: AppStep[], evidenceSteps: number[]): string[] {
+function namedPages(stepPages: AppStep[], evidenceSteps: number[]): string[] {
   const byPosition = new Map(stepPages.map((s) => [s.position, s.pageId as string]))
-  const named = evidenceSteps.flatMap((n) => (byPosition.has(n) ? [byPosition.get(n) as string] : []))
-  const rest = [...stepPages].reverse().map((s) => s.pageId as string)
-  return [...new Set([...named, ...rest])]
+  return evidenceSteps.flatMap((n) => (byPosition.has(n) ? [byPosition.get(n) as string] : []))
 }
 
 /** Per passage id, the account and step whose page it came from, for the judge to attribute each page (fix A2). */
@@ -209,9 +208,14 @@ export async function judgeItem(ctx: RunCtx, input: JudgeInput): Promise<Suggest
   const passages = await ctx.deps.repo.listPassagesOfPages(stepPages.map((s) => s.pageId as string))
   const byPage = groupByPage(passages.map((p) => withoutTypedText(p, input.steps)))
   const stepLines = stepPages.flatMap((s) => (byPage.get(s.pageId as string) ?? []).filter((p) => p.position === STEP_LINE_POSITION))
-  const pagePassages = pagePriority(stepPages, input.evidenceSteps).map((id) =>
-    (byPage.get(id) ?? []).filter((p) => p.position !== STEP_LINE_POSITION),
-  )
+  // The pages that hold the item's own words come first, after the ones the AI named; repeated pages are read once.
+  const rankable = stepPages.map((s) => ({
+    pageId: s.pageId as string,
+    accountKey: s.accountLabel ?? '',
+    passages: (byPage.get(s.pageId as string) ?? []).filter((p) => p.position !== STEP_LINE_POSITION),
+  }))
+  const itemWording = [item.name, item.text, item.helpText].filter(Boolean).join(' ')
+  const pagePassages = rankPages(itemWording, rankable, namedPages(stepPages, input.evidenceSteps)).map((page) => page.passages)
   const selected = selectStepPassages(stepLines, pagePassages)
 
   const output = await abortable(
