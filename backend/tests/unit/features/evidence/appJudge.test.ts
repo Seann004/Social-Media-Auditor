@@ -789,3 +789,61 @@ describe('judgeItem and items about a default', () => {
     expect(none?.flags.map((f) => f.type)).not.toContain('default_unverified')
   })
 })
+
+describe('judgeItem: the second check of a claim', () => {
+  const quoted = (input: AssessInput) => ({
+    results: [result({ quotes: [quoting((p) => p.text.includes('private'), 'Your account is private.')(input)] })],
+    missingItemIds: [],
+    tokensUsed: 70,
+  })
+
+  async function judgeWith(verify: ((i: { claim: string }) => Promise<{ supported: boolean; tokensUsed: number }>) | null) {
+    const kit = await createKit()
+    await recordDefault(kit)
+    kit.answer.current = quoted
+    kit.ctx.deps.app = { appRepo: createMemoryAppRepository(), secretKey: null, verifyClaim: verify as never }
+    const meter = meterOf()
+    const stored = await judgeItem(kit.ctx, { item: ITEM, platform: 'Social', steps: kit.steps, evidenceSteps: [2], stoppedBy: null, meter, highlighter: null })
+    return { stored, meter }
+  }
+
+  it('keeps a claim the second check supports, and counts its tokens', async () => {
+    const verify = vi.fn(async () => ({ supported: true, tokensUsed: 30 }))
+    const { stored, meter } = await judgeWith(verify)
+    expect(stored?.suggestedResult).toBe('yes')
+    expect(verify).toHaveBeenCalledTimes(1)
+    expect(meter.used()).toBe(100)
+  })
+
+  it('withdraws a claim the second check does not confirm', async () => {
+    const { stored } = await judgeWith(async () => ({ supported: false, tokensUsed: 10 }))
+    expect(stored?.suggestedResult).toBeNull()
+    expect(stored?.reason).toMatch(/second check did not confirm/i)
+    expect(stored?.confidence).toBe('low')
+  })
+
+  it('keeps the first answer when the second check fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { stored } = await judgeWith(async () => {
+      throw new Error('network down')
+    })
+    expect(stored?.suggestedResult).toBe('yes')
+  })
+
+  it('does nothing when no second check is set up', async () => {
+    const { stored, meter } = await judgeWith(null)
+    expect(stored?.suggestedResult).toBe('yes')
+    expect(meter.used()).toBe(70)
+  })
+
+  it('does not check a partially answer or a claim with no quote', async () => {
+    const verify = vi.fn(async () => ({ supported: false, tokensUsed: 1 }))
+    const kit = await createKit()
+    await recordDefault(kit)
+    kit.answer.current = () => ({ results: [result({ suggestedResult: 'partially' })], missingItemIds: [], tokensUsed: 70 })
+    kit.ctx.deps.app = { appRepo: createMemoryAppRepository(), secretKey: null, verifyClaim: verify }
+    const stored = await judgeItem(kit.ctx, { item: ITEM, platform: 'Social', steps: kit.steps, evidenceSteps: [2], stoppedBy: null, meter: meterOf(), highlighter: null })
+    expect(verify).not.toHaveBeenCalled()
+    expect(stored?.suggestedResult).toBe('partially')
+  })
+})

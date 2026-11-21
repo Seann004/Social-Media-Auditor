@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getSupabaseAdmin } from '../../config/supabaseAdmin.js'
 import type { DbAuditResult, DbChecklistItem } from '../../services/dbService.js'
 import type { ChecklistItemStatus, SubmissionStatus } from '../../types/index.js'
+import { buildGroups, type GroupEdge } from '../../services/mappingGroups.js'
 import type { AssessItem } from './assess.js'
 import type { AnswerStatus } from './types.js'
 
@@ -52,6 +53,8 @@ export interface AuditData {
   listChecklistItems(projectId: string): Promise<AssessItem[]>
   listAnswers(projectId: string): Promise<AnswerRow[]>
   getPlatform(projectId: string): Promise<string>
+  /** Groups of this project's checklist items that an admin linked as the same requirement. Optional: without it every item is assessed. */
+  listDuplicateGroups?(projectId: string): Promise<string[][]>
   getProjectAccess(projectId: string, userId: string, role: string): Promise<ProjectAccess | null>
   getSubmissionStatus(projectId: string): Promise<SubmissionStatus | null>
   applyAnswer(input: ApplyAnswerInput): Promise<AppliedAnswer>
@@ -151,6 +154,32 @@ export function createAuditData(opts: AuditDataOptions = {}): AuditData {
         text: i.itemDescription,
         helpText: i.helpText,
       }))
+    },
+
+    async listDuplicateGroups(projectId) {
+      const client = adminClient(opts)
+      const { data: checklists, error: clError } = await client.from('Checklist').select('checklistId').eq('projectId', projectId)
+      if (clError) throw new Error(`Could not read the project checklists: ${clError.message}`)
+      const checklistIds = ((checklists ?? []) as { checklistId: string }[]).map((c) => c.checklistId)
+      if (checklistIds.length === 0) return []
+      const { data: items, error: itemError } = await client
+        .from('Checklist_Item')
+        .select('itemId, originalItemId')
+        .in('checklistId', checklistIds)
+        .not('category', 'like', '__deactivated__%')
+        .not('originalItemId', 'is', null)
+      if (itemError) throw new Error(`Could not read the project items: ${itemError.message}`)
+      const projectItemOf = new Map(((items ?? []) as { itemId: string; originalItemId: string }[]).map((i) => [i.originalItemId.toLowerCase(), i.itemId]))
+      if (projectItemOf.size < 2) return []
+      const { data: links, error: linkError } = await client
+        .from('Item_Mapping')
+        .select('itemIdA, itemIdB, relation, status')
+        .in('status', ['confirmed', 'rejected'])
+      if (linkError) throw new Error(`Could not read the item links: ${linkError.message}`)
+      const rows = (links ?? []) as (GroupEdge & { status: string })[]
+      return buildGroups(rows.filter((r) => r.status === 'confirmed' && r.relation === 'equivalent'), rows.filter((r) => r.status === 'rejected'))
+        .map((group) => group.flatMap((id) => projectItemOf.get(id) ?? []))
+        .filter((group) => group.length >= 2)
     },
 
     async listAnswers(projectId) {

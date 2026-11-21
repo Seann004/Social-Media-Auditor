@@ -6,13 +6,14 @@
 import { randomUUID } from 'node:crypto'
 import type { AppSession, AppSessionPool } from './appSession.js'
 import type { AppStep, StoppedBy } from './appTypes.js'
-import { estimateTokens, type AssessItem, type PassageSource } from './assess.js'
+import { estimateTokens, type AssessedItem, type AssessItem, type PassageSource } from './assess.js'
 import { MAX_INPUT_TOKENS_PER_CALL } from './config.js'
 import { isAboutDefault } from './flags.js'
 import { normaliseForMatch } from './quotes.js'
 import { storeRound, storeSuggestion, withoutEvidence, type BatchContext, type Highlighter, type Round, type TokenMeter } from './runnerAssess.js'
 import { highlightKey } from './runnerHighlights.js'
-import { abortable, logRunProblem, type RunCtx } from './runnerShared.js'
+import { withdrawnClaim } from './claimCheck.js'
+import { abortable, isGroqLimit, logRunProblem, type RunCtx } from './runnerShared.js'
 import type { CapturedPage, Passage, Suggestion } from './types.js'
 
 export const APP_NO_STEPS_REASON = 'The check ended before any page of the app could be recorded.'
@@ -159,6 +160,35 @@ function groupByPage(passages: Passage[]): Map<string, Passage[]> {
 }
 
 /**
+ * A yes or no that has quotes gets a second look when the server is set up for it. A claim the quotes
+ * do not show becomes "no answer". Errors of the second call never lose the first answer, except an abort
+ * and a Groq limit, which end the check as they would anywhere else.
+ */
+async function confirmClaims(ctx: RunCtx, item: AssessItem, results: AssessedItem[], meter: TokenMeter): Promise<AssessedItem[]> {
+  const verify = ctx.deps.app?.verifyClaim
+  if (!verify) return results
+  const checked: AssessedItem[] = []
+  for (const r of results) {
+    const claim = r.suggestedResult
+    const quotes = r.quotes.map((q) => q.text).filter((t) => t.trim() !== '')
+    if ((claim !== 'yes' && claim !== 'no') || quotes.length === 0) {
+      checked.push(r)
+      continue
+    }
+    try {
+      const verdict = await abortable(verify({ item, claim, quotes, apiKey: ctx.deps.apiKey, model: ctx.deps.model, signal: ctx.signal }), ctx.signal)
+      meter.add(verdict.tokensUsed)
+      checked.push(verdict.supported ? r : withdrawnClaim(r))
+    } catch (err) {
+      if (ctx.signal.aborted || isGroqLimit(err)) throw err
+      logRunProblem(ctx, 'Could not run the second check of a claim, so the first answer stands', err)
+      checked.push(r)
+    }
+  }
+  return checked
+}
+
+/**
  * Judges the item from its steps and stores one suggestion with source `app`. Stores a null
  * suggestion without calling the AI when no step recorded a page. Returns null when the AI left the
  * item out (or the item was deleted meanwhile). A failed AI call, a Groq limit among them, is thrown
@@ -197,11 +227,12 @@ export async function judgeItem(ctx: RunCtx, input: JudgeInput): Promise<Suggest
     ctx.signal,
   )
   input.meter.add(output.tokensUsed)
+  const results = await confirmClaims(ctx, item, output.results.filter((r) => r.itemId === item.id), input.meter)
 
   const round: Round = {
     selected,
     found: new Map([[item.id, selected.length]]),
-    results: output.results.filter((r) => r.itemId === item.id),
+    results,
     isUnproven: unprovenRule(input.steps),
     // A step line is SafetyAudit's own words, never on the page: close-ups are for page text.
     takesCloseUp: (p) => p.position !== STEP_LINE_POSITION,

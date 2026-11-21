@@ -25,7 +25,7 @@ import {
 } from './appSteps.js'
 import type { AgentAccount, AppAction, AppChange, AppElement, AppSource, AppStep, AppView, StoppedBy } from './appTypes.js'
 import type { AssessItem } from './assess.js'
-import { APP_MAX_STEPS_PER_CHECK, APP_MAX_TOKENS_PER_RUN, APP_UNREADABLE_REPLIES_BEFORE_STOP } from './config.js'
+import { APP_MAX_STEPS_PER_CHECK, APP_MAX_TOKENS_PER_RUN, APP_STALLED_STEPS_BEFORE_STOP, APP_UNREADABLE_REPLIES_BEFORE_STOP } from './config.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import type { TokenMeter } from './runnerAssess.js'
 import type { StopReason } from './runnerFinish.js'
@@ -142,6 +142,8 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   let view: AppView | null = null
   let unreadableInARow = 0
   let unreadPagesInARow = 0
+  /** Steps in a row that were refused or failed: they add no evidence. */
+  let stalledInARow = 0
   /** Per account, the path where the last password was filled: a sign-in that stays there failed. */
   let loginPaths: ReadonlyMap<string, string> = new Map()
   /** Per change, the form or dialog of its control, to tell which Save button saves it. */
@@ -437,6 +439,8 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     }
     if (action.type === 'switch_account') await switchAccount(action)
     else await act(action)
+    stalledInARow = steps.at(-1)?.outcome === 'refused' || steps.at(-1)?.outcome === 'failed' ? stalledInARow + 1 : 0
+    if (stalledInARow >= APP_STALLED_STEPS_BEFORE_STOP) return outcome()
   }
   return outcome()
 }

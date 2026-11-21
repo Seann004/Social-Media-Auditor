@@ -39,6 +39,12 @@ export const MAX_INPUT_TOKENS_PER_CALL = 5_000
 export const MAX_OUTPUT_TOKENS_PER_CALL = 1_500
 export const MAX_TOKENS_PER_RUN = 80_000
 export const MAX_ITEMS_PER_CALL = 10
+/**
+ * How many categories of one pages run are assessed at the same time. Kept at 1: with more, each extra call in flight
+ * can overshoot MAX_TOKENS_PER_RUN by one call's tokens, and a daily-limit stop leaves a different set unassessed.
+ * Raise it only together with a budget that reserves tokens before a call.
+ */
+export const ASSESS_CONCURRENCY = 1
 export const GROQ_MAX_WAIT_MS = 60_000
 export const AI_TEMPERATURE = 0.1
 /** Waits before each extra try at a Groq call that failed on the network (no HTTP status at all). */
@@ -148,6 +154,8 @@ export const APP_MAX_HANDLES = 5
 // Giving up
 export const APP_LOGIN_FAILURES_BEFORE_UNUSABLE = 2
 export const APP_UNREADABLE_REPLIES_BEFORE_STOP = 3
+/** Refused or failed steps in a row after which a check stops: the AI is stuck, and each further step costs tokens for nothing. */
+export const APP_STALLED_STEPS_BEFORE_STOP = 4
 
 // Crypto and AI
 export const SECRET_KEY_BYTES = 32

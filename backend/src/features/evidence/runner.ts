@@ -3,7 +3,8 @@ import { executeAppRun } from './appRunner.js'
 import { assessBatch as defaultAssessBatch, type AssessItem } from './assess.js'
 import { getBrowser } from './browser.js'
 import { capturePages } from './capture.js'
-import { MAX_TOKENS_PER_RUN, RUN_UPDATE_RETRY_DELAYS_MS } from './config.js'
+import { ASSESS_CONCURRENCY, MAX_TOKENS_PER_RUN, RUN_UPDATE_RETRY_DELAYS_MS } from './config.js'
+import { copyToTwins, dropTwins, planDuplicates, readDuplicateGroups } from './duplicateItems.js'
 import { captureHighlights } from './highlight.js'
 import { relevantFailedPages } from './failedPages.js'
 import { createGithubFetcher, type GithubFetcher } from './repoFetch.js'
@@ -15,6 +16,7 @@ import { runTimeoutMsOf } from './runStart.js'
 import { capturePhase } from './runnerCapture.js'
 import { autoMatchAnswers, carryForward, partialSummary, type StopReason } from './runnerFinish.js'
 import {
+  categoryKey,
   createMeter,
   isGroqLimit,
   isRunGone,
@@ -66,6 +68,7 @@ function resolve(deps: RunnerDeps): ResolvedDeps {
     assessBatch: deps.assessBatch ?? defaultAssessBatch,
     retryDelaysMs: deps.retryDelaysMs ?? RUN_UPDATE_RETRY_DELAYS_MS,
     app: deps.app ?? null,
+    embedder: deps.embedder ?? null,
     code: deps.code ? { repoRepo: deps.code.repoRepo, fetcher: deps.code.fetcher ?? defaultFetcher } : null,
   }
 }
@@ -95,30 +98,43 @@ async function stopForFailure(ctx: RunCtx, err: unknown): Promise<StopReason | n
   return null
 }
 
+async function assessCategory(ctx: RunCtx, category: Category, batch: BatchContext, meter: TokenMeter, progress: Progress): Promise<void> {
+  let complete = true
+  for (const items of category.batches) {
+    progress.stop ??= stopBefore(ctx, meter.used())
+    if (progress.stop) {
+      complete = false
+      break
+    }
+    try {
+      const outcome = await assessAndStore(ctx, items, batch, meter)
+      progress.created.push(...outcome.created)
+      if (outcome.unassessed > 0) complete = false
+    } catch (err) {
+      complete = false
+      progress.stop ??= await stopForFailure(ctx, err)
+      break
+    }
+  }
+  if (complete) progress.done += 1
+  else progress.unassessed.push(category.key)
+  await updateRun(ctx, { categoriesDone: progress.done, tokensUsed: meter.used() })
+}
+
+/**
+ * Assesses the categories, EVIDENCE_CONCURRENCY at a time (a category's own batches stay in order).
+ * A stop (limit, budget, timeout) set by one category makes the others stop before their next batch.
+ */
 async function assessCategories(ctx: RunCtx, categories: Category[], batch: BatchContext, meter: TokenMeter): Promise<Progress> {
   const progress: Progress = { done: 0, unassessed: [], stop: null, created: [] }
-  for (const category of categories) {
-    let complete = true
-    for (const items of category.batches) {
-      progress.stop ??= stopBefore(ctx, meter.used())
-      if (progress.stop) {
-        complete = false
-        break
-      }
-      try {
-        const outcome = await assessAndStore(ctx, items, batch, meter)
-        progress.created.push(...outcome.created)
-        if (outcome.unassessed > 0) complete = false
-      } catch (err) {
-        complete = false
-        progress.stop = await stopForFailure(ctx, err)
-        break
-      }
-    }
-    if (complete) progress.done += 1
-    else progress.unassessed.push(category.key)
-    await updateRun(ctx, { categoriesDone: progress.done, tokensUsed: meter.used() })
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < categories.length) await assessCategory(ctx, categories[next++], batch, meter, progress)
   }
+  await Promise.all(Array.from({ length: Math.min(ASSESS_CONCURRENCY, categories.length) }, worker))
+  // Categories finish in any order; keep the checklist's.
+  const order = new Map(categories.map((c, at) => [c.key, at]))
+  progress.unassessed.sort((x, y) => (order.get(x) ?? 0) - (order.get(y) ?? 0))
   return progress
 }
 
@@ -157,7 +173,10 @@ async function execute(ctx: RunCtx): Promise<void> {
   await updateRun(ctx, { status: 'assessing', pagesTotal: pages.length, pagesDone: pages.length })
 
   const { items, platform } = await loadChecklist(ctx)
-  const categories = await categoriesToAssess(ctx, items)
+  // Items linked as the same requirement are assessed once. A re-assess of the unfinished plans from the earlier run, so it keeps every item.
+  const wholePlan = isCapture || ctx.run.scope !== 'unfinished'
+  const duplicates = planDuplicates(items, wholePlan ? await readDuplicateGroups(ctx) : [])
+  const categories = dropTwins(await categoriesToAssess(ctx, items), duplicates.twinIds)
   await updateRun(ctx, { categoriesTotal: categories.length })
 
   const batch: BatchContext = {
@@ -167,6 +186,12 @@ async function execute(ctx: RunCtx): Promise<void> {
   }
   const meter = createMeter()
   const progress = await assessCategories(ctx, categories, batch, meter)
+  const copies = await copyToTwins(ctx, duplicates, progress.created)
+  progress.created.push(...copies.created)
+  for (const twin of copies.missing) {
+    const key = categoryKey(twin)
+    if (!progress.unassessed.includes(key)) progress.unassessed.push(key)
+  }
 
   const notKept = isCapture ? [] : await carryForward(ctx, items, new Set(progress.created.map((s) => s.itemId)))
   const unassessed = [...progress.unassessed, ...notKept.filter((key) => !progress.unassessed.includes(key))]

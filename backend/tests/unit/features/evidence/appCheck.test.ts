@@ -3,7 +3,7 @@ import { GroqLimitError } from '../../../../src/lib/groq.js'
 import { StepDecisionError, type StepPrompt } from '../../../../src/features/evidence/appAgent.js'
 import type { AppChange, AppStep } from '../../../../src/features/evidence/appTypes.js'
 import { closeBrowser } from '../../../../src/features/evidence/browser.js'
-import { APP_MAX_STEPS_PER_CHECK, APP_UNREADABLE_REPLIES_BEFORE_STOP } from '../../../../src/features/evidence/config.js'
+import { APP_MAX_STEPS_PER_CHECK, APP_STALLED_STEPS_BEFORE_STOP, APP_UNREADABLE_REPLIES_BEFORE_STOP } from '../../../../src/features/evidence/config.js'
 import { TEST_TIMEOUT_MS } from '../../../fixtures/pages.js'
 import { makeAccount, startAppWorld, TEEN_PASSWORD, type AppWorld } from '../../../fixtures/appWorld.js'
 import { createCheckKit, createMeter, ITEM, on, openPath, pixelsAt, RUN, signIn, type CheckKit } from '../../../fixtures/checkWorld.js'
@@ -220,12 +220,22 @@ describe('runCheck: stopping', () => {
   })
 
   it(`stops at ${APP_MAX_STEPS_PER_CHECK} steps, refused ones included, with finished false`, async () => {
-    const { outcome, agent } = await kit.check(Array.from({ length: 20 }, () => ({ type: 'back' }) as const))
+    // A step that gets through now and then keeps the check from counting as stuck.
+    const cycle = [{ type: 'switch_account', account: 'Teen 15' }, { type: 'back' }, { type: 'back' }] as const
+    const { outcome, agent } = await kit.check(Array.from({ length: 20 }, (_, i) => cycle[i % 3]))
     expect(APP_MAX_STEPS_PER_CHECK).toBe(15)
     expect(outcome.steps).toHaveLength(15)
-    expect(outcome.steps.every((s) => s.outcome === 'refused')).toBe(true)
+    expect(outcome.steps.filter((s) => s.outcome !== 'done').length).toBeGreaterThan(0)
     expect(agent.prompts).toHaveLength(15)
     expect(agent.prompts.at(-1)?.stepsLeft).toBe(1)
+    expect(outcome).toMatchObject({ finished: false, stop: null, stoppedBy: null })
+  })
+
+  it(`stops early, after ${APP_STALLED_STEPS_BEFORE_STOP} refused steps in a row`, async () => {
+    const { outcome, agent } = await kit.check(Array.from({ length: 20 }, () => ({ type: 'back' }) as const))
+    expect(outcome.steps).toHaveLength(APP_STALLED_STEPS_BEFORE_STOP)
+    expect(outcome.steps.every((s) => s.outcome === 'refused')).toBe(true)
+    expect(agent.prompts).toHaveLength(APP_STALLED_STEPS_BEFORE_STOP)
     expect(outcome).toMatchObject({ finished: false, stop: null, stoppedBy: null })
   })
 

@@ -4,6 +4,8 @@ import { getSupabaseAdmin } from '../../config/supabaseAdmin.js'
 import { sessionsFromEnv } from '../auth/session.js'
 import type { AppRepository } from './appRepository.js'
 import { createAppRouter } from './appRoutes.js'
+import { createEmbedder } from '../../lib/embedder.js'
+import { verifyClaim } from './claimCheck.js'
 import { createAuditData, type AuditData } from './auditData.js'
 import { MAX_ROUTE_PARAM_LENGTH, ROUTE_ID_PATTERN } from './config.js'
 import { createItemKindRouter } from './itemKindRoutes.js'
@@ -135,6 +137,7 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
   if (!apiKey) console.error('[evidence] GROQ_API_KEY is not set: suggestions can be read but runs cannot start.')
   if (!secretKey) console.error(SECRET_KEY_MISSING)
 
+  const embedder = createEmbedder(env)
   const queue = createRunQueue((runId) =>
     (options.runJob ?? runEvidenceJob)(runId, {
       repo,
@@ -143,8 +146,9 @@ export function createEvidenceModule(env: Env, options: EvidenceModuleOptions = 
       guard: guard(),
       apiKey,
       model,
-      app: { appRepo, secretKey },
+      app: { appRepo, secretKey, verifyClaim: env.EVIDENCE_VERIFY_CLAIMS === 'off' ? null : verifyClaim },
       code: { repoRepo },
+      embedder,
     }),
   )
   // One lock for both routers: a page run and an app run of a project never start at the same time.

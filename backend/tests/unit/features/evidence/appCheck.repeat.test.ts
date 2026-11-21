@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StepPrompt } from '../../../../src/features/evidence/appAgent.js'
 import { REPEATED_ACTION } from '../../../../src/features/evidence/appCheck.js'
+import { APP_STALLED_STEPS_BEFORE_STOP } from '../../../../src/features/evidence/config.js'
 import { REPEATED_FILL } from '../../../../src/features/evidence/appRepeat.js'
 import { buildStepPrompt } from '../../../../src/features/evidence/appAgent.js'
 import { closeBrowser } from '../../../../src/features/evidence/browser.js'
@@ -160,5 +161,24 @@ describe('runCheck: the same action again on an unchanged page', () => {
       ['done', null],
     ])
     expect(outcome.finished).toBe(true)
+  })
+})
+
+describe('runCheck: a stuck AI', () => {
+  it('stops after APP_STALLED_STEPS_BEFORE_STOP refused steps in a row instead of using every step', async () => {
+    const [switchTo] = signIn('Teen 15')
+    const { outcome, agent } = await kit.check([switchTo, fillLogin, ...Array.from({ length: 10 }, () => fillLogin)])
+    const outcomes = outcome.steps.map((s) => s.outcome)
+    expect(outcomes.slice(0, 2)).toEqual(['done', 'done'])
+    expect(outcomes.slice(2)).toEqual(Array.from({ length: APP_STALLED_STEPS_BEFORE_STOP }, () => 'refused'))
+    expect(outcome.finished).toBe(false)
+    expect(agent.prompts).toHaveLength(2 + APP_STALLED_STEPS_BEFORE_STOP)
+  })
+
+  it('a step that gets through starts the count again', async () => {
+    const [switchTo] = signIn('Teen 15')
+    const settings = openPath('/settings')
+    const { outcome } = await kit.check([switchTo, fillLogin, fillLogin, fillLogin, settings, fillLogin, fillLogin, FINISH, FINISH])
+    expect(outcome.steps.length).toBeGreaterThan(5)
   })
 })

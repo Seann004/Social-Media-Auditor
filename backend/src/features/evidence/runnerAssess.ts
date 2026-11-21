@@ -4,6 +4,7 @@ import { selectPassages } from './assess.js'
 import { MAX_HIGHLIGHTS_PER_SUGGESTION, MAX_PASSAGES_PER_ITEM, MAX_TOKENS_PER_RUN } from './config.js'
 import { computeFlags } from './flags.js'
 import type { NewSuggestion } from './repository.js'
+import { searchForItem } from './passageSearch.js'
 import { isQuoteVerified } from './quotes.js'
 import { highlightKey, takeHighlights } from './runnerHighlights.js'
 import { abortable, endIfRunGone, logRunProblem, type RunCtx } from './runnerShared.js'
@@ -223,7 +224,7 @@ export async function assessAndStore(ctx: RunCtx, items: AssessItem[], batch: Ba
   const { repo, assessBatch } = ctx.deps
   const hits = new Map<string, Passage[]>()
   for (const item of items) {
-    hits.set(item.id, await repo.searchPassages(ctx.run.capturedInRunId, queryOf(item), MAX_PASSAGES_PER_ITEM))
+    hits.set(item.id, await searchForItem(ctx, queryOf(item), MAX_PASSAGES_PER_ITEM))
   }
 
   const created: Suggestion[] = []

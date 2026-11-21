@@ -1,3 +1,5 @@
+import type { Embedder } from '../../lib/embedder.js'
+import type { VerifyClaim } from './claimCheck.js'
 import type { Browser } from 'playwright'
 import { GroqLimitError } from '../../lib/groq.js'
 import type { DecideStep } from './appAgent.js'
@@ -23,6 +25,8 @@ export interface AppRunnerDeps {
   decideStep?: DecideStep
   /** For tests. Defaults to APP_RESTORE_GRACE_MS. */
   restoreGraceMs?: number
+  /** A second look at each yes/no claim an app check makes. Without it, claims are stored as the first answer gave them. */
+  verifyClaim?: VerifyClaim | null
 }
 
 /** What a code repository run needs besides a pages run's dependencies. */
@@ -53,6 +57,8 @@ export interface RunnerDeps {
   app?: AppRunnerDeps | null
   /** For code repository runs. Without it, a repo run fails with a sentence saying so. */
   code?: CodeRunnerDeps | null
+  /** Finds page passages by meaning as well as by words. Null or missing: words only. */
+  embedder?: Embedder | null
   /** For tests. Defaults to the run's own timeout: runTimeoutMsOf. */
   runTimeoutMs?: number
   /** Waits between tries at an update that failed. For tests. Defaults to RUN_UPDATE_RETRY_DELAYS_MS. */
