@@ -8,7 +8,9 @@ import type { AppRepository } from './appRepository.js'
 import { isCredentialField, SIGN_IN_CONTROL, signInButtonOf } from './appFields.js'
 import { isRepeat, labelOf, pageState, repeatRefusal, type DoneAction } from './appRepeat.js'
 import { pageDetail, type PageDetailOptions } from './appStepNotes.js'
-import { checkAction, detectBlock, type SafetyContext } from './appSafety.js'
+import { checkAction, DESTRUCTIVE_ACTION, detectBlock, type SafetyContext } from './appSafety.js'
+import { isSettingsLink } from './appSafetyNav.js'
+import { plain } from './appSafetyText.js'
 import { wasStillLoading, type AppSession, type AppSessionPool } from './appSession.js'
 import {
   detectChange,
@@ -161,6 +163,10 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   let doneSinceLanding = 0
   let pathsSinceLanding: ReadonlySet<string> = new Set()
   let earlyFinishRefused = false
+  /** The settings pages linked from pages seen (path to link name), the paths opened, and whether a finish was refused for the unopened ones. */
+  let settingsLinks: ReadonlyMap<string, string> = new Map()
+  let seenPaths: ReadonlySet<string> = new Set()
+  let unopenedNudged = false
   /** The last step when it was a done action: an identical action next, on an unchanged page, is refused. */
   let lastDone: DoneAction | null = null
   /** Per account, the fields this check filled (a fill or a typed text), by path, form and label: for the repeat hint. */
@@ -253,10 +259,37 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     return [...pathsSinceLanding].some((path) => path !== landing && !signInPaths.has(path))
   }
 
-  /** A finish is refused once when it comes before the check has explored, unless it is the last step allowed. */
-  function finishTooEarly(): boolean {
-    if (earlyFinishRefused || stepsUsed() + 1 >= maxSteps) return false
-    return doneSinceLanding < DONE_STEPS_BEFORE_FINISH || !leftLanding()
+  /** Notes the settings pages this page links to, and that this page has been seen. */
+  function noteSettingsLinks(at: AppView): void {
+    seenPaths = new Set(seenPaths).add(pathOf(at.url))
+    const found = at.elements.filter((el) => isSettingsLink(el, at) && !DESTRUCTIVE_ACTION.test(plain(el.name)) && el.href !== null)
+    if (found.length === 0) return
+    const next = new Map(settingsLinks)
+    for (const el of found) next.set(pathOf(new URL(el.href as string, at.url).href), el.name)
+    settingsLinks = next
+  }
+
+  /** Names of the settings pages this check has seen a link to but not opened. */
+  function unopenedSettings(): string[] {
+    return [...settingsLinks].filter(([path]) => !seenPaths.has(path)).map(([, name]) => name)
+  }
+
+  /**
+   * Why a finish is refused, or null when it may go through. Once when it comes before the check has explored,
+   * and once more while settings pages it has seen a link to are still unopened. Never on the last step allowed.
+   */
+  function finishRefusal(): string | null {
+    if (stepsUsed() + 1 >= maxSteps) return null
+    if (!earlyFinishRefused && (doneSinceLanding < DONE_STEPS_BEFORE_FINISH || !leftLanding())) {
+      earlyFinishRefused = true
+      return FINISHED_TOO_EARLY
+    }
+    const unopened = unopenedSettings()
+    if (!unopenedNudged && unopened.length > 0) {
+      unopenedNudged = true
+      return `${FINISHED_TOO_EARLY} Not opened yet: ${unopened.slice(0, 8).join(', ')}.`
+    }
+    return null
   }
 
   /** Steps counted against the limit: all of them but the sign-in steps. */
@@ -442,6 +475,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       await record({ action: NO_ACTION, outcome: 'failed', detail: PAGE_UNREADABLE, refusalReason: null, view: null, screenshot: null, description: READ_PAGE })
       return outcome({ stop: 'error' })
     }
+    if (view !== null) noteSettingsLinks(view)
     const block = view === null ? null : detectBlock(view)
     if (view !== null && block !== null) {
       await record({ action: NO_ACTION, outcome: 'blocked', detail: block, refusalReason: null, view, screenshot: await shoot(), blocked: true })
@@ -469,10 +503,10 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       continue
     }
 
-    if (action.type === 'finish' && finishTooEarly()) {
-      earlyFinishRefused = true
+    const refusal = action.type === 'finish' ? finishRefusal() : null
+    if (action.type === 'finish' && refusal !== null) {
       // Recorded with no page, like an accepted finish, so the newest page of each account stays the one the AI acted on.
-      await record({ action, outcome: 'refused', detail: '', refusalReason: FINISHED_TOO_EARLY, view: null, screenshot: null })
+      await record({ action, outcome: 'refused', detail: '', refusalReason: refusal, view: null, screenshot: null })
       continue
     }
     if (action.type === 'finish') {

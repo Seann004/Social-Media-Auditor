@@ -230,6 +230,22 @@ describe('runCheck: stopping', () => {
     expect(outcome).toMatchObject({ finished: false, stop: null, stoppedBy: null })
   })
 
+  it('refuses a finish once while settings pages it saw a link to are not opened, and names them', async () => {
+    world.social.setMode({ settingsMenu: true })
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), openPath('/home'), openPath('/settings'), FINISH, FINISH, FINISH])
+    const refusals = outcome.steps.filter((s) => s.outcome === 'refused').map((s) => s.refusalReason ?? '')
+    expect(refusals.some((r) => /Not opened yet: .*Sharing/.test(r))).toBe(true)
+    expect(refusals.filter((r) => r.includes('Not opened yet'))).toHaveLength(1)
+    expect(outcome.finished).toBe(true)
+  })
+
+  it('does not refuse a finish for settings pages it has opened', async () => {
+    world.social.setMode({ settingsMenu: true })
+    const open = ['/settings/messaging', '/settings/sharing', '/settings/contact', '/settings/privacy', '/settings/notifications', '/settings/password'].map(openPath)
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), ...open, FINISH])
+    expect(outcome.steps.filter((s) => (s.refusalReason ?? '').includes('Not opened yet'))).toHaveLength(0)
+  })
+
   it(`stops counting sign-in steps free after ${APP_MAX_SIGN_IN_STEPS}, so they cannot run for ever`, async () => {
     const [switchTo] = signIn('Teen 15')
     const { outcome } = await kit.check(Array.from({ length: 60 }, () => switchTo))
