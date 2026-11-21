@@ -2,7 +2,7 @@
  * The shapes the benchmark shares: a case with its known answer, what one repeat of it produced,
  * and how that repeat is scored.
  */
-import type { SocialMode, SocialStatePatch } from '../src/features/evidence/__fixtures__/socialApp.js'
+import type { SocialMode, SocialStatePatch } from '../tests/fixtures/socialApp.js'
 /** What the tool can answer for an item. `not_settled` is a suggestion with no result. */
 export type Answer = 'yes' | 'no' | 'partially' | 'not_applicable' | 'not_settled'
 

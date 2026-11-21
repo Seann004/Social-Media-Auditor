@@ -4,6 +4,9 @@
     "rootDir": "..",
     "noEmit": true
   },
-  "include": ["./**/*.ts"],
+  "include": [
+    "./**/*.ts",
+    "../tests/unit/benchmarks/**/*.ts"
+  ],
   "exclude": []
 }

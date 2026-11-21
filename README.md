@@ -48,10 +48,19 @@ Social-Media-Auditor/
 │       │   └── useStore.ts     ← Zustand global store
 │       └── types/
 │           └── index.ts
-│   ├── e2e/                    ← Browser end-to-end tests (Playwright, network stubbed)
+│   ├── tests/
+│   │   ├── unit/               ← Component, hook and store tests (Vitest, jsdom), same folders as src/
+│   │   ├── e2e/                ← Browser end-to-end tests (Playwright, network stubbed)
+│   │   └── setup.ts
 │   └── playwright.config.ts
 └── backend/                    ← Express REST API
     ├── supabase/migrations/    ← SQL to run by hand, in order (001 to 005)
+    ├── tests/
+    │   ├── unit/               ← One module at a time, same folders as src/ (plus benchmarks/)
+    │   ├── integration/        ← HTTP routes, whole evidence runs, migration checks
+    │   ├── security/           ← AI agent safety rules, address guard, secrets, auth, archives
+    │   ├── fixtures/           ← Practice social app, fake GitHub, test sites (also used by the benchmarks)
+    │   └── helpers/            ← In-memory Supabase fake
     └── src/
         ├── server.ts           ← All API routes
         ├── features/evidence/  ← AI evidence assessment: capture, assessment, decisions, routes
@@ -424,10 +433,15 @@ Using a platform's code for an audit usually needs that platform's agreement. Ge
 ## Tests
 
 ```bash
-npm test --prefix backend            # unit and integration tests
-npm test --prefix frontend           # component and hook tests (Vitest, jsdom)
-npm run test:e2e --prefix frontend   # browser end-to-end tests (Playwright)
+npm test --prefix backend                      # every backend test
+npm run test:unit --prefix backend             # backend/tests/unit
+npm run test:integration --prefix backend      # backend/tests/integration
+npm run test:security --prefix backend         # backend/tests/security
+npm test --prefix frontend                     # component and hook tests (Vitest, jsdom)
+npm run test:e2e --prefix frontend             # browser end-to-end tests (Playwright)
 ```
+
+Tests are kept apart from the code, one folder per kind of test (`backend/tests/<kind>/`, `frontend/tests/<kind>/`). Inside each folder a test sits at the same path as the file it tests in `src/`, so `src/services/calibration.ts` is tested by `tests/unit/services/calibration.test.ts`. A test added next to its code in `src/` still runs, but belongs in `tests/`.
 
 The end-to-end tests start Vite on port 5199 and stub every `/api` call and every Supabase call in the browser, so they need no database, keys or network. Install the browser once with `npx playwright install chromium` in `frontend/` (or reuse the one already installed for the backend). They cover running an assessment, accepting and overriding, the Head Auditor's provenance labels, the flagged filter, a 503 from the evidence API, and the app flow (adding the app and two test accounts, picking items, running, replaying the steps, accepting one suggestion, the password never showing on the page, and the app endpoints answering 503).
 

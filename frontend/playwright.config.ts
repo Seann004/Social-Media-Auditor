@@ -6,7 +6,7 @@ const APP_PORT = 5199
 const API_PLACEHOLDER = 'http://127.0.0.1:5198'
 
 export default defineConfig({
-  testDir: './e2e',
+  testDir: './tests/e2e',
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,

@@ -3,7 +3,7 @@
 The benchmark measures how well the AI evidence feature answers checklist items. It runs a fixed set
 of cases whose right answers are known, with the **real AI**, against two sources that never change:
 
-- the **practice social app** (`src/features/evidence/__fixtures__/socialApp.ts`), started on a free
+- the **practice social app** (`tests/fixtures/socialApp.ts`), started on a free
   local port for each repeat, with two test accounts (Teen 15 and Adult 30);
 - a **small synthetic code repository** (`repoFixture.ts`), served from memory by a faked GitHub.
 
@@ -150,7 +150,7 @@ Settings (otherwise the AI could reach them only by guessing addresses). A case 
 starting state and turn on other modes (`teenDefaultsHelp`, `privateBanner`).
 
 To add a case, add it to `cases.ts` with a `why` taken from the fixture, and if it relies on a new
-fact, add that fact to `fixtures.test.ts`. Write the expected answer from what the fixture really
+fact, add that fact to `tests/unit/benchmarks/fixtures.test.ts`. Write the expected answer from what the fixture really
 contains, never from what the AI currently answers. `npm test` checks that ids are unique, answers
 are allowed, every case has a `why`, and the set still covers every kind.
 

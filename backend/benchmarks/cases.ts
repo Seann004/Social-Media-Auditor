@@ -1,10 +1,10 @@
 /**
  * The benchmark cases. Each expected answer comes from what the practice app
- * (src/features/evidence/__fixtures__/socialApp.ts and socialAppExtras.ts) or the synthetic repository
+ * (tests/fixtures/socialApp.ts and socialAppExtras.ts) or the synthetic repository
  * (repoFixture.ts) really contain, and its `why` says where, so a person can check it.
  * fixtures.test.ts checks the facts these answers rely on.
  */
-import type { SocialMode } from '../src/features/evidence/__fixtures__/socialApp.js'
+import type { SocialMode } from '../tests/fixtures/socialApp.js'
 import { ANSWERS, EXPECTED_ANSWERS, type BenchmarkCase, type CaseSource } from './types.js'
 
 export const MIN_APP_CASES = 10

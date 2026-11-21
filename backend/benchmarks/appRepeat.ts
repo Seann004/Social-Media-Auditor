@@ -12,7 +12,7 @@ import { runEvidenceJob } from '../src/features/evidence/runner.js'
 import type { RunnerDeps } from '../src/features/evidence/runnerShared.js'
 import { encryptSecret, secretAad } from '../src/features/evidence/secrets.js'
 import { createUrlGuard } from '../src/features/evidence/urlGuard.js'
-import { LOGIN_NAMES, PASSWORDS, startSocialApp } from '../src/features/evidence/__fixtures__/socialApp.js'
+import { LOGIN_NAMES, PASSWORDS, startSocialApp } from '../tests/fixtures/socialApp.js'
 import { BASE_APP_MODE } from './cases.js'
 import type { BenchmarkCase, RepeatRecord } from './types.js'
 import {
