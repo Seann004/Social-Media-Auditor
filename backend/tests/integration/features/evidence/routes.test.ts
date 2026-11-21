@@ -317,6 +317,44 @@ describe('what the browser is shown', () => {
   })
 })
 
+// FR-024: an AI suggestion is only a suggestion. The compliance score is computed from the Auditor's
+// answers alone (UT-11), and applyAnswer is the evidence module's only way to write an answer, so
+// "no applyAnswer call" means the answer and the score have not changed.
+describe('FR-024: the answer and score stay the same until the Auditor decides', () => {
+  it('writes no answer when a suggestion exists, is listed or is re-assessed', async () => {
+    const { world, seeded } = await setup()
+    const listed = await request(world.app).get(`/api/projects/${P1}/ai-suggestions`).set(world.auth(USERS.auditor))
+    expect(listed.status).toBe(200)
+    expect(JSON.stringify(listed.body)).toContain(seeded.suggestionId)
+    expect((await request(world.app).get(`/api/projects/${P1}/ai-suggestions`).set(world.auth(USERS.head))).status).toBe(200)
+    expect((await request(world.app).post(`/api/projects/${P1}/evidence-runs/${seeded.runId}/reassess`).set(world.auth(USERS.auditor)).send({})).status).toBe(202)
+    expect(world.audit.applied).toHaveLength(0)
+  })
+
+  it('writes the suggested result only when the Auditor accepts it', async () => {
+    const { world, seeded } = await setup()
+    expect(world.audit.applied).toHaveLength(0)
+    const res = await request(world.app).post(`/api/suggestions/${seeded.suggestionId}/decision`).set(world.auth(USERS.auditor)).send({ decision: 'accepted', origin: 'card' })
+    expect(res.status).toBe(200)
+    expect(world.audit.applied).toEqual([expect.objectContaining({ projectId: P1, itemId: 'item-1', userId: USERS.auditor.userId, result: 'compliant' })])
+  })
+
+  it('writes the Auditor\'s own result, not the AI one, when the Auditor overrides it', async () => {
+    const { world, seeded } = await setup()
+    const res = await request(world.app).post(`/api/suggestions/${seeded.suggestionId}/decision`).set(world.auth(USERS.auditor))
+      .send({ decision: 'overridden', origin: 'card', finalResult: 'non_compliant', overrideReason: 'The setting is off for teens.' })
+    expect(res.status).toBe(200)
+    expect(world.audit.applied).toEqual([expect.objectContaining({ itemId: 'item-1', result: 'non_compliant' })])
+  })
+
+  it('writes nothing when a Head Auditor tries to accept', async () => {
+    const { world, seeded } = await setup()
+    const res = await request(world.app).post(`/api/suggestions/${seeded.suggestionId}/decision`).set(world.auth(USERS.head)).send({ decision: 'accepted', origin: 'card' })
+    expect(res.status).toBe(403)
+    expect(world.audit.applied).toHaveLength(0)
+  })
+})
+
 describe('screenshot links', () => {
   it('signs the close-up of a quote for 300 seconds', async () => {
     const { world, seeded } = await setup()
