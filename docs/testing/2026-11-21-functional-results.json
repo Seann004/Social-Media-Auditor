@@ -1,0 +1,283 @@
+{
+  "when": "2026-11-21T08:59:10.620Z",
+  "results": [
+    {
+      "id": "FT-01a",
+      "requirement": "Login",
+      "test": "Log in as admin with valid credentials",
+      "expected": "200, token, role admin",
+      "actual": "200, role admin",
+      "pass": true
+    },
+    {
+      "id": "FT-01b",
+      "requirement": "Login",
+      "test": "Log in as head_auditor with valid credentials",
+      "expected": "200, token, role head_auditor",
+      "actual": "200, role head_auditor",
+      "pass": true
+    },
+    {
+      "id": "FT-01c",
+      "requirement": "Login",
+      "test": "Log in as auditor with valid credentials",
+      "expected": "200, token, role auditor",
+      "actual": "200, role auditor",
+      "pass": true
+    },
+    {
+      "id": "FT-02",
+      "requirement": "Login",
+      "test": "Log in with a wrong password",
+      "expected": "401, no token",
+      "actual": "401, token none",
+      "pass": true
+    },
+    {
+      "id": "FT-03",
+      "requirement": "Login",
+      "test": "Log in with the password missing",
+      "expected": "400",
+      "actual": "400",
+      "pass": true
+    },
+    {
+      "id": "FT-04",
+      "requirement": "Login",
+      "test": "Open the project list without logging in",
+      "expected": "401",
+      "actual": "401",
+      "pass": true
+    },
+    {
+      "id": "FT-05",
+      "requirement": "Project management",
+      "test": "Head auditor creates an audit project",
+      "expected": "201 with a project id",
+      "actual": "201, id returned",
+      "pass": true
+    },
+    {
+      "id": "FT-06",
+      "requirement": "Project management",
+      "test": "Auditor tries to create a project",
+      "expected": "403",
+      "actual": "403",
+      "pass": true
+    },
+    {
+      "id": "FT-07",
+      "requirement": "Project management",
+      "test": "Create a project with no title or platform",
+      "expected": "400",
+      "actual": "400",
+      "pass": true
+    },
+    {
+      "id": "FT-08",
+      "requirement": "Checklist",
+      "test": "Head auditor attaches a guideline to the project",
+      "expected": "200; the checklist lists the guideline items",
+      "actual": "200; 5 items",
+      "pass": true
+    },
+    {
+      "id": "FT-09",
+      "requirement": "Access control",
+      "test": "Auditor opens a project they are not assigned to",
+      "expected": "403",
+      "actual": "403",
+      "pass": true
+    },
+    {
+      "id": "FT-10",
+      "requirement": "Project management",
+      "test": "Head auditor assigns the auditor to the project",
+      "expected": "200; the project appears in the auditor list",
+      "actual": "200; listed",
+      "pass": true
+    },
+    {
+      "id": "FT-11",
+      "requirement": "Conduct audit",
+      "test": "Save an answer with an invalid status",
+      "expected": "400",
+      "actual": "400",
+      "pass": true
+    },
+    {
+      "id": "FT-12",
+      "requirement": "Submission",
+      "test": "Submit while items are unanswered",
+      "expected": "409, not submitted",
+      "actual": "409",
+      "pass": true
+    },
+    {
+      "id": "FT-13",
+      "requirement": "Conduct audit",
+      "test": "Auditor answers all 5 checklist items",
+      "expected": "5 answers saved and returned",
+      "actual": "5 saved; 5 returned",
+      "pass": true
+    },
+    {
+      "id": "FT-14",
+      "requirement": "Conduct audit",
+      "test": "Auditor records a written finding for an item",
+      "expected": "200",
+      "actual": "200",
+      "pass": true
+    },
+    {
+      "id": "FT-15",
+      "requirement": "Conduct audit",
+      "test": "Auditor attaches an evidence image to an item",
+      "expected": "200",
+      "actual": "200",
+      "pass": true
+    },
+    {
+      "id": "FT-16",
+      "requirement": "Compliance score",
+      "test": "Compliance score is computed from the answers",
+      "expected": "200 with a score per guideline",
+      "actual": "200; [{\"scoreId\":\"b5a0d19d-38c9-4aa9-83a2-b52af53fbdc8\",\"guidelineId\":\"d3e365fa-1e67-4e13-b68a-384a26276551\",\"guidelineName\":\"Overlap Test A (Code)\",\"shortName\":\"TES",
+      "pass": true
+    },
+    {
+      "id": "FT-17",
+      "requirement": "Submission",
+      "test": "Auditor submits the completed audit for review",
+      "expected": "200; status pending_review",
+      "actual": "200; pending_review",
+      "pass": true
+    },
+    {
+      "id": "FT-18",
+      "requirement": "Submission",
+      "test": "Auditor edits an answer after submitting",
+      "expected": "403 (audit locked)",
+      "actual": "403",
+      "pass": true
+    },
+    {
+      "id": "FT-19",
+      "requirement": "Review",
+      "test": "Auditor tries to approve their own submission",
+      "expected": "403",
+      "actual": "403",
+      "pass": true
+    },
+    {
+      "id": "FT-20",
+      "requirement": "Review",
+      "test": "Head auditor approves the submission",
+      "expected": "200; status approved",
+      "actual": "200; approved",
+      "pass": true
+    },
+    {
+      "id": "FT-21",
+      "requirement": "Reports",
+      "test": "The approved audit appears in the head auditor reports",
+      "expected": "200; project listed",
+      "actual": "200; listed",
+      "pass": true
+    },
+    {
+      "id": "FT-22",
+      "requirement": "Guideline generator",
+      "test": "Admin extracts checklist items from a regulation text with the AI",
+      "expected": "200 with checklist items",
+      "actual": "200; 3 items",
+      "pass": true
+    },
+    {
+      "id": "FT-23",
+      "requirement": "Guideline generator",
+      "test": "Auditor tries to use the generator",
+      "expected": "403",
+      "actual": "403",
+      "pass": true
+    },
+    {
+      "id": "FT-24",
+      "requirement": "Project management",
+      "test": "Head auditor deletes the project",
+      "expected": "200; project no longer reachable",
+      "actual": "200; then 404",
+      "pass": true
+    }
+  ],
+  "scoreSample": [
+    {
+      "scoreId": "b5a0d19d-38c9-4aa9-83a2-b52af53fbdc8",
+      "guidelineId": "d3e365fa-1e67-4e13-b68a-384a26276551",
+      "guidelineName": "Overlap Test A (Code)",
+      "shortName": "TESTA",
+      "totalItems": 5,
+      "answeredItems": 5,
+      "compliantItems": 2,
+      "nonCompliantItems": 2,
+      "notApplicableItems": 1,
+      "weightedCompliant": 2.5,
+      "scorePercentage": 62.5,
+      "timeCalculated": "2026-11-21T08:58:53.109Z"
+    }
+  ],
+  "genSample": [
+    {
+      "id": "4.1-privacy-default",
+      "category": "Privacy Settings",
+      "text": "Does the platform set the highest privacy settings by default for users identified as children under 18?",
+      "severity": "critical",
+      "reference": "Section 4.1",
+      "helpText": "Check the account creation flow and any age‑verification logic. Verify that for accounts flagged as under‑18 the default privacy configuration (e.g., profile visibility, data sharing, ad personalization) is set to the most restrictive option without user action."
+    },
+    {
+      "id": "4.2-geolocation-default",
+      "category": "Location",
+      "text": "Are geolocation features disabled by default for child users?",
+      "severity": "critical",
+      "reference": "Section 4.2",
+      "helpText": "Inspect the platform's settings for a child account (or a test account marked as under‑18). Confirm that any location‑based services (GPS, IP‑based location, Wi‑Fi triangulation) are turned off automatically and cannot be enabled without an explicit opt‑in from the child or guardian."
+    },
+    {
+      "id": "4.2-location-indicator",
+      "category": "Transparency",
+      "text": "Is an obvious sign displayed to child users whenever location tracking is active?",
+      "severity": "major",
+      "reference": "Section 4.2",
+      "helpText": "Review the UI/UX when location services are turned on for a child account. Look for a clear, persistent indicator (e.g., banner, icon, or notification) that informs the user that their location is being tracked, meeting the requirement for an \"obvious sign\"."
+    }
+  ],
+  "before": {
+    "Audit_Project": 21,
+    "Audit_Report": 13,
+    "Audit_Result": 301,
+    "Checklist": 32,
+    "Checklist_Item": 1487,
+    "Checklist_Resolution": 1,
+    "Guideline": 36,
+    "Project_Member": 36,
+    "Project_Scope": 1,
+    "User": 20,
+    "Item_Mapping": 183
+  },
+  "after": {
+    "Audit_Project": 21,
+    "Audit_Report": 13,
+    "Audit_Result": 301,
+    "Checklist": 32,
+    "Checklist_Item": 1487,
+    "Checklist_Resolution": 1,
+    "Guideline": 36,
+    "Project_Member": 36,
+    "Project_Scope": 1,
+    "User": 20,
+    "Item_Mapping": 183
+  },
+  "diff": {},
+  "leftoverGuidelines": []
+}
