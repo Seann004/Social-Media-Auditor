@@ -1153,6 +1153,13 @@ helpText: newItemHelp.trim() || undefined,
             <h1 className="text-lg font-semibold text-slate-900 tracking-tight">{project.name}</h1>
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md font-medium">{project.platform}</span>
+              {/* The guidelines this project is audited against (UC-4), for every role and however many there are. */}
+              {projectGuidelines.map((g) => (
+                <span key={g.id} title={g.name} aria-label={`Guideline: ${g.name}`}
+                  className="text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md font-medium">
+                  {g.shortName}
+                </span>
+              ))}
               <StatusBadge type="audit" status={project.status} />
               {project.submissionStatus !== 'not_submitted' && (
                 <span className={[
