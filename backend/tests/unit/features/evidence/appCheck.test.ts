@@ -3,7 +3,7 @@ import { GroqLimitError } from '../../../../src/lib/groq.js'
 import { StepDecisionError, type StepPrompt } from '../../../../src/features/evidence/appAgent.js'
 import type { AppChange, AppStep } from '../../../../src/features/evidence/appTypes.js'
 import { closeBrowser } from '../../../../src/features/evidence/browser.js'
-import { APP_MAX_STEPS_PER_CHECK, APP_STALLED_STEPS_BEFORE_STOP, APP_UNREADABLE_REPLIES_BEFORE_STOP } from '../../../../src/features/evidence/config.js'
+import { APP_MAX_SIGN_IN_STEPS, APP_MAX_STEPS_PER_CHECK, APP_STALLED_STEPS_BEFORE_STOP, APP_UNREADABLE_REPLIES_BEFORE_STOP } from '../../../../src/features/evidence/config.js'
 import { TEST_TIMEOUT_MS } from '../../../fixtures/pages.js'
 import { makeAccount, startAppWorld, TEEN_PASSWORD, type AppWorld } from '../../../fixtures/appWorld.js'
 import { createCheckKit, createMeter, ITEM, on, openPath, pixelsAt, RUN, signIn, type CheckKit } from '../../../fixtures/checkWorld.js'
@@ -219,16 +219,22 @@ describe('runCheck: stopping', () => {
     expect(outcome.finished).toBe(false)
   })
 
-  it(`stops at ${APP_MAX_STEPS_PER_CHECK} steps, refused ones included, with finished false`, async () => {
-    // A step that gets through now and then keeps the check from counting as stuck.
-    const cycle = [{ type: 'switch_account', account: 'Teen 15' }, { type: 'back' }, { type: 'back' }] as const
-    const { outcome, agent } = await kit.check(Array.from({ length: 20 }, (_, i) => cycle[i % 3]))
-    expect(APP_MAX_STEPS_PER_CHECK).toBe(15)
-    expect(outcome.steps).toHaveLength(15)
-    expect(outcome.steps.filter((s) => s.outcome !== 'done').length).toBeGreaterThan(0)
-    expect(agent.prompts).toHaveLength(15)
+  it(`stops at ${APP_MAX_STEPS_PER_CHECK} steps of looking around, and does not count the sign-in steps`, async () => {
+    const pages = Array.from({ length: 20 }, (_, i) => openPath(i % 2 === 0 ? '/settings' : '/home'))
+    const login = signIn('Teen 15')
+    const { outcome, agent } = await kit.check([...login, ...pages])
+    expect(outcome.steps).toHaveLength(login.length + APP_MAX_STEPS_PER_CHECK)
+    // The AI is told the room it has left for looking around, not for logging in.
+    expect(agent.prompts[login.length]?.stepsLeft).toBe(APP_MAX_STEPS_PER_CHECK)
     expect(agent.prompts.at(-1)?.stepsLeft).toBe(1)
     expect(outcome).toMatchObject({ finished: false, stop: null, stoppedBy: null })
+  })
+
+  it(`stops counting sign-in steps free after ${APP_MAX_SIGN_IN_STEPS}, so they cannot run for ever`, async () => {
+    const [switchTo] = signIn('Teen 15')
+    const { outcome } = await kit.check(Array.from({ length: 60 }, () => switchTo))
+    expect(outcome.steps.length).toBeLessThanOrEqual(APP_MAX_STEPS_PER_CHECK + APP_MAX_SIGN_IN_STEPS)
+    expect(outcome.finished).toBe(false)
   })
 
   it(`stops early, after ${APP_STALLED_STEPS_BEFORE_STOP} refused steps in a row`, async () => {
@@ -624,17 +630,56 @@ describe('runCheck: a finish that comes too early', () => {
     ])
   })
 
-  it('accepts a finish that is the last step the limit allows', async () => {
-    const { outcome } = await kit.check([...signIn('Teen 15'), FINISH], {}, { maxSteps: 5 })
+  it('accepts a finish that is the last step the limit allows (the sign-in steps are not counted)', async () => {
+    const { outcome } = await kit.check([...signIn('Teen 15'), FINISH], {}, { maxSteps: 1 })
     expect(outcome.steps.map((s) => s.outcome)).toEqual(['done', 'done', 'done', 'done', 'done'])
     expect(outcome.finished).toBe(true)
   })
 
   it('a check whose early finish was refused still ends at the step limit', async () => {
-    const { outcome, agent } = await kit.check([...signIn('Teen 15'), FINISH, openPath('/home'), openPath('/home'), openPath('/home')], {}, { maxSteps: 7 })
+    const { outcome, agent } = await kit.check([...signIn('Teen 15'), FINISH, openPath('/home'), openPath('/home'), openPath('/home')], {}, { maxSteps: 3 })
     expect(outcome.steps).toHaveLength(7)
     expect(outcome.steps[4].outcome).toBe('refused')
     expect(agent.prompts).toHaveLength(7)
     expect(outcome).toMatchObject({ finished: false, stop: null })
+  })
+})
+
+describe('runCheck: signing in by itself', () => {
+  it('fills the login and password and clicks Sign in after a switch, without asking the AI', async () => {
+    const { outcome, agent } = await kit.check([{ type: 'switch_account', account: 'Teen 15' }, FINISH, FINISH, FINISH], {}, { autoSignIn: true })
+    const lines = outcome.steps.map((s) => s.line)
+    expect(lines[0]).toContain('switched to Teen 15')
+    expect(lines[1]).toContain('filled the login of Teen 15')
+    expect(lines[2]).toContain('filled the password of Teen 15')
+    expect(lines[3]).toContain('clicked button "Sign in"')
+    expect(lines[3]).toContain('/home')
+    // The AI was asked once, for the switch; its next question already shows the signed-in page.
+    expect(agent.prompts[1].view?.url).toContain('/home')
+    for (const secret of ['teen.login@example.test', TEEN_PASSWORD]) expect(JSON.stringify(outcome.steps)).not.toContain(secret)
+  })
+
+  it('leaves signing in to the AI when the option is off', async () => {
+    const { outcome } = await kit.check([{ type: 'switch_account', account: 'Teen 15' }, FINISH, FINISH], {})
+    expect(outcome.steps[1]?.line).not.toContain('filled the login')
+  })
+
+  it('does not count the sign-in steps it took against the step limit', async () => {
+    const pages = Array.from({ length: 20 }, (_, i) => openPath(i % 2 === 0 ? '/settings' : '/home'))
+    const { outcome } = await kit.check([{ type: 'switch_account', account: 'Teen 15' }, ...pages], {}, { autoSignIn: true })
+    expect(outcome.steps).toHaveLength(4 + APP_MAX_STEPS_PER_CHECK)
+  })
+
+  it('hands over to the AI when the sign-in does not work', async () => {
+    const wrongTeen = makeAccount(
+      { id: 'acc-teen', label: 'Teen 15', ageGroup: 'under_18', age: 15, loginName: 'teen.login@example.test', handles: ['teen15'] },
+      'Not-The-Password',
+      world.secretKey,
+    )
+    await kit.pool.closeAll()
+    kit = createCheckKit(world, [wrongTeen, world.adult])
+    const { outcome, agent } = await kit.check([{ type: 'switch_account', account: 'Teen 15' }, FINISH, FINISH], {}, { autoSignIn: true })
+    expect(outcome.steps[3].line).toContain('Wrong password')
+    expect(agent.prompts.length).toBeGreaterThanOrEqual(2)
   })
 })

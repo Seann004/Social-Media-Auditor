@@ -98,12 +98,14 @@ describe('runCheck: the same action again on an unchanged page', () => {
     expect(outcome.steps[4]).toMatchObject({ outcome: 'refused', refusalReason: expect.stringMatching(/^Finished too early/) })
   })
 
-  it('a refused repeat counts as a step, so a looping AI still stops at the step limit', async () => {
+  it('a refused repeat counts as a step, so a looping AI still stops', async () => {
     const [switchTo] = signIn('Teen 15')
-    const { outcome, agent } = await kit.check([switchTo, ...Array.from({ length: 10 }, () => fillLogin)], {}, { maxSteps: 5 })
-    expect(outcome.steps).toHaveLength(5)
-    expect(agent.prompts).toHaveLength(5)
-    expect(outcome.steps.slice(2).every((s) => s.refusalReason?.startsWith(REPEATED_FILL))).toBe(true)
+    const home = { type: 'open_link', url: '/home' } as const
+    const { outcome, agent } = await kit.check([switchTo, ...Array.from({ length: 10 }, () => home)], {}, { maxSteps: 5 })
+    // The switch is a sign-in step and is not counted; the first open is done and the next four are refused repeats.
+    expect(outcome.steps).toHaveLength(6)
+    expect(agent.prompts).toHaveLength(6)
+    expect(outcome.steps.slice(2).every((s) => s.refusalReason?.startsWith(REPEATED_ACTION))).toBe(true)
   })
 
   it('allows the same click again when the last one changed the page', async () => {

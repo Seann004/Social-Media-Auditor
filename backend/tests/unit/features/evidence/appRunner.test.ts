@@ -131,6 +131,25 @@ describe('executeAppRun, a capture run', () => {
     expect(run.currentItemId).toBeNull()
   })
 
+  it('signs an account in by itself when the option is on, so the AI is asked only for the switch', async () => {
+    kit.deps.app = { ...(kit.deps.app as NonNullable<typeof kit.deps.app>), autoSignIn: true }
+    kit.scripts.i1 = [OPEN_TEEN]
+    const run = await kit.run({ checkedItemIds: ['i1'] })
+    const steps = await kit.appRepo.listSteps(run.id, 'i1')
+    expect(steps.map((s) => s.action.type).slice(0, 4)).toEqual(['switch_account', 'fill_credential', 'fill_credential', 'click'])
+    expect(steps.slice(0, 4).every((s) => s.outcome === 'done')).toBe(true)
+    // The first question has no account; the second already shows the signed-in page.
+    expect(kit.prompts[1].view?.url).toContain('/home')
+    expect(run.status).toBe('completed')
+  })
+
+  it('leaves signing in to the AI when the option is off', async () => {
+    kit.scripts.i1 = [OPEN_TEEN]
+    const run = await kit.run({ checkedItemIds: ['i1'] })
+    const steps = await kit.appRepo.listSteps(run.id, 'i1')
+    expect(steps.map((s) => s.action.type)).not.toContain('fill_credential')
+  })
+
   it('at the token cap ends partial: checked items keep suggestions, the rest are uncheckedItemIds', async () => {
     kit.scripts.i1 = [OPEN_TEEN]
     kit.judgeTokens.current = APP_MAX_TOKENS_PER_RUN

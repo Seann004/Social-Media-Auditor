@@ -53,7 +53,7 @@ Action shapes:
 "ref" is an element reference from the page outline.
 
 Rules you MUST follow:
-1. To sign in, use fill_credential. You never know or type a password.
+1. When you switch to an account whose sign-in page shows, the system signs it in for you. If that does not work, sign in with fill_credential. You never know or type a password.
 2. "target" is ONLY for an action that reaches another person (a message, a follow, a comment, a tag, an invite, a friend request, a report). Such an action needs it, and it names another test account, never the one in use ("currentAccount"). Leave "target" out for ordinary clicks, navigation, settings and sign-in. Never act on anyone outside the test accounts.
 3. Never publish anything to other people. Never delete or deactivate an account, pay for anything, or change a password, email address or phone number.
 4. Stay inside the app. Do not leave it.

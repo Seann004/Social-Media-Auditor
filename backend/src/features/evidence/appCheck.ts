@@ -5,7 +5,7 @@
  */
 import { StepDecisionError, type AccountStatus, type DecideStep, type StepPrompt } from './appAgent.js'
 import type { AppRepository } from './appRepository.js'
-import { isCredentialField, SIGN_IN_CONTROL } from './appFields.js'
+import { isCredentialField, SIGN_IN_CONTROL, signInButtonOf } from './appFields.js'
 import { isRepeat, labelOf, pageState, repeatRefusal, type DoneAction } from './appRepeat.js'
 import { pageDetail, type PageDetailOptions } from './appStepNotes.js'
 import { checkAction, detectBlock, type SafetyContext } from './appSafety.js'
@@ -25,7 +25,7 @@ import {
 } from './appSteps.js'
 import type { AgentAccount, AppAction, AppChange, AppElement, AppSource, AppStep, AppView, StoppedBy } from './appTypes.js'
 import type { AssessItem } from './assess.js'
-import { APP_MAX_STEPS_PER_CHECK, APP_MAX_TOKENS_PER_RUN, APP_STALLED_STEPS_BEFORE_STOP, APP_UNREADABLE_REPLIES_BEFORE_STOP } from './config.js'
+import { APP_MAX_SIGN_IN_STEPS, APP_MAX_STEPS_PER_CHECK, APP_MAX_TOKENS_PER_RUN, APP_STALLED_STEPS_BEFORE_STOP, APP_UNREADABLE_REPLIES_BEFORE_STOP } from './config.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import type { TokenMeter } from './runnerAssess.js'
 import type { StopReason } from './runnerFinish.js'
@@ -55,6 +55,8 @@ export interface CheckDeps {
   model: string
   maxSteps?: number
   tokenCap?: number
+  /** Sign an account in by itself when its sign-in page shows after a switch, so the AI spends no steps on it. Off by default. */
+  autoSignIn?: boolean
 }
 
 export interface CheckOutcome {
@@ -142,6 +144,8 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   let view: AppView | null = null
   let unreadableInARow = 0
   let unreadPagesInARow = 0
+  /** Steps that signed an account in: they are not counted against the step limit, up to APP_MAX_SIGN_IN_STEPS. */
+  let signInSteps = 0
   /** Steps in a row that were refused or failed: they add no evidence. */
   let stalledInARow = 0
   /** Per account, the path where the last password was filled: a sign-in that stays there failed. */
@@ -251,8 +255,48 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
 
   /** A finish is refused once when it comes before the check has explored, unless it is the last step allowed. */
   function finishTooEarly(): boolean {
-    if (earlyFinishRefused || steps.length + 1 >= maxSteps) return false
+    if (earlyFinishRefused || stepsUsed() + 1 >= maxSteps) return false
     return doneSinceLanding < DONE_STEPS_BEFORE_FINISH || !leftLanding()
+  }
+
+  /** Steps counted against the limit: all of them but the sign-in steps. */
+  const stepsUsed = (): number => steps.length - signInSteps
+
+  function isSignInStep(action: AppAction): boolean {
+    if (action.type === 'switch_account' || action.type === 'fill_credential') return true
+    if (action.type !== 'click') return false
+    const el = view?.elements.find((e) => e.ref === action.ref) ?? null
+    return el !== null && SIGN_IN_CONTROL.test(el.name)
+  }
+
+  /** The next field or button of a visible sign-in form, in the order a person fills it. Null when there is nothing to do. */
+  function nextSignInAction(at: AppView, who: AgentAccount): AppAction | null {
+    if (!at.hasPasswordField) return null
+    const password = at.elements.find((e) => e.inputType === 'password')
+    if (password === undefined) return null
+    const login = at.elements.find((e) => e !== password && isCredentialField(e) && besidePasswordField(e, at))
+    if (login !== undefined && !wasFilled(login, at)) return { type: 'fill_credential', ref: login.ref, account: who.label, field: 'login' }
+    if (!wasFilled(password, at)) return { type: 'fill_credential', ref: password.ref, account: who.label, field: 'password' }
+    const button = signInButtonOf(at.elements.filter((e) => e.groupId === password.groupId))
+    return button !== null && SIGN_IN_CONTROL.test(button.name) ? { type: 'click', ref: button.ref } : null
+  }
+
+  /**
+   * After a switch to an account whose sign-in form shows, fills it and clicks Sign in without asking the AI.
+   * Each step goes through the same safety rules and is recorded like any other. It stops at the first step
+   * that is not done, and the AI takes over.
+   */
+  async function signInByItself(): Promise<void> {
+    if (!deps.autoSignIn || account === null) return
+    const who = account
+    // A login name, a password and the button.
+    for (let i = 0; i < 3 && signInSteps < APP_MAX_SIGN_IN_STEPS; i++) {
+      const next = view === null ? null : nextSignInAction(view, who)
+      if (next === null) return
+      await act(next as Exclude<AppAction, { type: 'finish' } | { type: 'switch_account' }>)
+      signInSteps += 1
+      if (steps.at(-1)?.outcome !== 'done') return
+    }
   }
 
   const shoot = async (): Promise<Buffer | null> => (await session()?.screenshot()) ?? null
@@ -276,7 +320,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       view,
       history: steps.map((s) => s.line),
       leftChanged: input.leftChanged.map(leftChangedLine),
-      stepsLeft: maxSteps - steps.length,
+      stepsLeft: maxSteps - stepsUsed(),
     }
   }
 
@@ -390,7 +434,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     noteExplored(afterUrl, signedInNow ? 'sign-in' : 'other')
   }
 
-  while (steps.length < maxSteps) {
+  while (stepsUsed() < maxSteps) {
     if (signal.aborted) return outcome({ stop: 'timeout' })
     if (meter.used() >= tokenCap) return outcome({ stop: 'tokens' })
     if (view === null) view = await readView()
@@ -437,8 +481,15 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       const evidenceSteps = [...new Set(action.evidenceSteps)].filter((n) => n >= 1 && n <= known)
       return outcome({ finished: isAiFinish(saved), evidenceSteps })
     }
-    if (action.type === 'switch_account') await switchAccount(action)
-    else await act(action)
+    const signInStep = isSignInStep(action) && signInSteps < APP_MAX_SIGN_IN_STEPS
+    if (action.type === 'switch_account') {
+      await switchAccount(action)
+      if (signInStep) signInSteps += 1
+      await signInByItself()
+    } else {
+      await act(action)
+      if (signInStep) signInSteps += 1
+    }
     stalledInARow = steps.at(-1)?.outcome === 'refused' || steps.at(-1)?.outcome === 'failed' ? stalledInARow + 1 : 0
     if (stalledInARow >= APP_STALLED_STEPS_BEFORE_STOP) return outcome()
   }

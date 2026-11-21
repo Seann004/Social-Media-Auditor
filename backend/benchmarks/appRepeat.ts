@@ -5,6 +5,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import type { NewTestAccount } from '../src/features/evidence/appTypes.js'
+import { verifyClaim } from '../src/features/evidence/claimCheck.js'
 import { APP_PROMPT_VERSION } from '../src/features/evidence/config.js'
 import { createMemoryAppRepository } from '../src/features/evidence/memoryAppRepository.js'
 import { createMemoryRepository } from '../src/features/evidence/memoryRepository.js'
@@ -78,7 +79,8 @@ export async function runAppRepeat(c: BenchmarkCase, repeat: number, ctx: Repeat
         throw new Error('an app run never captures pages')
       },
       assessBatch: meteredAssess(ctx.ai.assessBatch, ctx.budget),
-      app: { appRepo, secretKey, decideStep: meteredDecideStep(ctx.ai.decideStep, ctx.budget) },
+      // Like the server: a second look at each yes/no claim, unless EVIDENCE_VERIFY_CLAIMS=off. Its calls pass through the same Groq gate.
+      app: { appRepo, secretKey, decideStep: meteredDecideStep(ctx.ai.decideStep, ctx.budget), verifyClaim: process.env.EVIDENCE_VERIFY_CLAIMS === 'off' ? null : verifyClaim },
     }
     const created = await createRun(repo, c, APP_PROMPT_VERSION)
     const started = Date.now()

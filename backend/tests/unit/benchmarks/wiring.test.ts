@@ -108,7 +108,7 @@ describe('a code repeat', () => {
 describe('an app repeat', () => {
   it('starts the practice app in the case state, signs in with the test accounts and records the steps', async () => {
     const finish: AppAction = { type: 'finish', observations: 'The switch is off.', evidenceSteps: [6] }
-    const agent = scriptedAgent([...signIn('Teen 15'), openPath('/home'), openPath('/settings'), finish, finish])
+    const agent = scriptedAgent([signIn('Teen 15')[0], openPath('/home'), openPath('/settings'), finish, finish])
     let judgedInput: AssessInput | null = null
     const assessBatch = async (input: AssessInput): Promise<AssessOutput> => {
       judgedInput = input

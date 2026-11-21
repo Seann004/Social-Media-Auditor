@@ -108,16 +108,19 @@ export const MAX_PERMISSION_NOTE_CHARS = 500
 
 // App evidence: the AI checks items by using the platform's web app
 export const APP_PROMPT_VERSION = 'app-evidence-v1'
+/** Steps of looking around that one check may take. Steps that sign an account in are not counted: see APP_MAX_SIGN_IN_STEPS. */
 export const APP_MAX_STEPS_PER_CHECK = 15
+/** Sign-in steps (switching account, filling a credential, clicking Sign in) that do not count against the step limit, so that logging in does not use up the check. */
+export const APP_MAX_SIGN_IN_STEPS = 12
 /** Its own cap: the Phase 1 cap of 80 000 covers only one or two checks. Counts step and judge calls. */
 export const APP_MAX_TOKENS_PER_RUN = 200_000
 export const APP_MAX_ITEMS_PER_RUN = 10
 
 // Step prompt budget
-export const APP_STEP_INPUT_TOKENS = 2_000
+export const APP_STEP_INPUT_TOKENS = 3_000
 export const APP_STEP_OUTPUT_TOKENS = 800
-export const APP_PAGE_TEXT_CHARS = 3_200
-export const APP_MAX_ELEMENTS = 80
+export const APP_PAGE_TEXT_CHARS = 4_800
+export const APP_MAX_ELEMENTS = 120
 export const APP_ELEMENT_LINE_CHARS = 160
 export const APP_HISTORY_LINES = 12
 export const APP_HISTORY_LINE_CHARS = 300

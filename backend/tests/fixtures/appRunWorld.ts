@@ -113,7 +113,8 @@ export async function createAppRunKit(world: AppWorld, items: AssessItem[] = APP
       aiCalls.push({ kind: 'judge', itemId: input.items[0]?.id ?? '', tokens: judgeTokens.current })
       return judge.current(input)
     },
-    app: { appRepo, secretKey: world.secretKey, decideStep },
+    // The scripted AI signs in by hand; the runner signs in by itself in production (see the auto sign-in tests).
+    app: { appRepo, secretKey: world.secretKey, decideStep, autoSignIn: false },
   }
 
   return {
