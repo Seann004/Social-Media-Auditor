@@ -230,20 +230,22 @@ describe('runCheck: stopping', () => {
     expect(outcome).toMatchObject({ finished: false, stop: null, stoppedBy: null })
   })
 
-  it('refuses a finish once while settings pages it saw a link to are not opened, and names them', async () => {
+  it('opens the settings pages it saw links to by itself when the AI finishes, and does not count them as steps', async () => {
     world.social.setMode({ settingsMenu: true })
-    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), openPath('/home'), openPath('/settings'), FINISH, FINISH, FINISH])
-    const refusals = outcome.steps.filter((s) => s.outcome === 'refused').map((s) => s.refusalReason ?? '')
-    expect(refusals.some((r) => /Not opened yet: .*Sharing/.test(r))).toBe(true)
-    expect(refusals.filter((r) => r.includes('Not opened yet'))).toHaveLength(1)
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), openPath('/home'), openPath('/settings'), FINISH, FINISH])
+    const opened = outcome.steps.filter((s) => s.outcome === 'done' && /opened \/settings\/(sharing|contact|messaging|notifications)/.test(s.line))
+    expect(opened.map((s) => s.line).join(' ')).toMatch(/sharing/)
     expect(outcome.finished).toBe(true)
+    // Opened for the AI, so they are free: the AI still has all its own steps.
+    expect(outcome.steps.length).toBeGreaterThan(signIn('Teen 15').length + 5)
   })
 
-  it('does not refuse a finish for settings pages it has opened', async () => {
+  it('does not open settings pages again that the AI has already opened', async () => {
     world.social.setMode({ settingsMenu: true })
     const open = ['/settings/messaging', '/settings/sharing', '/settings/contact', '/settings/privacy', '/settings/notifications', '/settings/password'].map(openPath)
     const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), ...open, FINISH])
-    expect(outcome.steps.filter((s) => (s.refusalReason ?? '').includes('Not opened yet'))).toHaveLength(0)
+    const lines = outcome.steps.map((s) => s.line)
+    expect(lines.filter((l) => l.includes('opened /settings/sharing'))).toHaveLength(1)
   })
 
   it(`stops counting sign-in steps free after ${APP_MAX_SIGN_IN_STEPS}, so they cannot run for ever`, async () => {

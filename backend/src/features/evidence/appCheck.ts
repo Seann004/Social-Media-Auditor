@@ -27,7 +27,7 @@ import {
 } from './appSteps.js'
 import type { AgentAccount, AppAction, AppChange, AppElement, AppSource, AppStep, AppView, StoppedBy } from './appTypes.js'
 import type { AssessItem } from './assess.js'
-import { APP_MAX_SIGN_IN_STEPS, APP_MAX_STEPS_PER_CHECK, APP_MAX_TOKENS_PER_RUN, APP_STALLED_STEPS_BEFORE_STOP, APP_UNREADABLE_REPLIES_BEFORE_STOP } from './config.js'
+import { APP_MAX_AUTO_OPEN_STEPS, APP_MAX_SIGN_IN_STEPS, APP_MAX_STEPS_PER_CHECK, APP_MAX_TOKENS_PER_RUN, APP_STALLED_STEPS_BEFORE_STOP, APP_UNREADABLE_REPLIES_BEFORE_STOP } from './config.js'
 import type { EvidenceRepository, ScreenshotStore } from './repository.js'
 import type { TokenMeter } from './runnerAssess.js'
 import type { StopReason } from './runnerFinish.js'
@@ -163,10 +163,10 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   let doneSinceLanding = 0
   let pathsSinceLanding: ReadonlySet<string> = new Set()
   let earlyFinishRefused = false
-  /** The settings pages linked from pages seen (path to link name), the paths opened, and whether a finish was refused for the unopened ones. */
-  let settingsLinks: ReadonlyMap<string, string> = new Map()
+  /** The settings pages linked from pages seen (path to the link), the paths opened, and the free steps spent opening the rest. */
+  let settingsLinks: ReadonlyMap<string, { name: string; url: string }> = new Map()
   let seenPaths: ReadonlySet<string> = new Set()
-  let unopenedNudged = false
+  let autoOpenSteps = 0
   /** The last step when it was a done action: an identical action next, on an unchanged page, is refused. */
   let lastDone: DoneAction | null = null
   /** Per account, the fields this check filled (a fill or a typed text), by path, form and label: for the repeat hint. */
@@ -259,41 +259,55 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     return [...pathsSinceLanding].some((path) => path !== landing && !signInPaths.has(path))
   }
 
-  /** Notes the settings pages this page links to, and that this page has been seen. */
+  /** Per account: what one account has seen or opened says nothing about what another one would show. */
+  const accountKey = (path: string): string => `${account?.id ?? ''}|${path}`
+
+  /** Notes the settings pages this page links to, and that this page has been seen, for the account in use. */
   function noteSettingsLinks(at: AppView): void {
-    seenPaths = new Set(seenPaths).add(pathOf(at.url))
+    seenPaths = new Set(seenPaths).add(accountKey(pathOf(at.url)))
     const found = at.elements.filter((el) => isSettingsLink(el, at) && !DESTRUCTIVE_ACTION.test(plain(el.name)) && el.href !== null)
     if (found.length === 0) return
     const next = new Map(settingsLinks)
-    for (const el of found) next.set(pathOf(new URL(el.href as string, at.url).href), el.name)
+    for (const el of found) {
+      const url = new URL(el.href as string, at.url).href
+      const key = accountKey(pathOf(url))
+      if (!next.has(key)) next.set(key, { name: el.name, url })
+    }
     settingsLinks = next
   }
 
-  /** Names of the settings pages this check has seen a link to but not opened. */
-  function unopenedSettings(): string[] {
-    return [...settingsLinks].filter(([path]) => !seenPaths.has(path)).map(([, name]) => name)
-  }
+  const unopenedKeys = (): string[] => [...settingsLinks.keys()].filter((key) => key.startsWith(accountKey('')) && !seenPaths.has(key))
+  const hasUnopenedSettings = (): boolean => unopenedKeys().length > 0
 
   /**
-   * Why a finish is refused, or null when it may go through. Once when it comes before the check has explored,
-   * and once more while settings pages it has seen a link to are still unopened. Never on the last step allowed.
+   * Opens, without asking the AI, the settings pages that pages seen link to and that the account in use never opened,
+   * so the answer is not missed for a page the AI did not think to open. Each goes through the same safety rules and is recorded.
    */
+  async function openSettingsByItself(): Promise<void> {
+    const who = account
+    for (const key of unopenedKeys()) {
+      if (signal.aborted || autoOpenSteps >= APP_MAX_AUTO_OPEN_STEPS || account !== who) return
+      const link = settingsLinks.get(key)
+      if (link === undefined || seenPaths.has(key)) continue
+      seenPaths = new Set(seenPaths).add(key)
+      await act({ type: 'open_link', url: link.url })
+      autoOpenSteps += 1
+      if (view !== null) noteSettingsLinks(view)
+    }
+  }
+
+  /** Why a finish is refused, or null when it may go through: once when it comes before the check has explored. Never on the last step allowed. */
   function finishRefusal(): string | null {
-    if (stepsUsed() + 1 >= maxSteps) return null
-    if (!earlyFinishRefused && (doneSinceLanding < DONE_STEPS_BEFORE_FINISH || !leftLanding())) {
+    if (earlyFinishRefused || stepsUsed() + 1 >= maxSteps) return null
+    if (doneSinceLanding < DONE_STEPS_BEFORE_FINISH || !leftLanding()) {
       earlyFinishRefused = true
       return FINISHED_TOO_EARLY
-    }
-    const unopened = unopenedSettings()
-    if (!unopenedNudged && unopened.length > 0) {
-      unopenedNudged = true
-      return `${FINISHED_TOO_EARLY} Not opened yet: ${unopened.slice(0, 8).join(', ')}.`
     }
     return null
   }
 
   /** Steps counted against the limit: all of them but the sign-in steps. */
-  const stepsUsed = (): number => steps.length - signInSteps
+  const stepsUsed = (): number => steps.length - signInSteps - autoOpenSteps
 
   function isSignInStep(action: AppAction): boolean {
     if (action.type === 'switch_account' || action.type === 'fill_credential') return true
@@ -507,6 +521,11 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
     if (action.type === 'finish' && refusal !== null) {
       // Recorded with no page, like an accepted finish, so the newest page of each account stays the one the AI acted on.
       await record({ action, outcome: 'refused', detail: '', refusalReason: refusal, view: null, screenshot: null })
+      continue
+    }
+    if (action.type === 'finish' && account !== null && hasUnopenedSettings() && autoOpenSteps < APP_MAX_AUTO_OPEN_STEPS) {
+      // The finish is not recorded: the AI is asked again, with the opened pages among its steps.
+      await openSettingsByItself()
       continue
     }
     if (action.type === 'finish') {

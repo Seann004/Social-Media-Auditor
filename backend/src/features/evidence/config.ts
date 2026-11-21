@@ -112,6 +112,11 @@ export const APP_PROMPT_VERSION = 'app-evidence-v1'
 export const APP_MAX_STEPS_PER_CHECK = 15
 /** Sign-in steps (switching account, filling a credential, clicking Sign in) that do not count against the step limit, so that logging in does not use up the check. */
 export const APP_MAX_SIGN_IN_STEPS = 12
+/**
+ * Settings pages the system opens by itself, when the AI is about to finish and has seen links to pages it never opened.
+ * They use no AI tokens and are not counted against APP_MAX_STEPS_PER_CHECK.
+ */
+export const APP_MAX_AUTO_OPEN_STEPS = 8
 /** Its own cap: the Phase 1 cap of 80 000 covers only one or two checks. Counts step and judge calls. */
 export const APP_MAX_TOKENS_PER_RUN = 200_000
 export const APP_MAX_ITEMS_PER_RUN = 10

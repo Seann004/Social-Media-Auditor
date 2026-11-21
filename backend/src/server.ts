@@ -9,8 +9,6 @@ import { createUsageRouter } from './routes/usageRoutes.js'
 import { recordAiUsage } from './lib/aiUsage.js'
 import { createMappingRouter } from './routes/mappingRoutes.js'
 import { supabase } from './config/supabase.js'
-import { burnPasswordCheck, isPasswordHash, verifyPassword } from './services/passwords.js'
-import type { UserRole } from './types/index.js'
 import { requireAuth, requireRole, optionalAuth, signToken } from './middleware/auth.js'
 import { requireProjectAccess, requireProjectOwner, requireChecklistItemProjectAccess, filterAccessibleProjectIds, isProjectMember } from './middleware/projectAccess.js'
 import { createEvidenceModule } from './features/evidence/index.js'
@@ -98,10 +96,14 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ error: 'email and password are required' })
     }
-    const user = await checkLogin(String(email), String(password))
-    if (!user) {
+    const { data, error } = await supabase.rpc('verify_user_login', {
+      p_email: String(email).trim().toLowerCase(),
+      p_password: password,
+    })
+    if (error || !data || data.length === 0) {
       return res.status(401).json({ error: 'Incorrect email or password.' })
     }
+    const user = data[0]
     const authUser = { userId: user.userId, userName: user.userName, role: user.role }
     const token = signToken(authUser)
     res.json({ token, user: authUser })
@@ -109,37 +111,6 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     sendError(res, error)
   }
 })
-
-type LoginUser = { userId: string; userName: string; role: UserRole }
-
-/**
- * Checks an email and password (NFR-05). A bcrypt-stored password is compared here on the server.
- * An account still holding a legacy unsalted value is checked by the old database function once,
- * and on success its password is re-stored as a bcrypt hash, so every account moves over at its next login.
- */
-async function checkLogin(email: string, password: string): Promise<LoginUser | null> {
-  const record = await db.fetchLoginRecord(email)
-  if (!record) {
-    await burnPasswordCheck(password)
-    return null
-  }
-  if (isPasswordHash(record.userPassword)) {
-    return (await verifyPassword(password, record.userPassword)) ? record : null
-  }
-  const { data, error } = await supabase.rpc('verify_user_login', {
-    p_email: email.trim().toLowerCase(),
-    p_password: password,
-  })
-  if (error || !data || data.length === 0) return null
-  const user = data[0] as LoginUser
-  try {
-    await db.upgradeUserPassword(user.userId, password)
-  } catch (upgradeError) {
-    // The login itself succeeded; the account stays on the old check and is upgraded next time.
-    console.error('Could not upgrade a legacy password hash:', upgradeError)
-  }
-  return user
-}
 
 app.get('/api/users', requireAuth, async (req, res) => {
   try {
