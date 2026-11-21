@@ -1,6 +1,6 @@
 import { invalidateMappingCache } from './mappingCache.js'
 import { supabase } from '../config/supabase.js'
-import { reconcileEffectiveStatus, assertProjectEditable } from './dbService.js'
+import { reconcileEffectiveStatus, assertProjectEditable, upsertAuditResult } from './dbService.js'
 import type { ChecklistItemStatus } from '../types/index.js'
 
 export type AskModel = (systemPrompt: string, userPrompt: string) => Promise<any>
@@ -620,18 +620,18 @@ export interface AcceptedAnswer {
   timeSubmitted: string
 }
 
-/** `from` limits the copy to answers of one item of this project, as when an answer is filled in on its own. */
+/** `from` limits the copy to answers given in this same project, and to one item of it when `sourceItemId` is set. */
 export async function acceptSuggestions(
   projectId: string,
   userId: string,
   itemIds: string[],
-  from?: { sourceItemId: string },
+  from?: { sourceItemId?: string },
 ): Promise<AcceptedAnswer[]> {
   await assertProjectEditable(projectId)
   const wanted = new Set(itemIds)
   const picked = (await fetchProjectSuggestions(projectId, userId))
     .filter((s) => wanted.has(s.itemId) && s.relation === 'equivalent')
-    .filter((s) => !from || (s.sourceProjectId === projectId && s.sourceItemId === from.sourceItemId))
+    .filter((s) => !from || (s.sourceProjectId === projectId && (!from.sourceItemId || s.sourceItemId === from.sourceItemId)))
   if (picked.length === 0) return []
 
   const evidence = await fetchSourceEvidence(picked)
@@ -684,20 +684,97 @@ export async function dismissSuggestion(projectId: string, userId: string, itemI
   if (error) throw error
 }
 
+/** A filled-in answer counts as untouched while it was saved no later than this long after it was filled in. */
+const UNTOUCHED_WINDOW_MS = 5000
+
+/**
+ * Items linked to `answeredItemId` as the same requirement, that are already answered and should follow it:
+ * their answer is the one the answered item had before, or they were filled in from it and not changed since.
+ * An answer the auditor chose differently on purpose is left alone.
+ */
+async function followLinkedAnswers(
+  projectId: string,
+  userId: string,
+  answeredItemId: string,
+  newResult: ChecklistItemStatus,
+  previousResult: ChecklistItemStatus | null,
+): Promise<AcceptedAnswer[]> {
+  const pairs = (await fetchProjectSimilarItems(projectId)).filter((p) => p.relation === 'equivalent')
+  const targets = pairs
+    .filter((p) => p.projectItemIdA === answeredItemId || p.projectItemIdB === answeredItemId)
+    .map((p) => (p.projectItemIdA === answeredItemId ? p.projectItemIdB : p.projectItemIdA))
+  if (targets.length === 0) return []
+
+  const [{ data: rows, error }, { data: decisions, error: decisionError }] = await Promise.all([
+    supabase.from('Audit_Result').select('itemId, result, notes, findings, timeSubmitted')
+      .eq('projectId', projectId).eq('userId', userId).in('itemId', targets),
+    supabase.from('Suggestion_Decision').select('decisionId, itemId, decidedAt')
+      .eq('projectId', projectId).eq('userId', userId).eq('sourceItemId', answeredItemId).eq('decision', 'accepted').in('itemId', targets),
+  ])
+  if (error) throw error
+  if (decisionError) throw decisionError
+
+  const decisionOf = new Map(((decisions ?? []) as { decisionId: string; itemId: string; decidedAt: string }[]).map((d) => [d.itemId, d]))
+  const out: AcceptedAnswer[] = []
+  for (const row of (rows ?? []) as { itemId: string; result: ChecklistItemStatus; notes: string | null; findings: string | null; timeSubmitted: string }[]) {
+    if (row.result === newResult) continue
+    const decision = decisionOf.get(row.itemId)
+    const untouched = !!decision && Date.parse(row.timeSubmitted) <= Date.parse(decision.decidedAt) + UNTOUCHED_WINDOW_MS
+    if (row.result !== previousResult && !untouched) continue
+
+    await upsertAuditResult(projectId, row.itemId, userId, '', newResult, row.notes ?? '')
+    const savedAt = new Date().toISOString()
+    // The new fill-in time keeps the answer counted as untouched for the next change.
+    if (decision) {
+      const { error: stampError } = await supabase.from('Suggestion_Decision').update({ decidedAt: savedAt }).eq('decisionId', decision.decisionId)
+      if (stampError) throw stampError
+    }
+    out.push({ itemId: row.itemId, result: newResult, notes: row.notes, findings: row.findings, timeSubmitted: savedAt })
+  }
+  return out
+}
+
 /**
  * After an auditor answers an item, the items of this project that an admin approved as the same requirement
- * get the same answer, unless they already have one. "Partly overlaps" items are not touched: they stay
- * suggestions for the auditor to check. A failure here never undoes the answer that was just saved.
+ * follow it: an unanswered one gets the answer, and one that was filled in from it (or still matched its earlier
+ * answer) is changed to the new one. "Partly overlaps" items are not touched: they stay suggestions for the auditor
+ * to check. A failure here never undoes the answer that was just saved.
  */
-export async function fillInSameRequirement(projectId: string, userId: string, answeredItemId: string): Promise<AcceptedAnswer[]> {
+export async function fillInSameRequirement(
+  projectId: string,
+  userId: string,
+  answeredItemId: string,
+  newResult?: ChecklistItemStatus,
+  previousResult: ChecklistItemStatus | null = null,
+): Promise<AcceptedAnswer[]> {
+  const out: AcceptedAnswer[] = []
   try {
     const targets = (await fetchProjectSuggestions(projectId, userId))
       .filter((s) => s.relation === 'equivalent' && s.sourceProjectId === projectId && s.sourceItemId === answeredItemId)
       .map((s) => s.itemId)
-    if (targets.length === 0) return []
-    return await acceptSuggestions(projectId, userId, targets, { sourceItemId: answeredItemId })
+    if (targets.length > 0) out.push(...await acceptSuggestions(projectId, userId, targets, { sourceItemId: answeredItemId }))
   } catch (error) {
     console.error(`Could not fill in the same-requirement items for ${answeredItemId}:`, error)
-    return []
   }
+  if (newResult) {
+    try {
+      out.push(...await followLinkedAnswers(projectId, userId, answeredItemId, newResult, previousResult))
+    } catch (error) {
+      console.error(`Could not update the same-requirement items for ${answeredItemId}:`, error)
+    }
+  }
+  return out
+}
+
+/**
+ * Catches up a project: every same-requirement item whose linked item was answered in this project, before items
+ * were filled in on their own, gets that answer now. Items that already have an answer, and suggestions the
+ * auditor dismissed, are left alone.
+ */
+export async function fillInAllSameRequirement(projectId: string, userId: string): Promise<AcceptedAnswer[]> {
+  const targets = (await fetchProjectSuggestions(projectId, userId))
+    .filter((s) => s.relation === 'equivalent' && s.sourceProjectId === projectId)
+    .map((s) => s.itemId)
+  if (targets.length === 0) return []
+  return acceptSuggestions(projectId, userId, targets, {})
 }

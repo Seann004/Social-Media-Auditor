@@ -23,6 +23,7 @@ vi.mock('../../../lib/db', async (orig) => ({
     itemIds.filter((itemId) => evidenceMapValue[itemId]).map((itemId) => ({ itemId, userId: 'u1', images: evidenceMapValue[itemId] }))),
   fetchAnswerSuggestions: vi.fn(async () => []),
   fetchSimilarItems: vi.fn(async () => []),
+  fillInSameRequirementItems: vi.fn(async () => []),
   fetchProjectReliability: vi.fn(async () => ({ kappa: null, sharedItems: 0, raterPair: null })),
 }))
 vi.mock('../../evidence/api', async (orig) => ({

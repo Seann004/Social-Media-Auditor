@@ -658,6 +658,12 @@ export async function acceptAnswerSuggestions(projectId: string, itemIds: string
   return res.accepted
 }
 
+/** Fills in same-requirement items whose linked item was already answered in this project. */
+export async function fillInSameRequirementItems(projectId: string): Promise<AcceptedAnswer[]> {
+  const res = await request<{ filledIn: AcceptedAnswer[] }>(`/projects/${projectId}/suggestions/fill-in`, { method: 'POST' })
+  return res.filledIn
+}
+
 export async function dismissAnswerSuggestion(projectId: string, itemId: string, sourceItemId: string): Promise<void> {
   await request(`/projects/${projectId}/suggestions/dismiss`, {
     method: 'POST',

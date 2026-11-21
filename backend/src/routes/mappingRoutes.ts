@@ -208,6 +208,15 @@ export function createMappingRouter({ ask }: Deps): Router {
     }
   })
 
+  // Catches up items an admin approved as the same requirement whose linked item was answered earlier in this project.
+  router.post('/projects/:id/suggestions/fill-in', requireAuth, requireRole('auditor'), requireProjectAccess('id'), async (req, res) => {
+    try {
+      res.json({ filledIn: await mapping.fillInAllSameRequirement(req.params.id, req.user!.userId) })
+    } catch (error) {
+      sendError(res, error)
+    }
+  })
+
   router.post('/projects/:id/suggestions/dismiss', requireAuth, requireRole('auditor'), requireProjectAccess('id'), async (req, res) => {
     try {
       const { itemId, sourceItemId } = req.body ?? {}

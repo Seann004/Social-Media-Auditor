@@ -508,6 +508,7 @@ app.post('/api/projects/:id/results', requireAuth, requireProjectAccess('id'), a
     if (!itemId || !guidelineId || !VALID_RESULT_STATUSES.includes(result)) {
       return res.status(400).json({ error: `itemId, guidelineId are required and result must be one of ${VALID_RESULT_STATUSES.join(', ')}.` })
     }
+    const previousResult = await db.fetchAuditResultStatus(req.params.id, itemId, req.user!.userId)
     await db.upsertAuditResult(
       req.params.id,
       itemId,
@@ -516,8 +517,8 @@ app.post('/api/projects/:id/results', requireAuth, requireProjectAccess('id'), a
       result,
       notes
     )
-    // Items an admin approved as the same requirement get this answer too, unless the auditor already answered them.
-    const filledIn = result === 'needs_review' ? [] : await mapping.fillInSameRequirement(req.params.id, req.user!.userId, itemId)
+    // Items an admin approved as the same requirement follow this answer, unless the auditor set them differently on purpose.
+    const filledIn = result === 'needs_review' ? [] : await mapping.fillInSameRequirement(req.params.id, req.user!.userId, itemId, result, previousResult)
     res.json({ success: true, filledIn })
   } catch (error) {
     sendError(res, error)

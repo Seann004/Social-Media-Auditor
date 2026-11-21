@@ -501,3 +501,67 @@ describe('fillInSameRequirement', () => {
     expect(await mapping.fillInSameRequirement('P2', USER, 'p2c')).toEqual([])
   })
 })
+
+describe('fillInAllSameRequirement (catch-up)', () => {
+  beforeEach(() => {
+    tables.Audit_Project[0].submissionStatus = 'draft'
+    giveProjectBothGuidelines()
+    tables.Audit_Result.push({ resultId: 'r7', projectId: 'P2', itemId: 'p2c', userId: USER, result: 'non_compliant', findings: 'No age gate', evidenceCount: 0, timeSubmitted: '2026-05-02T00:00:00Z' })
+  })
+
+  it('fills in items whose linked item was answered earlier', async () => {
+    const filled = await mapping.fillInAllSameRequirement('P2', USER)
+    expect(filled.map((a) => a.itemId)).toEqual(['p2a'])
+    expect(tables.Audit_Result.find((r) => r.projectId === 'P2' && r.itemId === 'p2a')).toMatchObject({ result: 'non_compliant' })
+  })
+
+  it('does nothing the second time', async () => {
+    await mapping.fillInAllSameRequirement('P2', USER)
+    expect(await mapping.fillInAllSameRequirement('P2', USER)).toEqual([])
+  })
+
+  it('leaves out a suggestion the auditor dismissed', async () => {
+    await mapping.dismissSuggestion('P2', USER, 'p2a', 'p2c')
+    expect(await mapping.fillInAllSameRequirement('P2', USER)).toEqual([])
+  })
+})
+
+describe('same-requirement items follow a changed answer', () => {
+  beforeEach(async () => {
+    tables.Audit_Project[0].submissionStatus = 'draft'
+    giveProjectBothGuidelines()
+    tables.Audit_Result.push({ resultId: 'r7', projectId: 'P2', itemId: 'p2c', userId: USER, result: 'compliant', findings: null, evidenceCount: 0, timeSubmitted: '2026-05-02T00:00:00Z' })
+    await mapping.fillInSameRequirement('P2', USER, 'p2c', 'compliant', null) // p2a is filled in: compliant
+  })
+
+  const changeSource = (to: string) => { tables.Audit_Result.find((r) => r.resultId === 'r7')!.result = to }
+  const target = () => tables.Audit_Result.find((r) => r.projectId === 'P2' && r.itemId === 'p2a')!
+
+  it('changes a linked item that still matched the earlier answer', async () => {
+    changeSource('non_compliant')
+    const changed = await mapping.fillInSameRequirement('P2', USER, 'p2c', 'non_compliant', 'compliant')
+    expect(changed.map((a) => [a.itemId, a.result])).toEqual([['p2a', 'non_compliant']])
+    expect(target().result).toBe('non_compliant')
+  })
+
+  it('changes a filled-in item that has not been touched since, even if the earlier answer is unknown', async () => {
+    const decision = tables.Suggestion_Decision.find((d) => d.itemId === 'p2a')!
+    decision.decidedAt = new Date(Date.parse(target().timeSubmitted) + 1000).toISOString()
+    changeSource('partially')
+    await mapping.fillInSameRequirement('P2', USER, 'p2c', 'partially', 'partially')
+    expect(target().result).toBe('partially')
+  })
+
+  it('leaves an answer the auditor changed on purpose', async () => {
+    target().result = 'not_applicable'
+    target().timeSubmitted = '2099-01-01T00:00:00Z'
+    tables.Suggestion_Decision.find((d) => d.itemId === 'p2a')!.decidedAt = '2026-05-03T00:00:00Z'
+    changeSource('non_compliant')
+    expect(await mapping.fillInSameRequirement('P2', USER, 'p2c', 'non_compliant', 'compliant')).toEqual([])
+    expect(target().result).toBe('not_applicable')
+  })
+
+  it('does nothing when the answer is the same', async () => {
+    expect(await mapping.fillInSameRequirement('P2', USER, 'p2c', 'compliant', 'compliant')).toEqual([])
+  })
+})

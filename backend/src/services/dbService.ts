@@ -1455,6 +1455,19 @@ export async function upsertAuditResult(
   }
 }
 
+/** The answer this auditor has saved for an item, or null when there is none. */
+export async function fetchAuditResultStatus(projectId: string, itemId: string, userId: string): Promise<ChecklistItemStatus | null> {
+  const { data, error } = await supabase
+    .from('Audit_Result')
+    .select('result')
+    .eq('projectId', projectId)
+    .eq('itemId', itemId)
+    .eq('userId', userId)
+    .maybeSingle()
+  if (error) throw error
+  return (data as { result: ChecklistItemStatus } | null)?.result ?? null
+}
+
 export function reconcileEffectiveStatus(statuses: string[], resolvedStatus?: string): string {
   if (resolvedStatus) return resolvedStatus
   const distinct = new Set(statuses)

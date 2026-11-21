@@ -31,7 +31,7 @@ import { useStore, calcScore, reconcileResponse } from '../../../store/useStore'
 import { useProjectData } from '../../../hooks/useProjectData'
 import {
   saveEvidenceImages, fetchEvidenceForItems, fetchProjectReliability, type ProjectReliability,
-  fetchSimilarItems, fetchAnswerSuggestions, acceptAnswerSuggestions, dismissAnswerSuggestion, type AnswerSuggestion, type AcceptedAnswer,
+  fetchSimilarItems, fillInSameRequirementItems, fetchAnswerSuggestions, acceptAnswerSuggestions, dismissAnswerSuggestion, type AnswerSuggestion, type AcceptedAnswer,
 } from '../../../lib/db'
 import type { ChecklistItemStatus, Severity, ChecklistItem, ProjectScore, AuditResponse } from '../../../types'
 import StatusBadge from '../../audits/components/StatusBadge'
@@ -508,7 +508,16 @@ function AuditPageContent() {
     }
   }
 
-  useEffect(() => { loadSuggestions() }, [id, suggestionsEnabled])
+  // Once the answers are loaded, same-requirement items whose linked item was answered earlier are filled in.
+  useEffect(() => {
+    if (!id || !suggestionsEnabled || loading) { loadSuggestions(); return }
+    let cancelled = false
+    fillInSameRequirementItems(id)
+      .then((filled) => { if (!cancelled && filled.length > 0) showFilledIn(filled) })
+      .catch(() => { /* the suggestions below still offer them */ })
+      .finally(() => { if (!cancelled) loadSuggestions() })
+    return () => { cancelled = true }
+  }, [id, suggestionsEnabled, loading])
 
   // Items an admin linked to each other, so each card can point at the item it is linked to.
   const [linkedItems, setLinkedItems] = useState<ReturnType<typeof linkedItemsByItem>>({})
@@ -819,8 +828,8 @@ function AuditPageContent() {
   function getMyResponse(itemId: string) { return getAllResponses(itemId).find((r) => r.auditorId === currentUserId) }
 
   /** Items the server filled in as the same requirement appear like any answer, and the suggestion list is refreshed. */
-  function showFilledIn(filledIn: AcceptedAnswer[]) {
-    if (filledIn.length === 0) return
+  function showFilledIn(filledIn: AcceptedAnswer[] | undefined) {
+    if (!filledIn || filledIn.length === 0) return
     applyAcceptedAnswers(filledIn)
     loadSuggestions()
   }
@@ -2056,7 +2065,7 @@ helpText: newItemHelp.trim() || undefined,
                                 )}
                               </div>
                               <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0 max-w-[55%]">
-                                {linkedItems[ci.id].map((link) => {
+                                {(linkedItems[ci.id] ?? []).map((link) => {
                                   const target = checklistItems.find((x) => x.id === link.itemId)
                                   if (!target) return null
                                   const same = link.relation === 'equivalent'
