@@ -469,3 +469,35 @@ describe('fetchProjectSuggestions inside the same project', () => {
     expect(tables.Audit_Result.find((r) => r.projectId === 'P2' && r.itemId === 'p2a')).toMatchObject({ result: 'non_compliant', findings: 'No age gate' })
   })
 })
+
+describe('fillInSameRequirement', () => {
+  beforeEach(() => {
+    tables.Audit_Project[0].submissionStatus = 'draft'
+    giveProjectBothGuidelines()
+    tables.Audit_Result.push({ resultId: 'r7', projectId: 'P2', itemId: 'p2c', userId: USER, result: 'compliant', findings: 'Age gate found', evidenceCount: 0, timeSubmitted: '2026-05-02T00:00:00Z' })
+  })
+
+  it('gives the linked same-requirement item the answer just saved', async () => {
+    const filled = await mapping.fillInSameRequirement('P2', USER, 'p2c')
+    expect(filled.map((a) => a.itemId)).toEqual(['p2a'])
+    expect(tables.Audit_Result.find((r) => r.projectId === 'P2' && r.itemId === 'p2a')).toMatchObject({ result: 'compliant', findings: 'Age gate found' })
+  })
+
+  it('does not touch an item that already has an answer', async () => {
+    tables.Audit_Result.push({ resultId: 'r8', projectId: 'P2', itemId: 'p2a', userId: USER, result: 'non_compliant', findings: 'mine', evidenceCount: 0, timeSubmitted: '2026-05-03T00:00:00Z' })
+    expect(await mapping.fillInSameRequirement('P2', USER, 'p2c')).toEqual([])
+    expect(tables.Audit_Result.find((r) => r.itemId === 'p2a')).toMatchObject({ result: 'non_compliant', findings: 'mine' })
+  })
+
+  it('leaves partly-overlapping pairs as suggestions', async () => {
+    tables.Item_Mapping.forEach((m) => { m.relation = 'partial' })
+    expect(await mapping.fillInSameRequirement('P2', USER, 'p2c')).toEqual([])
+    expect(tables.Audit_Result.some((r) => r.itemId === 'p2a')).toBe(false)
+    expect(await mapping.fetchProjectSuggestions('P2', USER)).toHaveLength(1)
+  })
+
+  it('never fails the save: a locked audit just fills nothing in', async () => {
+    tables.Audit_Project.find((p) => p.projectId === 'P2')!.submissionStatus = 'pending_review'
+    expect(await mapping.fillInSameRequirement('P2', USER, 'p2c')).toEqual([])
+  })
+})

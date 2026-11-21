@@ -31,7 +31,7 @@ import { useStore, calcScore, reconcileResponse } from '../../../store/useStore'
 import { useProjectData } from '../../../hooks/useProjectData'
 import {
   saveEvidenceImages, fetchEvidenceForItems, fetchProjectReliability, type ProjectReliability,
-  fetchAnswerSuggestions, acceptAnswerSuggestions, dismissAnswerSuggestion, type AnswerSuggestion, type AcceptedAnswer,
+  fetchSimilarItems, fetchAnswerSuggestions, acceptAnswerSuggestions, dismissAnswerSuggestion, type AnswerSuggestion, type AcceptedAnswer,
 } from '../../../lib/db'
 import type { ChecklistItemStatus, Severity, ChecklistItem, ProjectScore, AuditResponse } from '../../../types'
 import StatusBadge from '../../audits/components/StatusBadge'
@@ -51,6 +51,7 @@ import { pageUpdateAfterDecision } from '../../evidence/decidedAnswer'
 import type { AppliedAnswer } from '../../evidence/types'
 import { useResponseFlow } from '../../evidence/useResponseFlow'
 import { textOnBlur } from '../textOnBlur'
+import { linkedItemsByItem } from '../linkedItems'
 import ChecklistItemDetailModal from '../../audits/components/ChecklistItemDetailModal'
 import Button from '../../../components/ui/Button'
 import Modal from '../../../components/ui/Modal'
@@ -509,6 +510,17 @@ function AuditPageContent() {
 
   useEffect(() => { loadSuggestions() }, [id, suggestionsEnabled])
 
+  // Items an admin linked to each other, so each card can point at the item it is linked to.
+  const [linkedItems, setLinkedItems] = useState<ReturnType<typeof linkedItemsByItem>>({})
+  useEffect(() => {
+    if (!id || !project || !(isAuditor || isHeadAuditor)) { setLinkedItems({}); return }
+    let cancelled = false
+    fetchSimilarItems(id)
+      .then((pairs) => { if (!cancelled) setLinkedItems(linkedItemsByItem(pairs)) })
+      .catch(() => { if (!cancelled) setLinkedItems({}) })
+    return () => { cancelled = true }
+  }, [id, project?.id, isAuditor, isHeadAuditor])
+
   const suggestedItems = useMemo(
     () => checklistItems.filter((ci) => {
       if (!suggestions[ci.id]) return false
@@ -806,6 +818,13 @@ function AuditPageContent() {
   function getAllResponses(itemId: string): AuditResponse[] { return allResponses[`${id}__${itemId}`] ?? [] }
   function getMyResponse(itemId: string) { return getAllResponses(itemId).find((r) => r.auditorId === currentUserId) }
 
+  /** Items the server filled in as the same requirement appear like any answer, and the suggestion list is refreshed. */
+  function showFilledIn(filledIn: AcceptedAnswer[]) {
+    if (filledIn.length === 0) return
+    applyAcceptedAnswers(filledIn)
+    loadSuggestions()
+  }
+
   async function handleResponseClick(itemId: string, guidelineId: string, status: ChecklistItemStatus) {
     if (answersLocked) return
     if (await responseFlow.handleClick(itemId, status)) return
@@ -813,7 +832,7 @@ function AuditPageContent() {
     const notes = noteValues[itemId] ?? current?.notes ?? ''
     setResponseError(null)
     try {
-      await setResponse(id!, itemId, guidelineId, status, notes)
+      showFilledIn(await setResponse(id!, itemId, guidelineId, status, notes))
     } catch {
       setResponseError('Failed to save your response. Check your connection and try again.')
     }
@@ -844,7 +863,7 @@ function AuditPageContent() {
     setFieldSaveState((prev) => ({ ...prev, [key]: 'saving' }))
     setFieldSaveError((prev) => ({ ...prev, [key]: '' }))
     try {
-      await trackSave(setResponse(id!, itemId, guidelineId, current.status, notes))
+      showFilledIn(await trackSave(setResponse(id!, itemId, guidelineId, current.status, notes)))
       markSaved(key)
     } catch {
       setFieldSaveState((prev) => ({ ...prev, [key]: 'error' }))
@@ -2036,7 +2055,30 @@ helpText: newItemHelp.trim() || undefined,
                                   </div>
                                 )}
                               </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
+                              <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0 max-w-[55%]">
+                                {linkedItems[ci.id].map((link) => {
+                                  const target = checklistItems.find((x) => x.id === link.itemId)
+                                  if (!target) return null
+                                  const same = link.relation === 'equivalent'
+                                  return (
+                                    <button
+                                      key={link.itemId}
+                                      type="button"
+                                      onClick={() => goToItem(target)}
+                                      title={`Go to ${link.guidelineName} ${link.label}`}
+                                      className={[
+                                        'inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-2xs font-medium transition-colors',
+                                        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600',
+                                        same
+                                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                          : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100',
+                                      ].join(' ')}
+                                    >
+                                      <LinkSimple size={10} weight="bold" />
+                                      {same ? 'Same requirement' : 'Partly overlaps'} · {link.guidelineName} {link.label}
+                                    </button>
+                                  )
+                                })}
                                 <button
                                   type="button"
                                   onClick={() => { setSelectedItemForModal(ci); setItemModalTab('help'); }}

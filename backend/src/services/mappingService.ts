@@ -620,11 +620,18 @@ export interface AcceptedAnswer {
   timeSubmitted: string
 }
 
-export async function acceptSuggestions(projectId: string, userId: string, itemIds: string[]): Promise<AcceptedAnswer[]> {
+/** `from` limits the copy to answers of one item of this project, as when an answer is filled in on its own. */
+export async function acceptSuggestions(
+  projectId: string,
+  userId: string,
+  itemIds: string[],
+  from?: { sourceItemId: string },
+): Promise<AcceptedAnswer[]> {
   await assertProjectEditable(projectId)
   const wanted = new Set(itemIds)
   const picked = (await fetchProjectSuggestions(projectId, userId))
     .filter((s) => wanted.has(s.itemId) && s.relation === 'equivalent')
+    .filter((s) => !from || (s.sourceProjectId === projectId && s.sourceItemId === from.sourceItemId))
   if (picked.length === 0) return []
 
   const evidence = await fetchSourceEvidence(picked)
@@ -635,7 +642,7 @@ export async function acceptSuggestions(projectId: string, userId: string, itemI
     userId,
     guidelineId: s.guidelineId,
     result: s.suggestedStatus,
-    notes: `Reused from "${s.sourceProjectTitle}" (${s.sourceGuideline}${s.sourceItemCode ? ` ${s.sourceItemCode}` : ''})`,
+    notes: `${from ? 'Filled in from' : 'Reused from'} "${s.sourceProjectTitle}" (${s.sourceGuideline}${s.sourceItemCode ? ` ${s.sourceItemCode}` : ''})`,
     findings: s.findings,
     evidenceImages: evidence.get(`${s.sourceProjectId}|${s.sourceItemId}`) ?? [],
     timeSubmitted: now,
@@ -675,4 +682,22 @@ export async function dismissSuggestion(projectId: string, userId: string, itemI
     .from('Suggestion_Decision')
     .insert({ projectId, userId, itemId, sourceProjectId: suggestion.sourceProjectId, sourceItemId, decision: 'dismissed' })
   if (error) throw error
+}
+
+/**
+ * After an auditor answers an item, the items of this project that an admin approved as the same requirement
+ * get the same answer, unless they already have one. "Partly overlaps" items are not touched: they stay
+ * suggestions for the auditor to check. A failure here never undoes the answer that was just saved.
+ */
+export async function fillInSameRequirement(projectId: string, userId: string, answeredItemId: string): Promise<AcceptedAnswer[]> {
+  try {
+    const targets = (await fetchProjectSuggestions(projectId, userId))
+      .filter((s) => s.relation === 'equivalent' && s.sourceProjectId === projectId && s.sourceItemId === answeredItemId)
+      .map((s) => s.itemId)
+    if (targets.length === 0) return []
+    return await acceptSuggestions(projectId, userId, targets, { sourceItemId: answeredItemId })
+  } catch (error) {
+    console.error(`Could not fill in the same-requirement items for ${answeredItemId}:`, error)
+    return []
+  }
 }

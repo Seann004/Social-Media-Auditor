@@ -395,11 +395,13 @@ export async function upsertAuditResult(
   guidelineId: string,
   result: ChecklistItemStatus,
   notes: string = ''
-): Promise<void> {
-  await request(`/projects/${projectId}/results`, {
+): Promise<AcceptedAnswer[]> {
+  const res = await request<{ filledIn?: AcceptedAnswer[] }>(`/projects/${projectId}/results`, {
     method: 'POST',
     body: JSON.stringify({ itemId, userId, guidelineId, result, notes }),
   })
+  // Items an admin approved as the same requirement are filled in with this answer by the server.
+  return res?.filledIn ?? []
 }
 
 export async function submitForReview(projectId: string): Promise<void> {

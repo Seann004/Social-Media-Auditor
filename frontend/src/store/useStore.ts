@@ -204,7 +204,7 @@ interface StoreState {
   addGuidelineFromRealtime: (dbGuideline: db.DbGuideline, dbItems: db.DbChecklistItem[]) => void
 
 
-  setResponse: (projectId: string, itemId: string, guidelineId: string, status: ChecklistItemStatus, notes?: string, findings?: string) => Promise<void>
+  setResponse: (projectId: string, itemId: string, guidelineId: string, status: ChecklistItemStatus, notes?: string, findings?: string) => Promise<db.AcceptedAnswer[]>
   saveFindings: (projectId: string, itemId: string, findings: string) => Promise<void>
   resolveDisagreement: (projectId: string, itemId: string, status: ChecklistItemStatus, notes?: string) => Promise<void>
 
@@ -643,8 +643,9 @@ export const useStore = create<StoreState>()(
         responses: reconciled ? { ...state.responses, [key]: reconciled } : state.responses,
       }
     })
+    let filledIn: db.AcceptedAnswer[] = []
     try {
-      await serializeByKey(key, () => db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes))
+      filledIn = await serializeByKey(key, () => db.upsertAuditResult(projectId, itemId, currentUserId, guidelineId, status, notes))
     } catch (err) {
       set((state) => {
         const allResponses = { ...state.allResponses }
@@ -663,6 +664,7 @@ export const useStore = create<StoreState>()(
     } catch (err) {
       console.error('[setResponse] Answer saved, but refreshing the project summary failed:', err)
     }
+    return filledIn
   },
 
   refreshAfterAnswer: async (projectId) => {

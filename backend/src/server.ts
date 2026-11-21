@@ -516,7 +516,9 @@ app.post('/api/projects/:id/results', requireAuth, requireProjectAccess('id'), a
       result,
       notes
     )
-    res.json({ success: true })
+    // Items an admin approved as the same requirement get this answer too, unless the auditor already answered them.
+    const filledIn = result === 'needs_review' ? [] : await mapping.fillInSameRequirement(req.params.id, req.user!.userId, itemId)
+    res.json({ success: true, filledIn })
   } catch (error) {
     sendError(res, error)
   }
