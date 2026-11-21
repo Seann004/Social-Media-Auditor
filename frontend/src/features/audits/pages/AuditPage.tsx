@@ -892,7 +892,9 @@ function AuditPageContent() {
     try {
       const filledIn = await setResponse(id!, itemId, guidelineId, status, notes)
       settle(filledIn)
-      showFilledIn(filledIn)
+      if (filledIn && filledIn.length > 0) showFilledIn(filledIn)
+      // A partly-overlapping item is never filled in, but it now has an answer to show the auditor, so its card is loaded.
+      else if ((linkedItems[itemId] ?? []).length > 0) loadSuggestions()
     } catch {
       settle([])
       setResponseError('Failed to save your response. Check your connection and try again.')
