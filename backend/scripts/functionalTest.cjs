@@ -23,11 +23,18 @@ const results = []
 
 async function call(method, url, token, body) {
   const started = Date.now()
-  const res = await fetch(API + url, {
+  const send = () => fetch(API + url, {
     method,
     headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
+  let res
+  try { res = await send() } catch (e) {
+    // A network blip (not an HTTP error): wait and try once more, so one dropped connection cannot stop a run halfway.
+    console.error(`network error on ${method} ${url} (${e.message}), retrying once`)
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    res = await send()
+  }
   let json = null
   try { json = await res.json() } catch { /* empty body */ }
   return { status: res.status, json, ms: Date.now() - started }
@@ -94,6 +101,32 @@ async function main() {
   const listed = (mine.json || []).some((p) => p.projectId === projectId)
   record('FT-10', 'Project management', 'Head auditor assigns the auditor to the project', '200; the project appears in the auditor list', `${r.status}; ${listed ? 'listed' : 'not listed'}`, r.status === 200 && listed)
 
+  // FR3b editing the checklist (before submission locks it)
+  const newItem = { category: 'Privacy', text: '[FT] Teen accounts hide their follower list by default.', severity: 'minor', guidelineId: items[0].guidelineId }
+  r = await call('POST', `/api/projects/${projectId}/checklist/items`, tok.head, newItem)
+  const addedItemId = r.json?.itemId
+  let checklistNow = await call('GET', `/api/projects/${projectId}/checklist`, tok.head)
+  const added = (checklistNow.json || []).find((x) => x.itemId === addedItemId)
+  record('FT-25', 'Checklist', 'Head auditor adds a checklist item to the project', '201; item appears in the checklist', `${r.status}; ${added ? 'listed' : 'not listed'}`, r.status === 201 && added)
+  r = await call('PATCH', `/api/checklist/items/${addedItemId}`, tok.head, { severity: 'critical' })
+  checklistNow = await call('GET', `/api/projects/${projectId}/checklist`, tok.head)
+  const sev = (checklistNow.json || []).find((x) => x.itemId === addedItemId)?.severity
+  record('FT-26', 'Checklist', 'Head auditor changes the item severity to critical', '200; severity is critical', `${r.status}; ${sev}`, r.status === 200 && sev === 'critical')
+  r = await call('PATCH', `/api/checklist/items/${addedItemId}`, tok.head, { severity: 'extreme' })
+  record('FT-27', 'Checklist', 'Change the severity to a value that does not exist', '400', `${r.status}`, r.status === 400)
+  r = await call('POST', `/api/projects/${projectId}/checklist/items`, tok.auditor, newItem)
+  record('FT-28', 'Checklist', 'Auditor tries to add a checklist item', '403', `${r.status}`, r.status === 403)
+  r = await call('DELETE', `/api/checklist/items/${addedItemId}`, tok.head)
+  checklistNow = await call('GET', `/api/projects/${projectId}/checklist`, tok.head)
+  const stillThere = (checklistNow.json || []).some((x) => x.itemId === addedItemId)
+  record('FT-29', 'Checklist', 'Head auditor deletes the added item', '200; item gone from the checklist', `${r.status}; ${stillThere ? 'still listed' : 'gone'}`, r.status === 200 && !stillThere)
+
+  // FR8b creating a report by hand
+  r = await call('POST', '/api/reports', tok.auditor, { projectId })
+  record('FT-30', 'Reports', 'Project member creates a report for the project', '201 with a report id', `${r.status}${r.json?.reportId ? ', id returned' : ''}`, r.status === 201 && r.json?.reportId)
+  r = await call('POST', '/api/reports', tok.admin, { projectId })
+  record('FT-31', 'Reports', 'Someone outside the project tries to create its report', '403', `${r.status}`, r.status === 403)
+
   // FR5 conducting the audit
   const item0 = items[0]
   const gid = item0.guidelineId
@@ -147,6 +180,39 @@ async function main() {
   const genSample = Array.isArray(genItems) ? genItems.slice(0, 3) : r.json
   r = await call('POST', '/api/generator/process-chunk', tok.auditor, { textChunk: clause })
   record('FT-23', 'Guideline generator', 'Auditor tries to use the generator', '403', `${r.status}`, r.status === 403)
+
+  // FR10 self-registration
+  const newUserId = crypto.randomUUID()
+  const newEmail = `ft-register-${newUserId.slice(0, 8)}@example.test`
+  r = await call('POST', '/api/users', null, { userId: newUserId, userName: '[FT] New Auditor', userEmail: newEmail, role: 'auditor', userPassword: hash('Register#2026') })
+  const loginNew = await call('POST', '/api/auth/login', null, { email: newEmail, password: hash('Register#2026') })
+  record('FT-32', 'Registration', 'A new user registers as an auditor and logs in', '201; then login 200 with role auditor', `${r.status}; login ${loginNew.status}, role ${loginNew.json?.user?.role}`, r.status === 201 && loginNew.status === 200 && loginNew.json?.user?.role === 'auditor')
+  r = await call('POST', '/api/users', null, { userId: crypto.randomUUID(), userName: '[FT] Wants Admin', userEmail: `ft-admin-${Date.now()}@example.test`, role: 'admin', userPassword: hash('Register#2026') })
+  record('FT-33', 'Registration', 'Someone registers themselves as an admin', '403', `${r.status}`, r.status === 403)
+  r = await call('POST', '/api/users', null, { userId: 'not-a-uuid', userName: '[FT] Bad', userEmail: `ft-bad-${Date.now()}@example.test`, role: 'auditor', userPassword: hash('Register#2026') })
+  record('FT-34', 'Registration', 'Register with an invalid user id', '400', `${r.status}`, r.status === 400)
+  const { error: delUserError } = await sb.from('User').delete().eq('userId', newUserId)
+  if (delUserError) console.error('could not remove the registered test user:', delUserError.message)
+
+  // FR11 guideline upload and deletion (admin)
+  const newGuidelineId = crypto.randomUUID()
+  const guidelineBody = {
+    guideline: { guidelineId: newGuidelineId, guidelineName: '[FT] Scratch guideline', shortName: 'FTG', version: '1.0', description: 'Functional test, deleted at the end', source: 'Functional test', categories: ['Privacy'], lastUpdated: new Date().toISOString().slice(0, 10), userId: ids.admin },
+    items: [{ id: crypto.randomUUID(), category: 'Privacy', text: '[FT] Location sharing is off by default for child accounts.', severity: 'major', itemCode: 'FTG-1' }],
+  }
+  r = await call('POST', '/api/guidelines', tok.admin, guidelineBody)
+  const listedG = await call('GET', '/api/guidelines', tok.admin)
+  const gFound = (listedG.json || []).some((x) => x.guidelineId === newGuidelineId)
+  const gItems = await call('GET', `/api/guidelines/${newGuidelineId}/items`, tok.admin)
+  record('FT-35', 'Guideline management', 'Admin uploads a guideline with one item', '201; guideline listed with its item', `${r.status}; ${gFound ? 'listed' : 'not listed'}, ${Array.isArray(gItems.json) ? gItems.json.length : '?'} item(s)`, r.status === 201 && gFound && Array.isArray(gItems.json) && gItems.json.length === 1)
+  r = await call('POST', '/api/guidelines', tok.head, { ...guidelineBody, guideline: { ...guidelineBody.guideline, guidelineId: crypto.randomUUID() } })
+  record('FT-36', 'Guideline management', 'Head auditor tries to upload a guideline', '403', `${r.status}`, r.status === 403)
+  // Uploading starts similar-item matching in the background; give it a moment so the delete does not race it.
+  await new Promise((resolve) => setTimeout(resolve, 5000))
+  r = await call('DELETE', `/api/guidelines/${newGuidelineId}`, tok.admin)
+  const listedAfter = await call('GET', '/api/guidelines', tok.admin)
+  const gGone = !(listedAfter.json || []).some((x) => x.guidelineId === newGuidelineId)
+  record('FT-37', 'Guideline management', 'Admin deletes the uploaded guideline', '200; guideline no longer listed', `${r.status}; ${gGone ? 'gone' : 'still listed'}`, r.status === 200 && gGone)
 
   // Clean up
   r = await call('DELETE', `/api/projects/${projectId}`, tok.head)

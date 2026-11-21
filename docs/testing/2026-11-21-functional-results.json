@@ -1,5 +1,5 @@
 {
-  "when": "2026-11-21T08:59:10.620Z",
+  "when": "2026-11-21T10:23:24.344Z",
   "results": [
     {
       "id": "FT-01a",
@@ -98,6 +98,62 @@
       "pass": true
     },
     {
+      "id": "FT-25",
+      "requirement": "Checklist",
+      "test": "Head auditor adds a checklist item to the project",
+      "expected": "201; item appears in the checklist",
+      "actual": "201; listed",
+      "pass": true
+    },
+    {
+      "id": "FT-26",
+      "requirement": "Checklist",
+      "test": "Head auditor changes the item severity to critical",
+      "expected": "200; severity is critical",
+      "actual": "200; critical",
+      "pass": true
+    },
+    {
+      "id": "FT-27",
+      "requirement": "Checklist",
+      "test": "Change the severity to a value that does not exist",
+      "expected": "400",
+      "actual": "400",
+      "pass": true
+    },
+    {
+      "id": "FT-28",
+      "requirement": "Checklist",
+      "test": "Auditor tries to add a checklist item",
+      "expected": "403",
+      "actual": "403",
+      "pass": true
+    },
+    {
+      "id": "FT-29",
+      "requirement": "Checklist",
+      "test": "Head auditor deletes the added item",
+      "expected": "200; item gone from the checklist",
+      "actual": "200; gone",
+      "pass": true
+    },
+    {
+      "id": "FT-30",
+      "requirement": "Reports",
+      "test": "Project member creates a report for the project",
+      "expected": "201 with a report id",
+      "actual": "201, id returned",
+      "pass": true
+    },
+    {
+      "id": "FT-31",
+      "requirement": "Reports",
+      "test": "Someone outside the project tries to create its report",
+      "expected": "403",
+      "actual": "403",
+      "pass": true
+    },
+    {
       "id": "FT-11",
       "requirement": "Conduct audit",
       "test": "Save an answer with an invalid status",
@@ -142,7 +198,7 @@
       "requirement": "Compliance score",
       "test": "Compliance score is computed from the answers",
       "expected": "200 with a score per guideline",
-      "actual": "200; [{\"scoreId\":\"b5a0d19d-38c9-4aa9-83a2-b52af53fbdc8\",\"guidelineId\":\"d3e365fa-1e67-4e13-b68a-384a26276551\",\"guidelineName\":\"Overlap Test A (Code)\",\"shortName\":\"TES",
+      "actual": "200; [{\"scoreId\":\"8b4da71c-c748-46bf-9037-99a94882660a\",\"guidelineId\":\"8aa68c4d-12d0-449d-9c5a-a75b367b1d0d\",\"guidelineName\":\"Overlap Test A (Code)\",\"shortName\":\"TES",
       "pass": true
     },
     {
@@ -202,6 +258,54 @@
       "pass": true
     },
     {
+      "id": "FT-32",
+      "requirement": "Registration",
+      "test": "A new user registers as an auditor and logs in",
+      "expected": "201; then login 200 with role auditor",
+      "actual": "201; login 200, role auditor",
+      "pass": true
+    },
+    {
+      "id": "FT-33",
+      "requirement": "Registration",
+      "test": "Someone registers themselves as an admin",
+      "expected": "403",
+      "actual": "403",
+      "pass": true
+    },
+    {
+      "id": "FT-34",
+      "requirement": "Registration",
+      "test": "Register with an invalid user id",
+      "expected": "400",
+      "actual": "400",
+      "pass": true
+    },
+    {
+      "id": "FT-35",
+      "requirement": "Guideline management",
+      "test": "Admin uploads a guideline with one item",
+      "expected": "201; guideline listed with its item",
+      "actual": "201; listed, 1 item(s)",
+      "pass": true
+    },
+    {
+      "id": "FT-36",
+      "requirement": "Guideline management",
+      "test": "Head auditor tries to upload a guideline",
+      "expected": "403",
+      "actual": "403",
+      "pass": true
+    },
+    {
+      "id": "FT-37",
+      "requirement": "Guideline management",
+      "test": "Admin deletes the uploaded guideline",
+      "expected": "200; guideline no longer listed",
+      "actual": "200; gone",
+      "pass": true
+    },
+    {
       "id": "FT-24",
       "requirement": "Project management",
       "test": "Head auditor deletes the project",
@@ -212,8 +316,8 @@
   ],
   "scoreSample": [
     {
-      "scoreId": "b5a0d19d-38c9-4aa9-83a2-b52af53fbdc8",
-      "guidelineId": "d3e365fa-1e67-4e13-b68a-384a26276551",
+      "scoreId": "8b4da71c-c748-46bf-9037-99a94882660a",
+      "guidelineId": "8aa68c4d-12d0-449d-9c5a-a75b367b1d0d",
       "guidelineName": "Overlap Test A (Code)",
       "shortName": "TESTA",
       "totalItems": 5,
@@ -223,60 +327,60 @@
       "notApplicableItems": 1,
       "weightedCompliant": 2.5,
       "scorePercentage": 62.5,
-      "timeCalculated": "2026-11-21T08:58:53.109Z"
+      "timeCalculated": "2026-11-21T10:23:00.910Z"
     }
   ],
   "genSample": [
     {
       "id": "4.1-privacy-default",
       "category": "Privacy Settings",
-      "text": "Does the platform set the highest privacy settings by default for users identified as children under 18?",
+      "text": "Verify that the platform automatically applies the highest privacy settings for users identified as children under 18.",
       "severity": "critical",
       "reference": "Section 4.1",
-      "helpText": "Check the account creation flow and any age‑verification logic. Verify that for accounts flagged as under‑18 the default privacy configuration (e.g., profile visibility, data sharing, ad personalization) is set to the most restrictive option without user action."
+      "helpText": "Check the account creation flow and any age‑verification mechanism to see if the default privacy configuration (e.g., profile visibility, data sharing, personalized ads) is set to the most restrictive level for users under 18. Evidence can include screenshots of default settings, configuration files, or API responses showing privacy flags."
     },
     {
-      "id": "4.2-geolocation-default",
-      "category": "Location",
-      "text": "Are geolocation features disabled by default for child users?",
+      "id": "4.2-location-off",
+      "category": "Location Privacy",
+      "text": "Confirm that geolocation services are disabled by default for child users.",
       "severity": "critical",
       "reference": "Section 4.2",
-      "helpText": "Inspect the platform's settings for a child account (or a test account marked as under‑18). Confirm that any location‑based services (GPS, IP‑based location, Wi‑Fi triangulation) are turned off automatically and cannot be enabled without an explicit opt‑in from the child or guardian."
+      "helpText": "Inspect the settings page or onboarding flow for child accounts to ensure the location toggle is set to 'off' before any user interaction. Review code or configuration that sets the default value for location permissions for users flagged as under‑age."
     },
     {
       "id": "4.2-location-indicator",
-      "category": "Transparency",
-      "text": "Is an obvious sign displayed to child users whenever location tracking is active?",
+      "category": "Location Privacy",
+      "text": "Check that an obvious visual indicator is displayed whenever location tracking is active for a child user.",
       "severity": "major",
       "reference": "Section 4.2",
-      "helpText": "Review the UI/UX when location services are turned on for a child account. Look for a clear, persistent indicator (e.g., banner, icon, or notification) that informs the user that their location is being tracked, meeting the requirement for an \"obvious sign\"."
+      "helpText": "Observe the UI while location services are enabled for a child account. Look for persistent icons, banners, or notifications that clearly inform the user that their location is being tracked. Capture screenshots or video as proof."
     }
   ],
   "before": {
     "Audit_Project": 21,
     "Audit_Report": 13,
-    "Audit_Result": 301,
-    "Checklist": 32,
-    "Checklist_Item": 1487,
+    "Audit_Result": 297,
+    "Checklist": 34,
+    "Checklist_Item": 1491,
     "Checklist_Resolution": 1,
-    "Guideline": 36,
+    "Guideline": 38,
     "Project_Member": 36,
     "Project_Scope": 1,
     "User": 20,
-    "Item_Mapping": 183
+    "Item_Mapping": 186
   },
   "after": {
     "Audit_Project": 21,
     "Audit_Report": 13,
-    "Audit_Result": 301,
-    "Checklist": 32,
-    "Checklist_Item": 1487,
+    "Audit_Result": 297,
+    "Checklist": 34,
+    "Checklist_Item": 1491,
     "Checklist_Resolution": 1,
-    "Guideline": 36,
+    "Guideline": 38,
     "Project_Member": 36,
     "Project_Scope": 1,
     "User": 20,
-    "Item_Mapping": 183
+    "Item_Mapping": 186
   },
   "diff": {},
   "leftoverGuidelines": []
