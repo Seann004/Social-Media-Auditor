@@ -57,6 +57,14 @@ describe('POST /api/auth/login', () => {
     expect(claims.exp - claims.iat).toBe(12 * 3600)
   })
 
+  it('answers 400, not 500, for a password or email that is not text', async () => {
+    const seen: unknown[] = []
+    onRpc('verify_user_login', (args) => { seen.push(args); return { data: [], error: null } })
+    expect((await request(app).post('/api/auth/login').send({ email: 'aud@example.test', password: 123 })).status).toBe(400)
+    expect((await request(app).post('/api/auth/login').send({ email: ['aud@example.test'], password: 'x' })).status).toBe(400)
+    expect(seen).toEqual([])
+  })
+
   it('answers 400 for a body that is not valid JSON', async () => {
     const res = await request(app).post('/api/auth/login').set('Content-Type', 'application/json').send('{"email":')
     expect(res.status).toBe(400)
@@ -162,6 +170,19 @@ describe('POST /api/users', () => {
     const asAdmin = await request(app).post('/api/users').set('Authorization', bearer(U.admin, 'admin')).send({ ...valid, role: 'admin' })
     expect(asAdmin.status).toBe(201)
     expect(tables.User.find((u) => u.userId === newId)?.role).toBe('admin')
+  })
+
+  it('answers 400, not 500, when a field is not text', async () => {
+    for (const bad of [{ userPassword: 123 }, { userName: ['x'] }, { userEmail: { a: 1 } }]) {
+      expect((await request(app).post('/api/users').send({ ...valid, ...bad })).status).toBe(400)
+    }
+    expect(tables.User).toHaveLength(6)
+  })
+
+  it('passes the password value on unchanged, for the database to salt and hash (NFR-05)', async () => {
+    expect((await request(app).post('/api/users').send(valid)).status).toBe(201)
+    // The User table hashes it with pgcrypto on save; hashing here as well would store a hash of a hash.
+    expect(tables.User.find((u) => u.userId === newId)?.userPassword).toBe(valid.userPassword)
   })
 
   it('answers 409 for a user that already exists', async () => {

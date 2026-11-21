@@ -96,8 +96,12 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ error: 'email and password are required' })
     }
+    if (typeof email !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ error: 'email and password must be text' })
+    }
+    // The database salts and hashes passwords itself (pgcrypto crypt), so the check stays there.
     const { data, error } = await supabase.rpc('verify_user_login', {
-      p_email: String(email).trim().toLowerCase(),
+      p_email: email.trim().toLowerCase(),
       p_password: password,
     })
     if (error || !data || data.length === 0) {
@@ -128,6 +132,9 @@ app.post('/api/users', optionalAuth, async (req, res) => {
     const { userId, userName, userEmail, role, userPassword } = req.body
     if (!userId || !userName || !userEmail || !userPassword) {
       return res.status(400).json({ error: 'userId, userName, userEmail and userPassword are required.' })
+    }
+    if ([userId, userName, userEmail, userPassword].some((v) => typeof v !== 'string')) {
+      return res.status(400).json({ error: 'userId, userName, userEmail and userPassword must be text.' })
     }
     if (typeof userId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
       return res.status(400).json({ error: 'userId must be a UUID.' })
