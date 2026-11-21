@@ -187,6 +187,34 @@ describe('readAppView', () => {
     expect(find(view, 'link', 'Change password').href).toBe(`${social.url}/settings/password`)
   })
 
+  it('names the group a radio is in, from the fieldset legend, so "Nobody [on]" is read as the tagging choice', async () => {
+    await signIn()
+    await go('/settings/contact')
+    const contact = (await readAppView(page, null)).view
+    const tagging = contact.elements.filter((el) => el.role === 'radio' && el.groupLabel === 'Who can tag you')
+    expect(tagging.map((el) => el.name)).toEqual(['Everyone', 'Nobody'])
+    const lines = outlineLines(contact)
+    expect(lines).toContain('radio "Nobody"')
+    expect(lines).toMatch(/radio "Nobody" \[(on|off)\] \(in: Who can tag you\)/)
+    // The same option name in another group says which group it is in.
+    expect(lines).toMatch(/radio "Everyone" \[(on|off)\] \(in: Who can message you\)/)
+  })
+
+  it('names a radio group from its aria-label, and leaves a control that is in no group without a label', async () => {
+    await signIn()
+    await go('/settings/sharing')
+    await page.evaluate(() => {
+      const group = document.createElement('div')
+      group.setAttribute('role', 'radiogroup')
+      group.setAttribute('aria-label', 'Who sees your stories')
+      group.innerHTML = '<label><input type="radio" name="s"> Friends</label>'
+      document.body.append(group)
+    })
+    const view = (await readAppView(page, null)).view
+    expect(find(view, 'radio', 'Friends').groupLabel).toBe('Who sees your stories')
+    expect(find(view, 'button', 'Quiet mode').groupLabel ?? '').toBe('')
+  })
+
   it('A27: reads a pressed button as on/off, and options with their chosen state and their list', async () => {
     await signIn()
     await go('/settings/sharing')

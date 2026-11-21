@@ -27,6 +27,8 @@ export interface AppRunnerDeps {
   restoreGraceMs?: number
   /** Signs a test account in by itself when its sign-in form shows after a switch. Defaults to true. */
   autoSignIn?: boolean
+  /** Opens the settings pages the AI saw a link to but never opened, when it is about to finish. Defaults to true. */
+  autoOpenSettings?: boolean
   /** A second look at each yes/no claim an app check makes. Without it, claims are stored as the first answer gave them. */
   verifyClaim?: VerifyClaim | null
 }

@@ -81,6 +81,7 @@ export function scrubView(view: AppView, secrets: readonly string[]): AppView {
       ...el,
       name: text(el.name),
       contextText: text(el.contextText),
+      ...(el.groupLabel === undefined ? {} : { groupLabel: text(el.groupLabel) }),
       href: el.href === null ? null : address(el.href),
       state: scrubState(el.state, text),
     })),

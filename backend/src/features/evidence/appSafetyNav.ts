@@ -25,3 +25,15 @@ export function isSettingsLink(element: AppElement, view: AppView): boolean {
   if (ACTING_ADDRESS.test(`${target.pathname}${target.search}`)) return false
   return inSettings(view.url) && inSettings(target.href)
 }
+
+/**
+ * A plain "Settings" link on any page of the app, to an address that is not an acting address. It is only used to find
+ * the settings area, never to allow a click: the click is judged by the usual rules.
+ */
+export function isSettingsEntryLink(element: AppElement, view: AppView): boolean {
+  if (element.role !== 'link' || element.href === null || !/^\s*settings\s*$/i.test(element.name)) return false
+  const target = parseUrl(element.href, view.url)
+  const here = parseUrl(view.url)
+  if (target === null || here === null || target.origin !== here.origin) return false
+  return !ACTING_ADDRESS.test(`${target.pathname}${target.search}`)
+}

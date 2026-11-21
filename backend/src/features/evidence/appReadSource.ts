@@ -57,7 +57,8 @@ export const APP_READ_SOURCE = String.raw`(() => {
   const MAX_ELEMENTS = ${APP_MAX_ELEMENTS}
   const SELECTOR = ${JSON.stringify(INTERACTIVE_SELECTOR)}
   const GROUP_SELECTOR = 'form, dialog, [role="dialog"], [role="form"]'
-  const LIST_SELECTOR = '[role="listbox"], [role="menu"], [role="menubar"]'
+  const SET_SELECTOR = 'fieldset, [role="radiogroup"], [role="group"]'
+  const LIST_SELECTOR ='[role="listbox"], [role="menu"], [role="menubar"]'
   const NOT_PAGE_TEXT = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'TEXTAREA', 'TITLE', 'SELECT', 'OPTION'])
   const FORM_CONTROLS = new Set(['INPUT', 'SELECT', 'TEXTAREA'])
   const BUTTON_INPUTS = new Set(['button', 'submit', 'reset', 'image'])
@@ -361,6 +362,21 @@ export const APP_READ_SOURCE = String.raw`(() => {
       if (!lists.has(list)) lists.set(list, 'l' + (lists.size + 1))
       return lists.get(list)
     }
+    // The name of the set a control belongs to (a fieldset's legend, or a group's label): "Who can tag you".
+    const setLabelOf = (el) => {
+      const set = dom.closest(el, SET_SELECTOR)
+      if (!set) return ''
+      const label = clean(dom.getAttribute(set, 'aria-label'))
+      if (label) return cap(label, 60)
+      const by = clean(dom.getAttribute(set, 'aria-labelledby'))
+      if (by) {
+        const named = by.split(' ').map((id) => dom.getElementById(document, id)).filter((node) => node)
+        const text = clean(named.map((node) => visibleText(node, hidden)).join(' '))
+        if (text) return cap(text, 60)
+      }
+      const legend = tagOf(set) === 'FIELDSET' ? dom.querySelector(set, 'legend') : null
+      return legend ? cap(clean(visibleText(legend, hidden)), 60) : ''
+    }
     const textCache = new Map()
     const next = new Map()
     const elements = []
@@ -382,6 +398,7 @@ export const APP_READ_SOURCE = String.raw`(() => {
         listId: listOf(el),
         state: stateOf(el, tag),
         contextText: contextOf(el, hidden, textCache),
+        groupLabel: setLabelOf(el),
       })
     }
     entries = next

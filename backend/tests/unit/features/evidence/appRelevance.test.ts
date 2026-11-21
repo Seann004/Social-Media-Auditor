@@ -51,6 +51,20 @@ describe('rankPages', () => {
     expect(first?.passages.map((p) => p.id)).toEqual(['contact-1', 'contact-0'])
   })
 
+  it('counts a word that few pages hold for more than one every page holds', () => {
+    const everywhere = ['Teen 15 home', 'Teen 15 feed', 'Teen 15 inbox', 'Teen 15 search']
+    const ranked = rankPages('Can other people tag the Teen account?', [
+      page('contact', ['Teen 15 settings. Who can tag you: Everyone / Nobody']),
+      ...everywhere.map((text, i) => page(`other${i}`, [text])),
+    ])
+    expect(ranked[0]?.pageId).toBe('contact')
+    expect(ranked[0]?.score).toBeGreaterThan(ranked[1]?.score ?? 0)
+  })
+
+  it('gives a page no score when it holds none of the item words', () => {
+    expect(rankPages('quiet mode', [page('a', ['Change password'])])[0]?.score).toBe(0)
+  })
+
   it('returns nothing for no pages', () => {
     expect(rankPages('tag', [])).toEqual([])
   })

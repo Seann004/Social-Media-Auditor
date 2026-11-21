@@ -52,6 +52,7 @@ const rawViewSchema = z.object({
       listId: z.string().nullable(),
       state: stateSchema,
       contextText: z.string(),
+      groupLabel: z.string().optional(),
     }),
   ),
   frameUrls: z.array(z.string()),
@@ -198,8 +199,19 @@ function stateText(state: AppElementState): string {
     .join('')
 }
 
+/** Controls that are one of several in a group: they mean nothing without the group's own words ("Who can tag you"). */
+const GROUPED_ROLES = new Set(['radio', 'checkbox', 'switch', 'option', 'menuitemradio'])
+const GROUP_LABEL_CHARS = 70
+
+/** The name of the group a control is in (a fieldset legend, or a group's label), when it has one. */
+function groupLabel(el: AppElement): string {
+  if (!GROUPED_ROLES.has(el.role)) return ''
+  const label = (el.groupLabel ?? '').replace(/\s+/g, ' ').trim()
+  return label === '' ? '' : ` (in: ${label.length > GROUP_LABEL_CHARS ? `${label.slice(0, GROUP_LABEL_CHARS - 1)}…` : label})`
+}
+
 function outlineLine(el: AppElement): string {
-  const line = `${el.ref} ${el.role} "${el.name}"${stateText(el.state)}`
+  const line = `${el.ref} ${el.role} "${el.name}"${stateText(el.state)}${groupLabel(el)}`
   return line.length > APP_ELEMENT_LINE_CHARS ? `${line.slice(0, APP_ELEMENT_LINE_CHARS - 1)}…` : line
 }
 

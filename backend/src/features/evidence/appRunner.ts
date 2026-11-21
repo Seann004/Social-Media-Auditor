@@ -202,7 +202,7 @@ async function checkAndJudge(ctx: RunCtx): Promise<void> {
   const { repo, screenshots, apiKey, model } = ctx.deps
   const setup: CheckSetup = {
     appRepo: app.appRepo,
-    checkDeps: { repo, screenshots, appRepo: app.appRepo, decideStep: app.decideStep ?? groqDecideStep, apiKey, model, autoSignIn: app.autoSignIn ?? true },
+    checkDeps: { repo, screenshots, appRepo: app.appRepo, decideStep: app.decideStep ?? groqDecideStep, apiKey, model, autoSignIn: app.autoSignIn ?? true, autoOpenSettings: app.autoOpenSettings ?? true },
     source,
     agents: accounts.map((a) => ({ id: a.id, label: a.label, ageGroup: a.ageGroup, age: a.age, handles: [...a.handles] })),
     pool,

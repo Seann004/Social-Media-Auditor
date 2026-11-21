@@ -232,7 +232,7 @@ describe('runCheck: stopping', () => {
 
   it('opens the settings pages it saw links to by itself when the AI finishes, and does not count them as steps', async () => {
     world.social.setMode({ settingsMenu: true })
-    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), openPath('/home'), openPath('/settings'), FINISH, FINISH])
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), openPath('/home'), openPath('/settings'), FINISH, FINISH], {}, { autoOpenSettings: true })
     const opened = outcome.steps.filter((s) => s.outcome === 'done' && /opened \/settings\/(sharing|contact|messaging|notifications)/.test(s.line))
     expect(opened.map((s) => s.line).join(' ')).toMatch(/sharing/)
     expect(outcome.finished).toBe(true)
@@ -240,10 +240,19 @@ describe('runCheck: stopping', () => {
     expect(outcome.steps.length).toBeGreaterThan(signIn('Teen 15').length + 5)
   })
 
+  it('finds the settings area from a plain Settings link on another page, and opens its pages too', async () => {
+    world.social.setMode({ settingsMenu: true })
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/home'), openPath('/search'), openPath('/home'), FINISH, FINISH], {}, { autoOpenSettings: true })
+    const lines = outcome.steps.map((s) => s.line).join('\n')
+    expect(lines).toMatch(/opened \/settings →/)
+    expect(lines).toMatch(/opened \/settings\/contact/)
+    expect(outcome.finished).toBe(true)
+  })
+
   it('does not open settings pages again that the AI has already opened', async () => {
     world.social.setMode({ settingsMenu: true })
     const open = ['/settings/messaging', '/settings/sharing', '/settings/contact', '/settings/privacy', '/settings/notifications', '/settings/password'].map(openPath)
-    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), ...open, FINISH])
+    const { outcome } = await kit.check([...signIn('Teen 15'), openPath('/settings'), ...open, FINISH], {}, { autoOpenSettings: true })
     const lines = outcome.steps.map((s) => s.line)
     expect(lines.filter((l) => l.includes('opened /settings/sharing'))).toHaveLength(1)
   })

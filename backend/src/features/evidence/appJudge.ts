@@ -22,6 +22,8 @@ export const APP_NO_STEPS_REASON = 'The check ended before any page of the app c
 /** What the judge's copy of a step line says in place of the text the AI typed (ruling A20). */
 const TYPED_IN_LINE = 'typed text into'
 const STEP_LINE_POSITION = 0
+/** How many of the most relevant pages are read whole before the judge turns to the rest. */
+const FULL_PAGES = 3
 const EDGE_PUNCTUATION = /^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu
 const WORD = /[\p{L}\p{N}]+(?:['\u2019][\p{L}\p{N}]+)*/gu
 /** A quote sharing this many consecutive words with a typed text is the AI's own (ruling A20c). */
@@ -215,7 +217,9 @@ export async function judgeItem(ctx: RunCtx, input: JudgeInput): Promise<Suggest
     passages: (byPage.get(s.pageId as string) ?? []).filter((p) => p.position !== STEP_LINE_POSITION),
   }))
   const itemWording = [item.name, item.text, item.helpText].filter(Boolean).join(' ')
-  const pagePassages = rankPages(itemWording, rankable, namedPages(stepPages, input.evidenceSteps)).map((page) => page.passages)
+  const ranked = rankPages(itemWording, rankable, namedPages(stepPages, input.evidenceSteps))
+  // The most relevant pages are read whole (their text and their controls, where the chosen option shows) before the others.
+  const pagePassages = ranked.flatMap((page, rank) => (rank < FULL_PAGES && page.score > 0 ? page.passages.map((p) => [p]) : [page.passages]))
   const selected = selectStepPassages(stepLines, pagePassages)
 
   const output = await abortable(

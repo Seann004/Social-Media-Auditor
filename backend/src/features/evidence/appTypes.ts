@@ -64,6 +64,8 @@ export interface AppElement {
   listId?: string | null
   state: AppElementState
   contextText: string
+  /** The name of the fieldset or group the control is one of, such as "Who can tag you"; empty or missing when it has none. */
+  groupLabel?: string
 }
 
 /** Every URL here (`url`, `href`, `frameUrls`) is already redacted; the real addresses stay in the isolated world. */

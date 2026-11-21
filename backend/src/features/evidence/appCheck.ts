@@ -9,7 +9,7 @@ import { isCredentialField, SIGN_IN_CONTROL, signInButtonOf } from './appFields.
 import { isRepeat, labelOf, pageState, repeatRefusal, type DoneAction } from './appRepeat.js'
 import { pageDetail, type PageDetailOptions } from './appStepNotes.js'
 import { checkAction, DESTRUCTIVE_ACTION, detectBlock, type SafetyContext } from './appSafety.js'
-import { isSettingsLink } from './appSafetyNav.js'
+import { isSettingsEntryLink, isSettingsLink } from './appSafetyNav.js'
 import { plain } from './appSafetyText.js'
 import { wasStillLoading, type AppSession, type AppSessionPool } from './appSession.js'
 import {
@@ -59,6 +59,8 @@ export interface CheckDeps {
   tokenCap?: number
   /** Sign an account in by itself when its sign-in page shows after a switch, so the AI spends no steps on it. Off by default. */
   autoSignIn?: boolean
+  /** When the AI is about to finish, open the settings pages it saw a link to but never opened. Off by default. */
+  autoOpenSettings?: boolean
 }
 
 export interface CheckOutcome {
@@ -265,7 +267,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
   /** Notes the settings pages this page links to, and that this page has been seen, for the account in use. */
   function noteSettingsLinks(at: AppView): void {
     seenPaths = new Set(seenPaths).add(accountKey(pathOf(at.url)))
-    const found = at.elements.filter((el) => isSettingsLink(el, at) && !DESTRUCTIVE_ACTION.test(plain(el.name)) && el.href !== null)
+    const found = at.elements.filter((el) => (isSettingsLink(el, at) || isSettingsEntryLink(el, at)) && !DESTRUCTIVE_ACTION.test(plain(el.name)) && el.href !== null)
     if (found.length === 0) return
     const next = new Map(settingsLinks)
     for (const el of found) {
@@ -285,11 +287,12 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
    */
   async function openSettingsByItself(): Promise<void> {
     const who = account
-    for (const key of unopenedKeys()) {
+    // One at a time, because a page opened here may link to more settings pages.
+    for (let next = unopenedKeys()[0]; next !== undefined; next = unopenedKeys()[0]) {
       if (signal.aborted || autoOpenSteps >= APP_MAX_AUTO_OPEN_STEPS || account !== who) return
-      const link = settingsLinks.get(key)
-      if (link === undefined || seenPaths.has(key)) continue
-      seenPaths = new Set(seenPaths).add(key)
+      const link = settingsLinks.get(next)
+      seenPaths = new Set(seenPaths).add(next)
+      if (link === undefined) continue
       await act({ type: 'open_link', url: link.url })
       autoOpenSteps += 1
       if (view !== null) noteSettingsLinks(view)
@@ -523,7 +526,7 @@ export async function runCheck(input: CheckInput, deps: CheckDeps): Promise<Chec
       await record({ action, outcome: 'refused', detail: '', refusalReason: refusal, view: null, screenshot: null })
       continue
     }
-    if (action.type === 'finish' && account !== null && hasUnopenedSettings() && autoOpenSteps < APP_MAX_AUTO_OPEN_STEPS) {
+    if (action.type === 'finish' && deps.autoOpenSettings && account !== null && hasUnopenedSettings() && autoOpenSteps < APP_MAX_AUTO_OPEN_STEPS) {
       // The finish is not recorded: the AI is asked again, with the opened pages among its steps.
       await openSettingsByItself()
       continue
