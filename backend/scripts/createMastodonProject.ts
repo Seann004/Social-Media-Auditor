@@ -15,11 +15,26 @@ import { decryptSecret, encryptSecret, parseSecretKey, secretAad } from '../src/
 import { createSupabaseAppRepository } from '../src/features/evidence/supabaseAppRepository.js'
 import * as db from '../src/services/dbService.js'
 
-const GUIDELINE_NAME = 'Auto-audit test (Mastodon)'
-const PROJECT_TITLE = 'Auto-audit test: Mastodon'
+const UNSEEN = process.argv.includes('--set') && process.argv[process.argv.indexOf('--set') + 1] === 'unseen'
+const GUIDELINE_NAME = UNSEEN ? 'Auto-audit test (Mastodon, unseen items)' : 'Auto-audit test (Mastodon)'
+const PROJECT_TITLE = UNSEEN ? 'Auto-audit test: Mastodon, unseen items' : 'Auto-audit test: Mastodon'
+
+/**
+ * Checks written after the fixes, so the results are not tuned to them. The "no" answers come from the test account's
+ * settings as the earlier runs read them (new followers accepted automatically, public posts left out of search, media not
+ * always marked sensitive); a run that changes a setting puts it back.
+ */
+const UNSEEN_ITEMS = [
+  { code: 'N-1', category: 'Privacy', text: 'Does this account have to approve new followers before they can follow it?', expected: 'no' },
+  { code: 'N-2', category: 'Privacy', text: "Are this account's public posts included in Mastodon search results?", expected: 'no' },
+  { code: 'N-3', category: 'Content', text: "Is media in this account's posts always marked as sensitive?", expected: 'no' },
+  { code: 'N-4', category: 'Content', text: 'Can a user hide posts that contain certain words?', expected: 'yes' },
+  { code: 'N-5', category: 'Privacy', text: 'Can a user have their old posts deleted automatically?', expected: 'yes' },
+  { code: 'N-6', category: 'Privacy', text: "Can this account's profile page appear in web search engines such as Google?", expected: 'yes' },
+] as const
 
 /** The checks, with the answer expected from what Mastodon's settings offer (to be confirmed by a person in the browser). */
-const ITEMS = [
+const TUNED_ITEMS = [
   { code: 'M-1', category: 'Privacy', text: 'Can an account be set so that people must request to follow it?', expected: 'yes' },
   { code: 'M-2', category: 'Privacy', text: 'Can a user choose who can see their posts by default?', expected: 'yes' },
   { code: 'M-3', category: 'Privacy', text: 'Can a user hide the list of who they follow and who follows them?', expected: 'yes' },
@@ -27,6 +42,7 @@ const ITEMS = [
   { code: 'M-5', category: 'Wellbeing', text: 'Does the app have a built-in screen-time limit or daily usage timer?', expected: 'no' },
   { code: 'M-6', category: 'Parental', text: "Does the app have a parent account that can manage a teen account's settings?", expected: 'no' },
 ] as const
+const ITEMS = UNSEEN ? UNSEEN_ITEMS : TUNED_ITEMS
 
 const args = process.argv.slice(2)
 const flag = (name: string): string | null => {
@@ -42,7 +58,7 @@ async function ensureGuideline(adminId: string): Promise<string> {
     guideline: {
       guidelineId,
       guidelineName: GUIDELINE_NAME,
-      shortName: 'AUTOMAST',
+      shortName: UNSEEN ? 'AUTOMASTN' : 'AUTOMAST',
       version: '1.0',
       description: 'Six checks that Mastodon has an answer for, for trying the AI app audit on a real app.',
       source: 'Test data',

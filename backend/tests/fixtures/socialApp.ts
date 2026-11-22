@@ -35,6 +35,7 @@ const ICON = '<svg width="24" height="24" aria-hidden="true"><circle cx="12" cy=
 const ICONS_BODY = `<nav>
   <a href="/home">${ICON}<span style="${SR_ONLY}">Home</span></a>
   <a href="/settings">${ICON}<span style="${SR_ONLY}">Preferences</span></a>
+  <a href="/welcome" target="_blank">Welcome page</a>
   <button type="button">${ICON}<span style="display:none">Delete everything</span></button>
   <button type="button">${ICON}<span style="visibility:hidden">Log out now</span></button>
 </nav>

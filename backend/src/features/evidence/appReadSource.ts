@@ -499,6 +499,14 @@ export const APP_READ_SOURCE = String.raw`(() => {
     return true
   }
 
+  // A link that opens a new tab or window: the session closes those, so it is followed in this tab instead.
+  const SAME_TAB_TARGETS = new Set(['', '_self', '_parent', '_top'])
+  const opensNewTab = (ref) => {
+    const entry = live(ref)
+    if (!entry || !entry.href) return false
+    return !SAME_TAB_TARGETS.has(clean(dom.getAttribute(entry.el, 'target')).toLowerCase())
+  }
+
   const markSecret = (ref) => {
     const entry = live(ref)
     if (entry) addSecret(entry.el)
@@ -560,5 +568,5 @@ export const APP_READ_SOURCE = String.raw`(() => {
     return painted.length
   }
 
-  globalThis.__evidenceApp = { read, point, focus, choose, follow, markSecret, mask, unmask }
+  globalThis.__evidenceApp = { read, point, focus, choose, follow, opensNewTab, markSecret, mask, unmask }
 })()`

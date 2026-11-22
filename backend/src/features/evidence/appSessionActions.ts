@@ -1,5 +1,5 @@
 import type { Page } from 'playwright'
-import { chooseOption, DEAD_WORLD_ERROR, elementPoint, focusElement, followLink, markSecretField } from './appRead.js'
+import { chooseOption, DEAD_WORLD_ERROR, elementPoint, focusElement, followLink, markSecretField, opensNewTab } from './appRead.js'
 import type { AppAction, AppSource, TestAccount } from './appTypes.js'
 import { gotoGuarded } from './browser.js'
 import { APP_ACTION_TIMEOUT_MS, APP_MIN_SECRET_CHARS } from './config.js'
@@ -38,6 +38,7 @@ export function isPageChanged(err: unknown): boolean {
   return err instanceof PageChangedError || (err instanceof Error && DEAD_WORLD_ERROR.test(err.message))
 }
 
+const OPENED_HERE = 'Clicked. The link opens a new tab, so its page was opened in this one.'
 const ok = (detail: string): ActionResult => ({ ok: true, detail })
 const fail = (detail: string): ActionResult => ({ ok: false, detail })
 
@@ -128,6 +129,10 @@ async function fillCredential(env: ActionEnv, action: Extract<SessionAction, { t
 export async function perform(env: ActionEnv, action: SessionAction): Promise<ActionResult> {
   switch (action.type) {
     case 'click':
+      // New tabs are closed as they open, so a click on such a link would seem to do nothing.
+      if (await opensNewTab(requireWorld(env), action.ref)) {
+        return (await followLink(requireWorld(env), action.ref)) ? ok(OPENED_HERE) : fail('The link could not be followed.')
+      }
       return clickElement(env, action.ref, 'Clicked.')
     case 'toggle':
       return clickElement(env, action.ref, 'Toggled.')

@@ -27,6 +27,19 @@ export function isSettingsLink(element: AppElement, view: AppView): boolean {
 }
 
 /**
+ * A link on a settings page to a page of the same site: a menu entry of the settings area, such as Mastodon's
+ * "Automated post deletion". Its address still has to pass the usual address checks before it is opened.
+ */
+export function isSettingsMenuEntry(element: AppElement, view: AppView): boolean {
+  if (element.role !== 'link' || element.href === null) return false
+  const target = parseUrl(element.href, view.url)
+  const here = parseUrl(view.url)
+  if (target === null || here === null || target.origin !== here.origin) return false
+  if (target.protocol !== 'http:' && target.protocol !== 'https:') return false
+  return inSettings(view.url)
+}
+
+/**
  * A plain "Settings" link on any page of the app, to an address that is not an acting address. It is only used to find
  * the settings area, never to allow a click: the click is judged by the usual rules.
  */

@@ -77,17 +77,25 @@ function cleaned(passage: Passage, menu: ReadonlySet<string>, names: readonly st
   return text === passage.text ? passage : { ...passage, text }
 }
 
-/** New pages without the site's menu; the pages given are left as they were. */
+/**
+ * New pages without the site's menu, except the newest page that shows it: the menu is read once,
+ * since its entries ("Filters", "Blocked") say what the app offers. The pages given are left as they were.
+ */
 export function withoutChrome(pages: readonly RankablePage[]): RankablePage[] {
   const menu = menuKeys(pages)
   if (menu.size === 0) return [...pages]
   // Longest first, so "Privacy and reach" is taken whole before "Privacy".
   const names = [...menu].flatMap((key) => QUOTED_NAME.exec(key)?.[1] ?? []).sort((a, b) => b.length - a.length)
-  return pages.map((page) => ({
-    ...page,
-    passages: page.passages.flatMap((p) => {
-      const kept = cleaned(p, menu, names)
-      return kept === null ? [] : [kept]
-    }),
-  }))
+  const keeper = [...pages].reverse().find((page) => controlLines(page).some((line) => menu.has(keyOf(line))))
+  return pages.map((page) =>
+    page === keeper
+      ? page
+      : {
+          ...page,
+          passages: page.passages.flatMap((p) => {
+            const kept = cleaned(p, menu, names)
+            return kept === null ? [] : [kept]
+          }),
+        },
+  )
 }

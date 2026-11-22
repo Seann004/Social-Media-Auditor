@@ -78,8 +78,18 @@ describe('withoutChrome', () => {
     expect(textOf(out, 'posting-1', 'controls')).toContain('link "Language list"')
   })
 
+  it('keeps the menu once, on the newest page that shows it, since its entries say what the app offers', () => {
+    const out = withoutChrome(PAGES())
+
+    const newest = textOf(out, 'profile', 'controls')
+    expect(newest).toContain('link "Privacy and reach"')
+    expect(newest).toContain('button "Add bio"')
+    expect(textOf(out, 'profile', 'text')).toBe(`${MENU_TEXT} Profile Display name`)
+    expect(textOf(out, 'export', 'controls')).not.toContain('link "Privacy and reach"')
+  })
+
   it('drops a controls passage left empty, and does not change the pages it was given', () => {
-    const pages = [...PAGES(), settingsPage('menu-only', '', [])]
+    const pages = [settingsPage('menu-only', '', []), ...PAGES()]
     const before = structuredClone(pages)
 
     const out = withoutChrome(pages)

@@ -139,6 +139,11 @@ export async function followLink(world: IsolatedWorld, ref: string): Promise<boo
   return z.boolean().parse(await world.evaluate(call('follow', ref)))
 }
 
+/** True when the ref is a live link set to open a new tab or window (target="_blank" and the like). */
+export async function opensNewTab(world: IsolatedWorld, ref: string): Promise<boolean> {
+  return z.boolean().parse(await world.evaluate(call('opensNewTab', ref)))
+}
+
 async function setScriptsOff(world: IsolatedWorld, off: boolean): Promise<void> {
   await world.cdp.send('Emulation.setScriptExecutionDisabled', { value: off })
 }

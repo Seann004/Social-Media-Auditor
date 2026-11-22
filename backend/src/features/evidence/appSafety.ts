@@ -18,6 +18,7 @@ import {
   sameGroup,
   type Check,
 } from './appSafetyTargets.js'
+import { isSettingsMenuEntry } from './appSafetyNav.js'
 import { decodeSafely, parseUrl, plain, wordsOfUrl } from './appSafetyText.js'
 import { ACCOUNT_FIELD, DESTRUCTIVE_ACTION, LOGIN_PATH, PRICE } from './appSafetyWords.js'
 
@@ -115,12 +116,55 @@ function destructiveText(text: string): boolean {
   return DESTRUCTIVE_ACTION.test(plain(text)) || PRICE.test(decodeSafely(text))
 }
 
+/** Why the address is not opened, or null when it only shows a page. */
+function addressRefusal(address: string, base: string): SafetyVerdict | null {
+  if (destructiveText(wordsOfUrl(address, base)) || PRICE.test(address)) {
+    return refuse('destructive', 'This address could delete, pay for, log out of or change an account, so it is not opened.')
+  }
+  const parsed = parseUrl(address, base)
+  if (parsed !== null && (ACTING_PATH.test(parsed.pathname) || ACTING_QUERY.test(parsed.search))) {
+    return refuse('destructive', 'This address does something when opened, instead of showing a page.')
+  }
+  return null
+}
+
+const DESTRUCTIVE_LABEL = 'This could delete, pay for, log out of or change an account, so it is not allowed.'
+const MENU_ENTRY_CLICK =
+  'This could delete, pay for, log out of or change an account, so it is not clicked. It is a settings menu entry: its page can be opened with open_link and this ref, which only loads the page.'
+
+/**
+ * A destructive word in a label refuses the action, except for a settings menu entry with a safe address (Mastodon's
+ * "Automated post deletion"): open_link by its ref loads that address and runs none of the app's script, so it only shows
+ * the page. A click on it stays refused, and its reason says how the page can be opened.
+ */
+/** Words of a label that only remove content ("Automated post deletion"); every other destructive word stays a refusal. */
+const CONTENT_REMOVAL = /\b(?:delet\w*|remov\w*|clear\w*|eras\w+)\b/gi
+/** A label about the account itself is never an exception, whatever its address. */
+const ABOUT_ACCOUNT = /\b(?:account|accounts|profile|data)\b/i
+
+function removesContentOnly(label: string): boolean {
+  return !ABOUT_ACCOUNT.test(plain(label)) && !destructiveText(plain(label).replace(CONTENT_REMOVAL, ' '))
+}
+
+function labelRefusal(action: AppAction, element: AppElement, view: AppView | null, base: string): SafetyVerdict | null {
+  if (!destructiveText(element.name)) return null
+  const safeMenuEntry =
+    view !== null &&
+    element.href !== null &&
+    removesContentOnly(element.name) &&
+    isSettingsMenuEntry(element, view) &&
+    addressRefusal(element.href, base) === null
+  if (!safeMenuEntry) return refuse('destructive', DESTRUCTIVE_LABEL)
+  return action.type === 'open_link' ? null : refuse('destructive', MENU_ENTRY_CLICK)
+}
+
 function checkDestructive(action: AppAction, element: AppElement | null, view: AppView | null, ctx: SafetyContext): SafetyVerdict {
   if (!DESTRUCTIVE_TYPES.includes(action.type)) return ALLOWED
   const base = view?.url ?? ctx.appUrl
   const addresses: string[] = []
   if (element !== null) {
-    if (destructiveText(element.name)) return refuse('destructive', 'This could delete, pay for, log out of or change an account, so it is not allowed.')
+    const byLabel = labelRefusal(action, element, view, base)
+    if (byLabel !== null) return byLabel
     if (action.type === 'type' && ACCOUNT_FIELD.test(element.name)) {
       return refuse('destructive', 'The AI does not type into the email, username or phone of an account.')
     }
@@ -128,13 +172,8 @@ function checkDestructive(action: AppAction, element: AppElement | null, view: A
   }
   if (action.type === 'open_link' && action.url !== undefined) addresses.push(action.url)
   for (const address of addresses) {
-    if (destructiveText(wordsOfUrl(address, base)) || PRICE.test(address)) {
-      return refuse('destructive', 'This address could delete, pay for, log out of or change an account, so it is not opened.')
-    }
-    const parsed = parseUrl(address, base)
-    if (parsed !== null && (ACTING_PATH.test(parsed.pathname) || ACTING_QUERY.test(parsed.search))) {
-      return refuse('destructive', 'This address does something when opened, instead of showing a page.')
-    }
+    const refusal = addressRefusal(address, base)
+    if (refusal !== null) return refusal
   }
   return ALLOWED
 }
@@ -181,8 +220,9 @@ export function checkAction(action: AppAction, view: AppView | null, ctx: Safety
   for (const check of checks) {
     const verdict = check()
     if (!verdict.allowed) {
-      // A refused link is not tried again: tell the AI to pick another one.
-      return element?.role === 'link' ? { ...verdict, reason: `${verdict.reason} Choose a different link.` } : verdict
+      // A refused link is not tried again: tell the AI to pick another one, unless the reason already says how its page can be opened.
+      const pickAnother = element?.role === 'link' && !verdict.allowed && verdict.reason !== MENU_ENTRY_CLICK
+      return pickAnother ? { ...verdict, reason: `${verdict.reason} Choose a different link.` } : verdict
     }
   }
   return ALLOWED
