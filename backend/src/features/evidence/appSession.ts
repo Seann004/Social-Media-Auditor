@@ -10,6 +10,7 @@ import {
   type SessionAction,
 } from './appSessionActions.js'
 import { shownAddress } from './appSessionUrl.js'
+import { trackRequests, waitForSteadyPage } from './appSettle.js'
 import type { AppSource, AppView, TestAccount } from './appTypes.js'
 import {
   gotoGuarded,
@@ -116,16 +117,24 @@ async function createSession(opts: SessionPoolOptions, guard: UrlGuard, account:
     const page = await context.context.newPage()
     page.setDefaultTimeout(APP_ACTION_TIMEOUT_MS)
     page.on('popup', (popup) => void popup.close().catch(() => undefined))
+    const inFlight = trackRequests(page)
     const landed = await gotoGuarded(page, app.appUrl, guard, APP_ACTION_TIMEOUT_MS)
     if (landed.blockedReason !== null) throw new Error(`The app address could not be opened: ${landed.blockedReason}`)
-    return { ...buildSession(opts, guard, account, page), context }
+    await waitForSteadyPage(page, inFlight)
+    return { ...buildSession(opts, guard, account, page, inFlight), context }
   } catch (err) {
     await context.end()
     throw err
   }
 }
 
-function buildSession(opts: SessionPoolOptions, guard: UrlGuard, account: TestAccount, page: Page): Omit<OpenSession, 'context'> {
+function buildSession(
+  opts: SessionPoolOptions,
+  guard: UrlGuard,
+  account: TestAccount,
+  page: Page,
+  inFlight: () => number,
+): Omit<OpenSession, 'context'> {
   const { app } = opts
   // Private to the session: the last read's world, and the credentials typed so far.
   let world: IsolatedWorld | null = null
@@ -163,13 +172,18 @@ function buildSession(opts: SessionPoolOptions, guard: UrlGuard, account: TestAc
     },
   }
 
-  /** The new document is waited for, then the network, then a moment for the page to settle. */
+  /**
+   * The new document is waited for, then the network, then a moment for the page to settle; then,
+   * for a page drawn by script, until what it shows is steady (a click's navigation can start after
+   * the first checks, which would otherwise read the new page blank).
+   */
   async function stabilise(before: string): Promise<void> {
     if (page.url() !== before) await page.waitForLoadState('domcontentloaded')
     await waitForNetworkIdle(page, APP_ACTION_TIMEOUT_MS, APP_NETWORK_IDLE_WAIT_MS)
     const settling = page.url()
     await page.waitForTimeout(APP_SETTLE_MS)
     if (page.url() !== settling) await page.waitForLoadState('domcontentloaded')
+    await waitForSteadyPage(page, inFlight)
   }
 
   /**
@@ -248,6 +262,7 @@ function buildSession(opts: SessionPoolOptions, guard: UrlGuard, account: TestAc
       async gotoInApp(url) {
         const navigation = await gotoGuarded(page, url, guard, APP_ACTION_TIMEOUT_MS)
         if (!inScope()) await returnToApp()
+        else await waitForSteadyPage(page, inFlight)
         return navigation
       },
       async photographQuote(quote) {
@@ -271,6 +286,7 @@ function buildSession(opts: SessionPoolOptions, guard: UrlGuard, account: TestAc
       world = null
       const reopened = await gotoGuarded(page, app.appUrl, guard, APP_ACTION_TIMEOUT_MS)
       if (reopened.blockedReason !== null) throw new Error(`The app address could not be reopened: ${reopened.blockedReason}`)
+      await waitForSteadyPage(page, inFlight)
     },
   }
 }

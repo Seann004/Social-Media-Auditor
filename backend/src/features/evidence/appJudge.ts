@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AppSession, AppSessionPool } from './appSession.js'
 import type { AppStep, StoppedBy } from './appTypes.js'
+import { withoutChrome } from './appChrome.js'
 import { rankPages } from './appRelevance.js'
 import { estimateTokens, type AssessedItem, type AssessItem, type PassageSource } from './assess.js'
 import { MAX_INPUT_TOKENS_PER_CALL } from './config.js'
@@ -211,11 +212,14 @@ export async function judgeItem(ctx: RunCtx, input: JudgeInput): Promise<Suggest
   const byPage = groupByPage(passages.map((p) => withoutTypedText(p, input.steps)))
   const stepLines = stepPages.flatMap((s) => (byPage.get(s.pageId as string) ?? []).filter((p) => p.position === STEP_LINE_POSITION))
   // The pages that hold the item's own words come first, after the ones the AI named; repeated pages are read once.
-  const rankable = stepPages.map((s) => ({
-    pageId: s.pageId as string,
-    accountKey: s.accountLabel ?? '',
-    passages: (byPage.get(s.pageId as string) ?? []).filter((p) => p.position !== STEP_LINE_POSITION),
-  }))
+  // The site's menu, repeated on every page, is taken out first: it would make every page look relevant and use the budget.
+  const rankable = withoutChrome(
+    stepPages.map((s) => ({
+      pageId: s.pageId as string,
+      accountKey: s.accountLabel ?? '',
+      passages: (byPage.get(s.pageId as string) ?? []).filter((p) => p.position !== STEP_LINE_POSITION),
+    })),
+  )
   const itemWording = [item.name, item.text, item.helpText].filter(Boolean).join(' ')
   const ranked = rankPages(itemWording, rankable, namedPages(stepPages, input.evidenceSteps))
   // The most relevant pages are read whole (their text and their controls, where the chosen option shows) before the others.

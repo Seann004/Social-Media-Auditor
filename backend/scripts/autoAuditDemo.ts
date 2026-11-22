@@ -27,13 +27,14 @@ import { createUrlGuard } from '../src/features/evidence/urlGuard.js'
 import * as db from '../src/services/dbService.js'
 import { LOGIN_NAMES, PASSWORDS, startSocialApp } from '../tests/fixtures/socialApp.js'
 
-const GUIDELINE_NAME = 'Auto-audit test (practice app)'
-const PROJECT_TITLE = 'Auto-audit test: practice app'
+const UNSEEN = process.argv.includes('--set') && process.argv[process.argv.indexOf('--set') + 1] === 'unseen'
+const GUIDELINE_NAME = UNSEEN ? 'Auto-audit test (practice app, unseen items)' : 'Auto-audit test (practice app)'
+const PROJECT_TITLE = UNSEEN ? 'Auto-audit test: practice app, unseen items' : 'Auto-audit test: practice app'
 const PORT = 4600
 const MODEL = process.env.EVIDENCE_GROQ_MODEL || 'openai/gpt-oss-120b'
 
 /** The six items, and the right answer for each in the practice app's starting state below. */
-const ITEMS = [
+const TUNED_ITEMS = [
   { code: 'T-1', category: 'Privacy', text: 'Is the Teen 15 account currently private?', expected: 'yes' },
   { code: 'T-2', category: 'Notifications', text: 'Are push notifications switched off for the Teen 15 account?', expected: 'no' },
   { code: 'T-3', category: 'Contact', text: 'Can other people tag the Teen 15 account?', expected: 'no' },
@@ -41,6 +42,16 @@ const ITEMS = [
   { code: 'T-5', category: 'Privacy', text: 'Is quiet mode turned on for the Teen 15 account?', expected: 'yes' },
   { code: 'T-6', category: 'Privacy', text: 'Does the Teen 15 account show its activity status to other people?', expected: 'no' },
 ] as const
+/** Items written after the fixes, with new wording and the Adult account too, so the results are not tuned to them. Start state: posts public, email and push on, quiet mode off and activity status shown for the Adult. */
+const UNSEEN_ITEMS = [
+  { code: 'U-1', category: 'Privacy', text: "Are the Teen 15 account's new posts visible to everyone by default?", expected: 'yes' },
+  { code: 'U-2', category: 'Notifications', text: 'Is email notification enabled for the Teen 15 account?', expected: 'yes' },
+  { code: 'U-3', category: 'Security', text: 'Can the Teen 15 account change its own password from the settings?', expected: 'yes' },
+  { code: 'U-4', category: 'Privacy', text: "Is the Adult 30 account's activity status shown to other people?", expected: 'yes' },
+  { code: 'U-5', category: 'Privacy', text: 'Is quiet mode switched off for the Adult 30 account?', expected: 'yes' },
+  { code: 'U-6', category: 'Security', text: 'Does the Teen 15 account have an option to delete the account?', expected: 'yes' },
+] as const
+const ITEMS = UNSEEN ? UNSEEN_ITEMS : TUNED_ITEMS
 
 const args = process.argv.slice(2)
 const flag = (name: string): string | null => {

@@ -148,6 +148,12 @@ export const APP_MIN_SECRET_CHARS = 4
 export const APP_ACTION_TIMEOUT_MS = 15_000
 export const APP_SETTLE_MS = 500
 export const APP_NETWORK_IDLE_WAIT_MS = 2_000
+/** A page is steady once it shows something and has not changed, with no request in flight, for this long. */
+export const APP_STEADY_QUIET_MS = 500
+/** The longest wait for a page drawn by script to become steady; after it, the page is read as it is. */
+export const APP_STEADY_MAX_MS = 6_000
+/** How often the page is looked at while waiting for it to be steady. */
+export const APP_STEADY_POLL_MS = 100
 export const APP_RUN_TIMEOUT_MS = 1_800_000
 /** After the run timeout, how long putting back one check's changes may still take (ruling A22). */
 export const APP_RESTORE_GRACE_MS = 60_000

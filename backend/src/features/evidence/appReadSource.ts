@@ -223,6 +223,30 @@ export const APP_READ_SOURCE = String.raw`(() => {
     return length > CONTEXT_RAW_LIMIT ? null : clean(parts.join(''))
   }
 
+  // What a screen reader reads inside an element: visually hidden text (an icon's "sr-only" label)
+  // counts, as it does for an aria-label; text hidden from everyone (display none, visibility hidden,
+  // aria-hidden) does not. Only ever used for a control's name, never for the page text.
+  const screenReaderText = (start) => {
+    const parts = []
+    let length = 0
+    const walk = (node) => {
+      if (length > CONTEXT_RAW_LIMIT) return
+      const type = dom.nodeType(node)
+      if (type === Node.TEXT_NODE) {
+        const data = dom.data(node)
+        parts.push(data)
+        length += data.length
+        return
+      }
+      if (type !== Node.ELEMENT_NODE || NOT_PAGE_TEXT.has(tagOf(node)) || dom.getAttribute(node, 'aria-hidden') === 'true') return
+      const style = getComputedStyle(node)
+      if (style.display === 'none' || style.visibility !== 'visible') return
+      for (const child of Array.from(dom.childNodes(node))) walk(child)
+    }
+    walk(start)
+    return length > CONTEXT_RAW_LIMIT ? '' : parts.join(' ')
+  }
+
   const labelsOf = (el) => {
     if (el instanceof HTMLInputElement) return Array.from(dom.inputLabels(el) || [])
     if (el instanceof HTMLSelectElement) return Array.from(dom.selectLabels(el) || [])
@@ -279,6 +303,7 @@ export const APP_READ_SOURCE = String.raw`(() => {
       () => dom.getAttribute(el, 'placeholder'),
       () => dom.getAttribute(el, 'alt'),
       image,
+      () => (FORM_CONTROLS.has(tag) ? '' : screenReaderText(el)),
     ]
     for (const candidate of candidates) {
       const name = clean(candidate())
